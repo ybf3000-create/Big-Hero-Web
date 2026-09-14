@@ -1,0 +1,433 @@
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import fastifyStatic from "@fastify/static";
+import websocket from "@fastify/websocket";
+import type { WebSocket } from "ws";
+import { AsyncMutex } from "./async-mutex.js";
+import { AppError, badRequest } from "./errors.js";
+import { LoginLimiter } from "./login-limiter.js";
+import type { GameRepository } from "./repository.js";
+import {
+  generateSessionToken,
+  hashSecret,
+  normalizeInviteCode,
+  type PasswordHasher,
+} from "./security.js";
+import { SessionManager, type SessionIdentity } from "./session-manager.js";
+import { WorkLimiter } from "./work-limiter.js";
+import {
+  normalizeUsername,
+  validateCharacterName,
+  validatePassword,
+  validateRequestId,
+  validateRulesVersion,
+  validateUsername,
+} from "./validation.js";
+
+const IDLE_SESSION_MS = 30 * 60_000;
+const MAX_SESSION_MS = 7 * 24 * 60 * 60_000;
+
+interface BuildAppOptions {
+  repository: GameRepository;
+  passwordHasher: PasswordHasher;
+  rulesVersion?: string;
+  maxOnlinePlayers?: number;
+  trustProxy?: boolean;
+  logger?: boolean | Record<string, unknown>;
+  staticRoot?: string;
+  now?: () => number;
+}
+
+interface JsonObject {
+  [key: string]: unknown;
+}
+
+function bodyObject(body: unknown): JsonObject {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw badRequest("请求内容格式不正确");
+  }
+  return body as JsonObject;
+}
+
+function loginPassword(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value, "utf8") > 256) {
+    throw new AppError("INVALID_CREDENTIALS", 401, "账号或密码错误");
+  }
+  return value;
+}
+
+function bearerToken(request: FastifyRequest): string {
+  const authorization = request.headers.authorization;
+  if (!authorization?.startsWith("Bearer ")) {
+    throw new AppError("SESSION_INVALID", 401, "登录已失效，请重新登录");
+  }
+  const token = authorization.slice("Bearer ".length);
+  if (!/^[A-Za-z0-9_-]{40,64}$/.test(token)) {
+    throw new AppError("SESSION_INVALID", 401, "登录已失效，请重新登录");
+  }
+  return token;
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
+  const rulesVersion = options.rulesVersion ?? "network-1";
+  const maxOnlinePlayers = options.maxOnlinePlayers ?? 20;
+  const now = options.now ?? Date.now;
+  const app = Fastify({
+    logger: options.logger ?? false,
+    trustProxy: options.trustProxy ?? false,
+    bodyLimit: 16 * 1024,
+  });
+  const loginMutex = new AsyncMutex();
+  const loginLimiter = new LoginLimiter(now);
+  const passwordWork = new WorkLimiter(4, 32);
+  const dummyPasswordHash = await options.passwordHasher.hash(
+    "not-a-real-account-password-2026",
+  );
+  const sessionManager = new SessionManager(
+    maxOnlinePlayers,
+    now,
+    (sessionId, reason) => {
+      void options.repository.revokeSession(sessionId, new Date(now()), reason).catch((error) => {
+        app.log.error({ err: error, sessionId, reason }, "failed to persist session removal");
+      });
+    },
+  );
+  const cleanupTimer = setInterval(() => sessionManager.cleanupExpired(), 10_000);
+  cleanupTimer.unref();
+
+  const recordLoginAttempt = async (
+    username: string,
+    ip: string,
+    result: string,
+  ): Promise<void> => {
+    try {
+      await options.repository.recordLoginAttempt(
+        hashSecret(username),
+        hashSecret(ip),
+        result,
+        new Date(now()),
+      );
+    } catch (error) {
+      app.log.error({ err: error, result }, "failed to record login attempt");
+    }
+  };
+
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof AppError) {
+      void reply.status(error.statusCode).send({
+        ok: false,
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.details ? { details: error.details } : {}),
+        },
+      });
+      return;
+    }
+    const statusCode = (error as { statusCode?: unknown }).statusCode;
+    if (typeof statusCode === "number" && statusCode >= 400 && statusCode < 500) {
+      void reply.status(statusCode).send({
+        ok: false,
+        error: {
+          code: statusCode === 415 ? "UNSUPPORTED_MEDIA_TYPE" : "BAD_REQUEST",
+          message: statusCode === 415 ? "请求格式不受支持" : "请求内容格式不正确",
+        },
+      });
+      return;
+    }
+    app.log.error({ err: error }, "unhandled request error");
+    void reply.status(503).send({
+      ok: false,
+      error: { code: "SERVICE_UNAVAILABLE", message: "服务暂时不可用，请稍后重试" },
+    });
+  });
+
+  await app.register(websocket, {
+    options: { maxPayload: 16 * 1024 },
+  });
+
+  if (options.staticRoot) {
+    await app.register(fastifyStatic, {
+      root: path.resolve(options.staticRoot),
+      prefix: "/",
+      index: ["index.html"],
+      wildcard: false,
+    });
+  }
+
+  const authenticateRequest = (request: FastifyRequest): SessionIdentity => {
+    const token = bearerToken(request);
+    return sessionManager.resolveToken(hashSecret(token));
+  };
+
+  app.get("/healthz", async () => {
+    await options.repository.ping();
+    return {
+      ok: true,
+      rules_version: rulesVersion,
+      online_players: sessionManager.onlineCount,
+      max_online_players: maxOnlinePlayers,
+      server_time: new Date(now()).toISOString(),
+    };
+  });
+
+  app.post("/api/v1/auth/register", async (request, reply) => {
+    const body = bodyObject(request.body);
+    validateRulesVersion(body.rules_version, rulesVersion);
+    const requestId = validateRequestId(body.request_id);
+    const username = validateUsername(body.username);
+    const password = validatePassword(body.password);
+    if (body.password_confirm !== password) {
+      throw badRequest("两次输入的密码不一致");
+    }
+    if (typeof body.invite_code !== "string" || normalizeInviteCode(body.invite_code) === "") {
+      throw new AppError("INVITE_INVALID", 400, "邀请码无效");
+    }
+
+    const passwordHash = await passwordWork.run(() => options.passwordHasher.hash(password));
+    const account = await options.repository.registerAccount({
+      requestId,
+      username,
+      passwordHash,
+      inviteCodeHash: hashSecret(normalizeInviteCode(body.invite_code)),
+    });
+    return reply.status(201).send({
+      ok: true,
+      account: { id: account.id, username: account.username },
+      message: "账号创建成功",
+    });
+  });
+
+  app.post("/api/v1/auth/login", async (request) => {
+    const body = bodyObject(request.body);
+    validateRulesVersion(body.rules_version, rulesVersion);
+    const username = typeof body.username === "string"
+      ? normalizeUsername(body.username)
+      : "";
+    const password = loginPassword(body.password);
+    const limit = loginLimiter.check(request.ip, username);
+    if (!limit.allowed) {
+      throw new AppError(
+        "RATE_LIMITED",
+        429,
+        "尝试过于频繁，请稍后再试",
+        { retry_after_seconds: limit.retryAfterSeconds },
+      );
+    }
+    if (limit.delayMs > 0) {
+      await wait(limit.delayMs);
+    }
+
+    const account = /^[a-z][a-z0-9_]{3,19}$/.test(username)
+      ? await options.repository.findAccountForLogin(username)
+      : null;
+    const passwordMatches = await passwordWork.run(() =>
+      options.passwordHasher.verify(
+        account?.passwordHash ?? dummyPasswordHash,
+        password,
+      ),
+    );
+    if (!account || !passwordMatches || account.status === "deleted") {
+      loginLimiter.recordFailure(request.ip, username);
+      await recordLoginAttempt(username, request.ip, "invalid_credentials");
+      throw new AppError("INVALID_CREDENTIALS", 401, "账号或密码错误");
+    }
+    if (
+      account.status === "banned" &&
+      (!account.bannedUntil || account.bannedUntil.getTime() > now())
+    ) {
+      await recordLoginAttempt(username, request.ip, "banned");
+      throw new AppError(
+        "ACCOUNT_BANNED",
+        403,
+        "账号已封禁",
+        { banned_until: account.bannedUntil?.toISOString() ?? null },
+      );
+    }
+
+    const loginResult = await loginMutex.runExclusive(async () => {
+      if (!sessionManager.canAdmit(account.id)) {
+        await recordLoginAttempt(username, request.ip, "server_full");
+        throw new AppError("SERVER_FULL", 503, "服务器人数已满，请稍后登录");
+      }
+
+      const createdAt = new Date(now());
+      const sessionId = randomUUID();
+      const token = generateSessionToken();
+      const tokenHash = hashSecret(token);
+      await options.repository.createSession({
+        id: sessionId,
+        accountId: account.id,
+        tokenHash,
+        createdAt,
+        idleExpiresAt: new Date(createdAt.getTime() + IDLE_SESSION_MS),
+        expiresAt: new Date(createdAt.getTime() + MAX_SESSION_MS),
+      });
+      try {
+        sessionManager.admit(
+          sessionId,
+          account.id,
+          tokenHash,
+          createdAt.getTime() + MAX_SESSION_MS,
+        );
+      } catch (error) {
+        await options.repository.revokeSession(
+          sessionId,
+          new Date(now()),
+          "capacity_race",
+        );
+        throw error;
+      }
+      const character = await options.repository.getCharacter(account.id);
+      return { sessionId, token, character };
+    });
+
+    loginLimiter.recordSuccess(request.ip, username);
+    await recordLoginAttempt(username, request.ip, "success");
+    return {
+      ok: true,
+      session: {
+        id: loginResult.sessionId,
+        token: loginResult.token,
+        heartbeat_interval_seconds: 10,
+        reconnect_grace_seconds: 30,
+      },
+      account: {
+        id: account.id,
+        username: account.username,
+        must_change_password: account.mustChangePassword,
+      },
+      character: loginResult.character,
+      rules_version: rulesVersion,
+    };
+  });
+
+  app.post("/api/v1/auth/logout", async (request) => {
+    const identity = authenticateRequest(request);
+    await options.repository.revokeSession(
+      identity.sessionId,
+      new Date(now()),
+      "logout",
+    );
+    sessionManager.revoke(identity.sessionId, "logout");
+    return { ok: true };
+  });
+
+  app.get("/api/v1/characters/me", async (request) => {
+    const identity = authenticateRequest(request);
+    return {
+      ok: true,
+      character: await options.repository.getCharacter(identity.accountId),
+    };
+  });
+
+  app.post("/api/v1/characters", async (request, reply) => {
+    const identity = authenticateRequest(request);
+    const body = bodyObject(request.body);
+    validateRulesVersion(body.rules_version, rulesVersion);
+    const requestId = validateRequestId(body.request_id);
+    const name = validateCharacterName(body.name);
+    const character = await options.repository.createCharacter({
+      id: randomUUID(),
+      requestId,
+      accountId: identity.accountId,
+      displayName: name.displayName,
+      normalizedName: name.normalized,
+    });
+    return reply.status(201).send({ ok: true, character });
+  });
+
+  app.get("/ws", { websocket: true }, (socket: WebSocket) => {
+    let identity: SessionIdentity | null = null;
+    const authenticationTimeout = setTimeout(() => {
+      if (!identity) {
+        socket.close(4003, "AUTHENTICATION_TIMEOUT");
+      }
+    }, 5_000);
+
+    socket.on("message", (rawData) => {
+      void (async () => {
+        let message: JsonObject;
+        try {
+          const parsed = JSON.parse(rawData.toString()) as unknown;
+          message = bodyObject(parsed);
+        } catch {
+          socket.send(JSON.stringify({
+            type: "error",
+            code: "BAD_REQUEST",
+            message: "消息格式不正确",
+          }));
+          return;
+        }
+
+        if (!identity) {
+          if (message.type !== "authenticate" || typeof message.token !== "string") {
+            socket.close(4003, "AUTHENTICATION_REQUIRED");
+            return;
+          }
+          try {
+            identity = sessionManager.attachSocket(hashSecret(message.token), socket);
+            clearTimeout(authenticationTimeout);
+            socket.send(JSON.stringify({
+              type: "authenticated",
+              session_id: identity.sessionId,
+              rules_version: rulesVersion,
+              heartbeat_interval_seconds: 10,
+            }));
+          } catch {
+            socket.close(4003, "SESSION_INVALID");
+          }
+          return;
+        }
+
+        if (message.type === "heartbeat") {
+          sessionManager.heartbeat(identity.sessionId);
+          const at = new Date(now());
+          await options.repository.touchSession(
+            identity.sessionId,
+            at,
+            new Date(at.getTime() + IDLE_SESSION_MS),
+          );
+          socket.send(JSON.stringify({
+            type: "heartbeat_ack",
+            server_time: at.toISOString(),
+          }));
+          return;
+        }
+
+        socket.send(JSON.stringify({
+          type: "error",
+          code: "UNSUPPORTED_MESSAGE",
+          message: "当前消息类型不受支持",
+        }));
+      })().catch((error) => {
+        app.log.error({ err: error }, "websocket message failed");
+        socket.send(JSON.stringify({
+          type: "error",
+          code: "SERVICE_UNAVAILABLE",
+          message: "服务暂时不可用",
+        }));
+      });
+    });
+
+    socket.on("close", () => {
+      clearTimeout(authenticationTimeout);
+      if (identity) {
+        sessionManager.markDisconnected(identity.sessionId, socket);
+      }
+    });
+  });
+
+  app.addHook("onClose", async () => {
+    clearInterval(cleanupTimer);
+    sessionManager.shutdown();
+    await options.repository.close();
+  });
+
+  return app;
+}

@@ -1,0 +1,8 @@
+# This repository intentionally contains only the web client and server.
+/*
+!/.gitignore
+!/.github/
+!/LICENSE
+!/README.md
+!/client/
+!/SERVER/

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.log
+public/game/*
+!public/game/.gitkeep

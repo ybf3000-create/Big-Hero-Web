@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>大勇者 · 朱樱神社战斗UI样板</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      font-family: "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+      color: #2f2930;
+      --shrine: #b93647;
+      --shrine-dark: #762c39;
+      --gold: #e7b84f;
+      --paper: #fffaf4;
+      --ink: #2f2930;
+      --jade: #3d927d;
+      --hp: #e34f5f;
+      --hp-dark: #9f2f42;
+      --shield: #56a9df;
+      --mana: #765bc2;
+      --line: #6f5558;
+      --shadow: rgba(46, 35, 40, .28);
+    }
+    body { margin: 0; min-width: 1060px; min-height: 100vh; background: #e8edf0; }
+    button { font: inherit; letter-spacing: 0; }
+    .workspace { width: min(1420px, 100%); margin: 0 auto; padding: 18px 22px 26px; }
+    .sample-head { height: 48px; display: flex; align-items: center; justify-content: space-between; }
+    .sample-head h1 { margin: 0; font-size: 17px; }
+    .sample-actions { display: flex; align-items: center; gap: 14px; }
+    .mode-tools, .demo-tools { display: flex; gap: 5px; }
+    .mode-tools { padding: 3px; border: 1px solid #c7b7b9; border-radius: 6px; background: #fff; }
+    .mode-tools button, .demo-tools button { height: 32px; padding: 0 13px; border: 1px solid #b9a6a8; border-radius: 5px; background: #fff; color: #58464a; cursor: pointer; font-weight: 700; }
+    .mode-tools button { height: 28px; border: 0; }
+    .mode-tools button.active { background: var(--shrine); color: #fff; }
+    .demo-tools button:hover { border-color: var(--shrine); color: var(--shrine); }
+
+    .game { position: relative; width: 100%; aspect-ratio: 16 / 9; max-height: calc(100vh - 94px); overflow: hidden; border: 3px solid var(--shrine-dark); background: #cfe6e0; box-shadow: 0 16px 34px var(--shadow); }
+    .scene { position: absolute; inset: 0; overflow: hidden; background: #ddecdf; }
+    .sky { position: absolute; inset: 0 0 34%; background: #e8f2ed; }
+    .sun { position: absolute; right: 13%; top: 12%; width: 74px; height: 74px; border-radius: 50%; background: #f6cf74; box-shadow: 0 0 0 10px rgba(255,255,255,.32); }
+    .mountain { position: absolute; left: -4%; right: -4%; bottom: 26%; height: 49%; background: #a9c7bc; opacity: .62; clip-path: polygon(0 84%, 11% 53%, 20% 76%, 34% 28%, 45% 72%, 58% 42%, 69% 77%, 82% 35%, 100% 74%, 100% 100%, 0 100%); }
+    .mountain.back { bottom: 38%; height: 39%; background: #cadbd6; opacity: .8; clip-path: polygon(0 84%, 16% 30%, 29% 78%, 43% 45%, 58% 82%, 76% 28%, 100% 78%, 100% 100%, 0 100%); }
+    .ground { position: absolute; left: 0; right: 0; bottom: 0; height: 39%; background: #93b69c; border-top: 2px solid rgba(81,105,85,.24); }
+    .ground::before { content: ""; position: absolute; left: 0; right: 0; top: 36%; height: 2px; background: rgba(255,255,255,.3); }
+    .torii { position: absolute; left: 50%; top: 11%; width: 180px; height: 190px; transform: translateX(-50%); opacity: .15; }
+    .torii i { position: absolute; display: block; background: var(--shrine); }
+    .torii .beam1 { left: 0; top: 0; width: 180px; height: 14px; }
+    .torii .beam2 { left: 14px; top: 23px; width: 152px; height: 10px; }
+    .torii .post1, .torii .post2 { top: 24px; width: 13px; height: 166px; }
+    .torii .post1 { left: 32px; } .torii .post2 { right: 32px; }
+    .axis { position: absolute; left: 50%; top: 21%; bottom: 11%; width: 1px; background: rgba(118,44,57,.20); }
+    .axis::after { content: "前排"; position: absolute; left: 8px; top: 48%; color: rgba(78,54,58,.42); font-size: 10px; font-weight: 800; }
+
+    .boss-hud { position: absolute; z-index: 20; left: 50%; top: 18px; width: min(680px, 55%); transform: translateX(-50%); color: #fff; }
+    .boss-title { height: 27px; display: flex; justify-content: center; align-items: baseline; gap: 10px; font-weight: 900; text-shadow: 0 2px 2px #000, 1px 0 #000, -1px 0 #000; }
+    .boss-title b { color: #ffe393; font-size: 19px; }
+    .boss-title span { font-size: 12px; }
+    .boss-bar { position: relative; height: 24px; border: 2px solid #fff8e7; background: #382d35; box-shadow: 0 2px 0 #5a2833, 0 4px 8px rgba(0,0,0,.28); }
+    .boss-bar .loss { position: absolute; inset: 2px 12% 2px 2px; background: #f0aa47; }
+    .boss-bar .fill { position: absolute; inset: 2px 21% 2px 2px; background: var(--shrine); }
+    .boss-bar strong { position: absolute; inset: 0; display: grid; place-items: center; font-size: 12px; text-shadow: 1px 1px 1px #000, -1px -1px 1px #000; }
+    .boss-break { display: flex; justify-content: center; gap: 4px; margin-top: 5px; }
+    .boss-break i { width: 36px; height: 4px; background: #fff5da; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+    .boss-break i.off { background: rgba(49,40,44,.45); }
+    .game.mode-normal .boss-hud, .game.mode-elite .boss-hud, .game.mode-challenge .boss-hud { display: none; }
+
+    .challenge-hud { display: none; position: absolute; z-index: 20; left: 50%; top: 16px; width: min(640px, 53%); transform: translateX(-50%); color: #fff; text-shadow: 1px 1px 1px #000, -1px 0 #000; }
+    .game.mode-challenge .challenge-hud { display: block; }
+    .challenge-main { height: 58px; display: grid; grid-template-columns: 145px 1fr 145px; align-items: center; border: 2px solid #fff3c7; background: rgba(69,42,51,.88); box-shadow: 0 3px 8px rgba(0,0,0,.28); }
+    .challenge-time, .challenge-dps { text-align: center; }
+    .challenge-time small, .challenge-dps small, .challenge-score small { display: block; color: #e4ced0; font-size: 9px; }
+    .challenge-time strong { color: #ffe078; font-size: 25px; }
+    .challenge-dps strong { color: #86e6c0; font-size: 18px; }
+    .challenge-score { text-align: center; border-left: 1px solid rgba(255,255,255,.2); border-right: 1px solid rgba(255,255,255,.2); }
+    .challenge-score strong { display: block; color: #fff4cc; font-size: 25px; }
+    .rank-track { height: 25px; display: flex; justify-content: center; align-items: center; gap: 5px; margin-top: 5px; }
+    .rank-track span { padding: 3px 8px; border: 1px solid rgba(255,255,255,.65); background: rgba(54,42,46,.78); font-size: 9px; font-weight: 800; }
+    .rank-track span.done { background: #397a67; } .rank-track span.current { border-color: #ffe078; color: #ffe078; }
+
+    .battle-title { position: absolute; z-index: 20; left: 22px; top: 19px; display: flex; align-items: center; gap: 9px; color: #fff; text-shadow: 0 1px 2px #000; }
+    .battle-title .crest { width: 34px; height: 34px; display: grid; place-items: center; border: 2px solid #fff7e5; border-radius: 50%; background: var(--shrine); color: #ffe69d; font-weight: 900; }
+    .battle-title b { display: block; font-size: 15px; }
+    .battle-title small { display: block; margin-top: 2px; font-size: 10px; opacity: .88; }
+    .controls { position: absolute; z-index: 20; right: 18px; top: 18px; display: flex; gap: 6px; }
+    .icon-btn { width: 38px; height: 34px; border: 1px solid #75565b; border-radius: 5px; background: rgba(255,250,244,.92); color: #614249; font-weight: 900; box-shadow: 0 2px 5px var(--shadow); }
+
+    .unit { position: absolute; z-index: 8; width: 180px; height: 210px; }
+    .unit.hero { left: 18%; bottom: 12%; }
+    .unit.boss { right: 18%; bottom: 12%; }
+    .unit.minion { right: 4%; bottom: 9%; transform: scale(.86); transform-origin: bottom; }
+    .sprite { position: absolute; left: 50%; bottom: 41px; transform: translateX(-50%); object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 8px 3px rgba(39,40,35,.35)); }
+    .hero .sprite { width: 130px; height: 160px; }
+    .boss .sprite { width: 126px; height: 170px; }
+    .minion .sprite { width: 100px; height: 110px; }
+    .unit-hud { position: absolute; left: 50%; bottom: 0; width: 178px; transform: translateX(-50%); }
+    .nameplate { height: 23px; display: flex; align-items: center; justify-content: center; gap: 6px; color: #fff; font-size: 12px; font-weight: 900; text-shadow: 1px 1px 1px #000, -1px 0 #000, 1px 0 #000; }
+    .nameplate .lv { padding: 1px 5px; border-radius: 3px; background: rgba(43,34,39,.82); color: #ffe398; font-size: 9px; }
+    .hp-shell { position: relative; height: 17px; border: 2px solid #fff9ee; background: #392f34; box-shadow: 0 2px 0 rgba(56,31,36,.65), 0 3px 6px rgba(0,0,0,.24); }
+    .hp-loss { position: absolute; inset: 2px 20% 2px 2px; background: #e7a446; }
+    .hp-fill { position: absolute; inset: 2px 31% 2px 2px; background: var(--hp); }
+    .boss .hp-fill { right: 18%; background: #c33a4c; }
+    .minion .hp-fill { right: 54%; }
+    .shield-fill { position: absolute; z-index: 2; left: 2px; top: 2px; bottom: 2px; width: min(var(--shield-ratio, 0%), calc(100% - 4px)); border: 2px solid #9cddff; background: rgba(77,171,225,.26); box-shadow: inset 0 0 3px rgba(255,255,255,.8); pointer-events: none; }
+    .shield-fill.capped { width: calc(100% - 4px); }
+    .hp-text { position: absolute; z-index: 3; inset: 0; display: grid; place-items: center; color: #fff; font-size: 9px; font-weight: 900; text-shadow: 1px 1px 0 #000, -1px -1px 0 #000; }
+    .status-row { height: 29px; display: flex; justify-content: center; gap: 4px; padding-top: 5px; }
+    .status { position: relative; width: 23px; height: 23px; display: grid; place-items: center; padding: 0; border: 1px solid #fff; border-radius: 4px; background: #4f7eaa; color: #fff; font: inherit; font-size: 13px; box-shadow: 0 2px 4px rgba(0,0,0,.32); cursor: pointer; }
+    .status:hover, .status:focus-visible, .status.active { outline: 2px solid #ffe078; outline-offset: 1px; }
+    .status.bad { background: #8c536b; } .status.fire { background: #bd5b3e; } .status.guard { background: #3f8c91; }
+    .status em { position: absolute; right: -3px; bottom: -4px; min-width: 12px; height: 12px; padding: 0 2px; border-radius: 6px; background: #272226; color: #fff; font-size: 8px; font-style: normal; text-align: center; line-height: 12px; }
+    .status-tip { display: none; position: absolute; z-index: 80; width: 246px; padding: 11px 12px; border: 2px solid #f0d28b; border-radius: 5px; background: rgba(43,34,39,.96); color: #fffaf0; box-shadow: 0 6px 16px rgba(0,0,0,.38); pointer-events: none; }
+    .status-tip.open { display: block; }
+    .status-tip strong { display: block; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,.18); color: #ffe294; font-size: 13px; }
+    .status-tip p { margin: 7px 0 0; color: #f7eef0; font-size: 11px; line-height: 1.55; }
+    .status-tip small { display: block; margin-top: 7px; color: #afdcce; font-size: 9px; }
+
+    .float { position: absolute; z-index: 30; font-family: "Microsoft YaHei UI", sans-serif; font-weight: 1000; letter-spacing: 0; white-space: nowrap; text-align: center; -webkit-text-stroke: 2px #171218; paint-order: stroke fill; text-shadow: 0 2px 1px rgba(0,0,0,.55); }
+    .float.damage { left: 66%; top: 35%; color: #fff; font-size: 28px; transform: rotate(-4deg); }
+    .float.crit { left: 69%; top: 27%; color: #ffe066; font-size: 38px; transform: rotate(4deg); }
+    .float.heal { left: 25%; top: 39%; color: #72e89b; font-size: 25px; }
+    .float.dot { left: 79%; top: 48%; color: #ca8cff; font-size: 21px; }
+    .float .tag { display: block; margin-bottom: -4px; font-size: 11px; color: #ffe9a7; -webkit-text-stroke-width: 1px; }
+
+    .cast-banner { position: absolute; z-index: 18; left: 50%; top: 18%; width: 330px; transform: translateX(-50%); text-align: center; }
+    .cast-banner span { display: inline-block; min-width: 260px; padding: 7px 18px; border-top: 2px solid #f1d895; border-bottom: 2px solid #f1d895; background: rgba(70,38,46,.82); color: #fff9e8; font-size: 14px; font-weight: 900; text-shadow: 0 1px 2px #000; }
+
+    .combat-log { position: absolute; z-index: 16; left: 18px; bottom: 18px; width: 310px; padding: 8px 11px; border-left: 3px solid var(--shrine); background: rgba(255,250,244,.84); box-shadow: 0 2px 7px var(--shadow); font-size: 10px; line-height: 1.6; }
+    .combat-log b { color: var(--shrine-dark); } .combat-log .good { color: #247761; }
+    .turn-order { position: absolute; z-index: 16; left: 50%; bottom: 14px; height: 46px; display: flex; align-items: center; gap: 5px; transform: translateX(-50%); }
+    .turn-order::before { content: "行动"; margin-right: 3px; color: #fff; font-size: 10px; font-weight: 800; text-shadow: 0 1px 2px #000; }
+    .turn { position: relative; width: 38px; height: 38px; overflow: hidden; border: 2px solid #fff9e7; background: #d9c5b7; box-shadow: 0 2px 5px rgba(0,0,0,.35); }
+    .turn.active { width: 44px; height: 44px; border-color: #ffd25e; }
+    .turn img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+    .turn em { position: absolute; right: 1px; bottom: 0; color: #fff; font-size: 8px; font-style: normal; font-weight: 900; text-shadow: 1px 1px 0 #000; }
+    .legend { position: absolute; z-index: 16; right: 17px; bottom: 15px; display: flex; gap: 7px; padding: 6px 8px; background: rgba(255,250,244,.78); color: #604b50; font-size: 9px; font-weight: 700; }
+    .legend i { display: inline-block; width: 8px; height: 8px; margin-right: 3px; border-radius: 50%; }
+
+    .pulse { animation: pop .36s ease-out; }
+    @keyframes pop { 0% { transform: translateY(10px) scale(.65); opacity: 0; } 55% { transform: translateY(-4px) scale(1.12); opacity: 1; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
+  </style>
+</head>
+<body>
+  <main class="workspace">
+    <header class="sample-head">
+      <h1>朱樱神社 · 战斗信息层级样板</h1>
+      <div class="sample-actions">
+        <div class="mode-tools" aria-label="战斗类型">
+          <button type="button" data-mode="normal">普通/精英</button>
+          <button type="button" data-mode="boss" class="active">Boss</button>
+          <button type="button" data-mode="challenge">伤害挑战</button>
+        </div>
+        <div class="demo-tools">
+          <button type="button" data-demo="damage">普通伤害</button>
+          <button type="button" data-demo="crit">暴击</button>
+          <button type="button" data-demo="heal">治疗</button>
+          <button type="button" data-demo="dot">持续伤害</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="game mode-boss">
+      <div class="scene">
+        <div class="sky"></div><div class="sun"></div>
+        <div class="mountain back"></div><div class="mountain"></div><div class="ground"></div>
+        <div class="torii"><i class="beam1"></i><i class="beam2"></i><i class="post1"></i><i class="post2"></i></div>
+        <div class="axis"></div>
+      </div>
+
+      <div class="battle-title"><span class="crest">戦</span><div><b>BOSS 战</b><small>朱樱山道 · 第 3 圈</small></div></div>
+      <div class="controls"><button class="icon-btn" title="战斗速度">×2</button><button class="icon-btn" title="跳过战斗">≫</button></div>
+
+      <section class="boss-hud">
+        <div class="boss-title"><b>史莱姆王</b><span>Lv.18 · 水栖王族</span></div>
+        <div class="boss-bar"><div class="loss"></div><div class="fill"></div><strong>18,420 / 24,000</strong></div>
+        <div class="boss-break"><i></i><i></i><i></i><i class="off"></i><i class="off"></i></div>
+      </section>
+
+      <section class="challenge-hud">
+        <div class="challenge-main">
+          <div class="challenge-time"><small>剩余时间</small><strong>00:42</strong></div>
+          <div class="challenge-score"><small>累计总伤害</small><strong>127,800</strong></div>
+          <div class="challenge-dps"><small>当前 DPS</small><strong>3,043</strong></div>
+        </div>
+        <div class="rank-track"><span class="done">铜 5,000 ✓</span><span class="done">银 25,000 ✓</span><span class="done">金 100,000 ✓</span><span class="current">传说 250,000</span><span>神话 500,000</span></div>
+      </section>
+
+      <div class="cast-banner"><span>勇者 YYY · 无尽打击 Ⅶ</span></div>
+
+      <article class="unit hero">
+        <img class="sprite" src="../assets/hreo.png" alt="主角">
+        <div class="unit-hud">
+          <div class="nameplate"><span class="lv">Lv.18</span><span>勇者 YYY</span></div>
+          <div class="hp-shell" title="护盾显示长度最高为最大生命值；超过后只增加护盾数字"><div class="hp-loss"></div><div class="hp-fill"></div><div class="shield-fill" style="--shield-ratio:11.92%"></div><span class="hp-text">3,480 / 5,200　盾 620</span></div>
+          <div class="status-row"><button class="status guard" type="button" data-name="护盾" data-effect="优先吸收即将受到的伤害。当前护盾值为 620，护盾归零后才会扣除生命。" data-meta="剩余 4 秒">盾<em>4s</em></button><button class="status" type="button" data-name="攻击提升" data-effect="攻击力提高 20%。相同效果刷新持续时间，不重复叠加倍率。" data-meta="2 层 · 剩余 6 秒">攻<em>2</em></button><button class="status" type="button" data-name="无尽打击" data-effect="当前为第 7 次累计，本次技能倍率为 150%。第 10 次达到并保持 180%。" data-meta="7 / 10 次 · 战斗结束清零">∞<em>7</em></button></div>
+        </div>
+      </article>
+
+      <article class="unit boss">
+        <img class="sprite" src="../assets/battle_characters/boss/史莱姆王.png" alt="史莱姆王">
+        <div class="unit-hud">
+          <div class="nameplate"><span class="lv">BOSS</span><span>史莱姆王</span></div>
+          <div class="hp-shell"><div class="hp-loss"></div><div class="hp-fill"></div><span class="hp-text">18,420 / 24,000</span></div>
+          <div class="status-row"><button class="status bad" type="button" data-name="中毒" data-effect="每 2 秒受到施加者攻击力 30% 的持续伤害，不受防御、暴击和格挡影响。" data-meta="剩余 3 次 · 下次触发 1.2 秒">毒<em>3</em></button><button class="status fire" type="button" data-name="灼烧" data-effect="每次触发受到火焰持续伤害。灼烧实例可触发烈焰套装的额外增伤。" data-meta="剩余 4 秒">火<em>4s</em></button><button class="status bad" type="button" data-name="防御下降" data-effect="防御力降低 20%，受到直接攻击时将承受更多伤害。" data-meta="2 层 · 剩余 5 秒">防↓<em>2</em></button></div>
+        </div>
+      </article>
+
+      <article class="unit minion">
+        <img class="sprite" src="../assets/battle_characters/monsters/char_0007.png" alt="随从">
+        <div class="unit-hud">
+          <div class="nameplate"><span class="lv">后排</span><span>水灵侍从</span></div>
+          <div class="hp-shell"><div class="hp-fill"></div><span class="hp-text">860 / 1,900</span></div>
+          <div class="status-row"><button class="status bad" type="button" data-name="减速" data-effect="出手间隔延长 50%，不影响持续伤害与持续治疗的真实秒数计时。" data-meta="剩余 3 秒">缓<em>3s</em></button></div>
+        </div>
+      </article>
+
+      <div class="float damage demo-float"><span class="tag">普通伤害</span>-328</div>
+      <div class="float crit demo-float"><span class="tag">暴击</span>-1,284!</div>
+      <div class="float heal demo-float"><span class="tag">生命绽放</span>+260</div>
+      <div class="float dot demo-float"><span class="tag">中毒</span>-105</div>
+
+      <div class="combat-log"><b>无尽打击 Ⅶ</b> 对史莱姆王造成 328 伤害<br><span class="good">生命绽放</span> 恢复 260 生命<br>史莱姆王受到中毒伤害 105</div>
+
+      <div class="turn-order">
+        <span class="turn active"><img src="../assets/hreo.png" alt="主角"><em>0.4</em></span>
+        <span class="turn"><img src="../assets/battle_characters/monsters/char_0007.png" alt="侍从"><em>1.1</em></span>
+        <span class="turn"><img src="../assets/battle_characters/boss/史莱姆王.png" alt="Boss"><em>1.8</em></span>
+      </div>
+
+      <div class="legend"><span><i style="background:#fff"></i>伤害</span><span><i style="background:#ffe066"></i>暴击</span><span><i style="background:#72e89b"></i>治疗</span><span><i style="background:#ca8cff"></i>Dot</span></div>
+      <aside class="status-tip" role="tooltip" aria-live="polite"><strong></strong><p></p><small></small></aside>
+    </section>
+  </main>
+  <script>
+    const floats = [...document.querySelectorAll('.demo-float')];
+    const map = { damage: 0, crit: 1, heal: 2, dot: 3 };
+    const game = document.querySelector('.game');
+    const battleName = document.querySelector('.battle-title b');
+    const battleSub = document.querySelector('.battle-title small');
+    const modeCopy = {
+      normal: ['遭遇战', '朱樱山道 · 第 3 圈'],
+      boss: ['BOSS 战', '朱樱山道 · 第 3 圈'],
+      challenge: ['伤害挑战', '60 秒存活伤害验证']
+    };
+    document.querySelectorAll('[data-mode]').forEach(button => {
+      button.addEventListener('click', () => {
+        game.classList.remove('mode-normal', 'mode-boss', 'mode-challenge');
+        game.classList.add(`mode-${button.dataset.mode}`);
+        document.querySelectorAll('[data-mode]').forEach(item => item.classList.toggle('active', item === button));
+        battleName.textContent = modeCopy[button.dataset.mode][0];
+        battleSub.textContent = modeCopy[button.dataset.mode][1];
+      });
+    });
+    document.querySelectorAll('[data-demo]').forEach(button => {
+      button.addEventListener('click', () => {
+        const item = floats[map[button.dataset.demo]];
+        item.classList.remove('pulse');
+        void item.offsetWidth;
+        item.classList.add('pulse');
+      });
+    });
+
+    const statusTip = document.querySelector('.status-tip');
+    const tipTitle = statusTip.querySelector('strong');
+    const tipEffect = statusTip.querySelector('p');
+    const tipMeta = statusTip.querySelector('small');
+    let activeStatus = null;
+
+    function closeStatusTip() {
+      statusTip.classList.remove('open');
+      if (activeStatus) activeStatus.classList.remove('active');
+      activeStatus = null;
+    }
+
+    function openStatusTip(button) {
+      if (activeStatus === button) { closeStatusTip(); return; }
+      closeStatusTip();
+      activeStatus = button;
+      button.classList.add('active');
+      tipTitle.textContent = button.dataset.name;
+      tipEffect.textContent = button.dataset.effect;
+      tipMeta.textContent = button.dataset.meta;
+      statusTip.classList.add('open');
+
+      const gameRect = game.getBoundingClientRect();
+      const buttonRect = button.getBoundingClientRect();
+      const margin = 10;
+      const gap = 9;
+      const tipWidth = statusTip.offsetWidth;
+      const tipHeight = statusTip.offsetHeight;
+      let left = buttonRect.left - gameRect.left + buttonRect.width / 2 - tipWidth / 2;
+      let top = buttonRect.top - gameRect.top - tipHeight - gap;
+      if (top < margin) top = buttonRect.bottom - gameRect.top + gap;
+      left = Math.max(margin, Math.min(left, gameRect.width - tipWidth - margin));
+      top = Math.max(margin, Math.min(top, gameRect.height - tipHeight - margin));
+      statusTip.style.left = `${left}px`;
+      statusTip.style.top = `${top}px`;
+    }
+
+    document.querySelectorAll('.status').forEach(button => {
+      button.addEventListener('click', event => {
+        event.stopPropagation();
+        openStatusTip(button);
+      });
+    });
+    game.addEventListener('click', closeStatusTip);
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') closeStatusTip(); });
+    window.addEventListener('resize', closeStatusTip);
+  </script>
+</body>
+</html>

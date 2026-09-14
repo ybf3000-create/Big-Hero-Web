@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>大勇者 · 主界面视觉方案</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      font-family: "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+      color-scheme: light;
+      --page: #edf1f6; --ink: #27354a; --muted: #6f7c90;
+      --surface: #f7faff; --surface-2: #e7f1ff; --surface-3: #d7e8fb;
+      --primary: #4d8fdb; --primary-2: #2d6fb9; --accent: #f27c8d;
+      --gold: #f3b83f; --good: #50bfa5; --danger: #df5d68;
+      --line: #8fb4dc; --shadow: rgba(53, 86, 125, .22);
+      --scene-top: #bfe4f6; --scene-mid: #d9efdd; --scene-low: #86bf85;
+      --route: #f5fbff; --route-line: #80a8d0;
+    }
+
+    body { margin: 0; min-width: 1040px; min-height: 100vh; background: var(--page); color: var(--ink); }
+    button { font: inherit; letter-spacing: 0; }
+    .workspace { width: min(1440px, 100%); margin: 0 auto; padding: 20px 24px 28px; }
+    .chooser { height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .chooser h1 { margin: 0; font-size: 18px; font-weight: 800; }
+    .segmented { display: flex; gap: 4px; padding: 4px; background: #fff; border: 1px solid #cdd5df; border-radius: 7px; }
+    .theme-btn { min-width: 132px; height: 34px; border: 0; border-radius: 5px; background: transparent; color: #59677a; cursor: pointer; font-weight: 700; }
+    .theme-btn.active { color: #fff; background: var(--primary); }
+
+    .game-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; max-height: calc(100vh - 110px); overflow: hidden; border: 2px solid var(--line); background: var(--surface); box-shadow: 0 16px 36px var(--shadow); }
+    .topbar { position: relative; height: 14.5%; min-height: 100px; display: grid; grid-template-columns: 33% 27% 40%; border-bottom: 2px solid var(--line); background: color-mix(in srgb, var(--surface) 94%, transparent); }
+    .top-section { min-width: 0; padding: 10px 14px; position: relative; }
+    .top-section + .top-section::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 1px; background: var(--line); opacity: .65; }
+
+    .hero-summary { display: grid; grid-template-columns: 82px 1fr; gap: 12px; height: 100%; }
+    .avatar-frame { position: relative; overflow: hidden; border: 2px solid var(--primary); background: var(--surface-2); box-shadow: inset 0 0 0 3px var(--surface); }
+    .avatar-frame img { width: 100%; height: 100%; object-fit: contain; image-rendering: auto; }
+    .level-seal { position: absolute; right: 3px; bottom: 3px; min-width: 28px; height: 20px; padding: 1px 5px; border-radius: 4px; background: var(--primary); color: #fff; font-weight: 800; font-size: 11px; text-align: center; }
+    .hero-copy { min-width: 0; }
+    .name-row { display: flex; align-items: baseline; gap: 8px; height: 26px; }
+    .hero-name { font-size: 20px; font-weight: 900; }
+    .title-tag { font-size: 10px; color: var(--muted); }
+    .bar-row { display: grid; grid-template-columns: 38px 1fr 62px; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; font-weight: 700; }
+    .meter { height: 10px; overflow: hidden; border: 1px solid var(--line); background: color-mix(in srgb, var(--surface-3) 70%, #fff); }
+    .meter > i { display: block; height: 100%; }
+    .hp i { width: 78%; background: var(--danger); }
+    .exp i { width: 36%; background: var(--primary); }
+    .meter-value { text-align: right; color: var(--muted); font-size: 10px; }
+
+    .resources { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; align-content: center; height: 100%; }
+    .resource { display: grid; grid-template-columns: 28px 1fr; align-items: center; min-width: 0; padding: 8px; border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); background: color-mix(in srgb, var(--surface-2) 76%, #fff); }
+    .resource-icon { font-size: 20px; text-align: center; }
+    .resource small { display: block; color: var(--muted); font-size: 9px; white-space: nowrap; }
+    .resource strong { display: block; margin-top: 2px; font-size: 15px; white-space: nowrap; }
+    .resource.gold strong { color: #a56f00; }
+    .resource.life strong { color: var(--danger); }
+    .resource.buff strong { color: var(--good); }
+
+    .dice-zone { display: grid; grid-template-columns: 96px 1fr; gap: 12px; height: 100%; align-items: center; }
+    .current-dice { height: 76px; display: grid; grid-template-columns: 1fr 1fr; align-items: center; padding: 8px; border: 2px solid var(--primary); background: var(--surface-2); }
+    .dice-face { font-size: 38px; line-height: 1; color: var(--primary-2); text-align: center; }
+    .dice-suit { font-family: Georgia, serif; font-size: 34px; color: #e14e5a; text-align: center; }
+    .poker { min-width: 0; }
+    .poker-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; color: var(--muted); font-size: 10px; }
+    .poker-result { color: #a66d00; font-weight: 800; }
+    .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+    .card { height: 54px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--line); background: #fff; box-shadow: 0 2px 5px var(--shadow); font-family: Georgia, serif; }
+    .card strong { font-size: 22px; }
+    .card span { font-size: 20px; }
+    .card.red span { color: #e14e5a; }
+    .card.black span { color: #354057; }
+
+    .map-area { position: relative; height: 73%; overflow: hidden; background: var(--scene-top); }
+    .sky-pattern { position: absolute; inset: 0; overflow: hidden; }
+    .sun { position: absolute; width: 88px; height: 88px; right: 8%; top: 9%; border-radius: 50%; background: #fff3b8; box-shadow: 0 0 0 12px rgba(255,255,255,.18); }
+    .cloud { position: absolute; width: 170px; height: 34px; border-radius: 50%; background: rgba(255,255,255,.76); }
+    .cloud::before, .cloud::after { content: ""; position: absolute; border-radius: 50%; background: inherit; }
+    .cloud::before { width: 68px; height: 62px; left: 24px; bottom: 0; }
+    .cloud::after { width: 90px; height: 76px; right: 16px; bottom: 0; }
+    .cloud.c1 { left: 8%; top: 16%; transform: scale(.72); }
+    .cloud.c2 { right: 22%; top: 31%; transform: scale(.5); opacity: .72; }
+    .hill { position: absolute; left: -5%; right: -5%; bottom: 23%; height: 34%; background: var(--scene-mid); clip-path: polygon(0 80%, 14% 32%, 27% 72%, 43% 18%, 58% 70%, 76% 28%, 100% 72%, 100% 100%, 0 100%); }
+    .ground { position: absolute; left: 0; right: 0; bottom: 0; height: 30%; background: var(--scene-low); }
+    .map-status { position: absolute; left: 22px; top: 18px; display: flex; gap: 8px; align-items: center; padding: 7px 11px; border: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 88%, transparent); box-shadow: 0 3px 8px var(--shadow); font-size: 12px; font-weight: 700; }
+    .boss-progress { color: var(--danger); }
+    .auto-toggle { position: absolute; right: 22px; top: 18px; height: 34px; display: flex; align-items: center; gap: 10px; padding: 0 11px; border: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 91%, transparent); box-shadow: 0 3px 8px var(--shadow); font-size: 12px; font-weight: 700; }
+    .switch { width: 34px; height: 18px; padding: 2px; border-radius: 10px; background: var(--good); }
+    .switch i { display: block; width: 14px; height: 14px; margin-left: 16px; border-radius: 50%; background: #fff; }
+    .event-toast { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); min-width: 260px; padding: 9px 18px; border: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 90%, transparent); text-align: center; box-shadow: 0 5px 12px var(--shadow); color: var(--primary-2); font-weight: 800; font-size: 13px; }
+    .hero-on-map { position: absolute; z-index: 4; left: 47%; bottom: 95px; width: 112px; height: 112px; object-fit: contain; filter: drop-shadow(0 8px 4px rgba(35,48,50,.26)); }
+
+    .route { position: absolute; z-index: 3; left: -3%; right: -3%; bottom: 14px; height: 82px; display: grid; grid-template-columns: repeat(9, 1fr); transform: skewX(-20deg); }
+    .tile { position: relative; display: flex; align-items: end; justify-content: center; padding: 0 4px 12px; border: 2px solid var(--route-line); border-right-width: 1px; background: color-mix(in srgb, var(--route) 84%, var(--tile)); color: var(--ink); overflow: hidden; }
+    .tile > span { transform: skewX(20deg); font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .tile.current { z-index: 2; border-color: var(--gold); background: color-mix(in srgb, var(--gold) 40%, var(--surface)); box-shadow: 0 0 0 2px rgba(255,255,255,.7) inset; }
+    .tile.far { opacity: .55; }
+
+    .bottombar { height: 12.5%; min-height: 82px; display: grid; grid-template-columns: 1fr 1fr 1.45fr 1fr 1fr; gap: 18px; align-items: center; padding: 0 4.5%; border-top: 2px solid var(--line); background: var(--surface); }
+    .action { height: 44px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); color: var(--ink); cursor: pointer; font-weight: 800; box-shadow: 0 3px 0 color-mix(in srgb, var(--line) 70%, #7a8798); }
+    .action:hover { background: color-mix(in srgb, var(--surface-2) 74%, #fff); transform: translateY(-1px); }
+    .action.primary { height: 52px; border-color: var(--primary-2); background: var(--primary); color: #fff; font-size: 18px; box-shadow: 0 4px 0 var(--primary-2); }
+    .action .ico { margin-right: 8px; font-size: 18px; }
+
+    body.theme-b {
+      --page: #eee8e8; --ink: #352e38; --muted: #746672;
+      --surface: #fff9f5; --surface-2: #f4e8e7; --surface-3: #eedbd9;
+      --primary: #c94a55; --primary-2: #96353e; --accent: #e998a5;
+      --gold: #d9a441; --good: #78a98c; --danger: #c8404d;
+      --line: #b88d89; --shadow: rgba(78, 40, 46, .22);
+      --scene-top: #f6d6d6; --scene-mid: #dbc9df; --scene-low: #8799a9;
+      --route: #fff8ef; --route-line: #ab7772;
+    }
+    body.theme-b .game-shell { border-width: 3px; }
+    body.theme-b .avatar-frame, body.theme-b .current-dice, body.theme-b .map-status, body.theme-b .auto-toggle, body.theme-b .event-toast { border-radius: 2px; }
+    body.theme-b .topbar::after { content: ""; position: absolute; left: 0; right: 0; bottom: -2px; height: 5px; border-top: 1px solid var(--gold); border-bottom: 1px solid var(--gold); background: var(--primary); z-index: 8; pointer-events: none; }
+    body.theme-b .sun { background: rgba(255,250,245,.72); box-shadow: 0 0 0 12px rgba(255,255,255,.12); }
+    body.theme-b .route { transform: skewX(-16deg); }
+    body.theme-b .tile > span { transform: skewX(16deg); }
+
+    body.theme-c {
+      --page: #e7eeeb; --ink: #243a3a; --muted: #687d78;
+      --surface: #f4f7f3; --surface-2: #ddebe5; --surface-3: #c9ddd5;
+      --primary: #277c78; --primary-2: #185754; --accent: #496a9b;
+      --gold: #e3ae3d; --good: #4e9a69; --danger: #d85c5c;
+      --line: #6f9990; --shadow: rgba(28, 70, 63, .22);
+      --scene-top: #b9d8d1; --scene-mid: #92b29a; --scene-low: #507b62;
+      --route: #edf6ee; --route-line: #638f80;
+    }
+    body.theme-c .game-shell { border-color: #416f68; }
+    body.theme-c .avatar-frame, body.theme-c .current-dice, body.theme-c .resource, body.theme-c .card { border-radius: 5px; }
+    body.theme-c .hill { opacity: .95; }
+    body.theme-c .ground { background-color: #52765d; background-image: linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 24px 24px; }
+
+    @media (max-width: 1180px) {
+      .workspace { padding: 12px; }
+      .chooser { height: 48px; }
+      .game-shell { max-height: none; }
+      .resource { padding: 5px; }
+      .resource small, .title-tag { display: none; }
+      .bottombar { gap: 10px; padding-inline: 3%; }
+      .tile > span { font-size: 10px; }
+    }
+  </style>
+</head>
+<body class="theme-a">
+  <main class="workspace">
+    <header class="chooser">
+      <h1>大勇者 · 主界面视觉方案</h1>
+      <nav class="segmented" aria-label="视觉方案切换">
+        <button class="theme-btn active" data-theme="a">A 晴空樱花</button>
+        <button class="theme-btn" data-theme="b">B 朱樱神社</button>
+        <button class="theme-btn" data-theme="c">C 翠风公会</button>
+      </nav>
+    </header>
+
+    <section class="game-shell">
+      <header class="topbar">
+        <section class="top-section hero-summary">
+          <div class="avatar-frame">
+            <img src="../assets/hreo.png" alt="主角">
+            <span class="level-seal">Lv.1</span>
+          </div>
+          <div class="hero-copy">
+            <div class="name-row"><span class="hero-name">勇者 YYY</span><span class="title-tag">初行的冒险者</span></div>
+            <div class="bar-row"><span>生命</span><span class="meter hp"><i></i></span><span class="meter-value">390 / 500</span></div>
+            <div class="bar-row"><span>经验</span><span class="meter exp"><i></i></span><span class="meter-value">36 / 100</span></div>
+          </div>
+        </section>
+
+        <section class="top-section resources">
+          <div class="resource gold"><span class="resource-icon">●</span><div><small>金币</small><strong>8,420</strong></div></div>
+          <div class="resource life"><span class="resource-icon">♥</span><div><small>复活次数</small><strong>3 / 3</strong></div></div>
+          <div class="resource buff"><span class="resource-icon">✦</span><div><small>当前神祇</small><strong>财神 · 2圈</strong></div></div>
+        </section>
+
+        <section class="top-section dice-zone">
+          <div class="current-dice"><span class="dice-face">⚄</span><span class="dice-suit">♥</span></div>
+          <div class="poker">
+            <div class="poker-head"><span>牌型记录 · 3次结算</span><span class="poker-result">一对 ×2</span></div>
+            <div class="cards">
+              <div class="card red"><strong>4</strong><span>♥</span></div>
+              <div class="card black"><strong>5</strong><span>♣</span></div>
+              <div class="card black"><strong>4</strong><span>♠</span></div>
+            </div>
+          </div>
+        </section>
+      </header>
+
+      <section class="map-area">
+        <div class="sky-pattern">
+          <div class="sun"></div><div class="cloud c1"></div><div class="cloud c2"></div>
+          <div class="hill"></div><div class="ground"></div>
+        </div>
+        <div class="map-status"><span>第 3 圈</span><span>·</span><span>格子 5 / 28</span><span>·</span><span class="boss-progress">Boss 0 / 100</span></div>
+        <div class="auto-toggle"><span>自动挂机</span><span class="switch"><i></i></span><span>1.8s</span></div>
+        <div class="event-toast">锻造成功 · 星辉长剑强化 +1</div>
+        <img class="hero-on-map" src="../assets/hreo.png" alt="移动中的主角">
+        <div class="route">
+          <div class="tile far" style="--tile:#7790a9"><span>⚔ 精英 #1</span></div>
+          <div class="tile" style="--tile:#7fc3a6"><span>♨ 休息 #2</span></div>
+          <div class="tile" style="--tile:#d49a54"><span>🎁 宝箱 #3</span></div>
+          <div class="tile current" style="--tile:#e0bd55"><span>🔨 锻造 #4</span></div>
+          <div class="tile" style="--tile:#ad83ce"><span>🎲 命运 #5</span></div>
+          <div class="tile" style="--tile:#8cac6b"><span>🏛 神祇 #6</span></div>
+          <div class="tile" style="--tile:#c38a56"><span>🔮 合成 #7</span></div>
+          <div class="tile" style="--tile:#85a7d4"><span>⚡ 闪电 #8</span></div>
+          <div class="tile far" style="--tile:#8f769c"><span>☠ Boss #9</span></div>
+        </div>
+      </section>
+
+      <footer class="bottombar">
+        <button class="action"><span class="ico">▣</span>背包</button>
+        <button class="action"><span class="ico">✦</span>技能</button>
+        <button class="action primary"><span class="ico">⚄</span>掷骰前进</button>
+        <button class="action"><span class="ico">▤</span>日志</button>
+        <button class="action"><span class="ico">⌂</span>主页</button>
+      </footer>
+    </section>
+  </main>
+
+  <script>
+    const buttons = [...document.querySelectorAll('.theme-btn')];
+    const names = { a: 'A 晴空樱花', b: 'B 朱樱神社', c: 'C 翠风公会' };
+    buttons.forEach((button) => button.addEventListener('click', () => {
+      const theme = button.dataset.theme;
+      document.body.className = `theme-${theme}`;
+      buttons.forEach((item) => item.classList.toggle('active', item === button));
+      document.title = `大勇者 · ${names[theme]}`;
+    }));
+  </script>
+</body>
+</html>

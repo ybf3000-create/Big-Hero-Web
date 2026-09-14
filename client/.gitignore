@@ -1,0 +1,4 @@
+debug.log
+.godot/
+.git-empty-old/
+*.import
