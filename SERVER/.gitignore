@@ -6,5 +6,3 @@ data/
 *.sqlite-wal
 *.sqlite-shm
 *.log
-public/game/*
-!public/game/.gitkeep
