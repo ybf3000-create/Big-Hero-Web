@@ -40,11 +40,10 @@ test("SQLite migrations and durability settings are active", async (context) => 
   assert.equal(repository.database.pragma("foreign_keys", { simple: true }), 1);
   assert.equal(repository.database.pragma("busy_timeout", { simple: true }), 5_000);
   assert.equal(repository.database.pragma("synchronous", { simple: true }), 2);
-  assert.equal(
+  assert.ok(
     (repository.database.prepare(
       "SELECT count(*) AS count FROM schema_migrations",
-    ).get() as { count: number }).count,
-    1,
+    ).get() as { count: number }).count >= 2,
   );
 });
 

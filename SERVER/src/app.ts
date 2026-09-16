@@ -387,6 +387,118 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return reply.status(201).send({ ok: true, character });
   });
 
+  const requireGameRepository = () => {
+    if (!options.repository.getGameState || !options.repository.executeGameCommand) {
+      throw new AppError("SERVICE_UNAVAILABLE", 503, "游戏服务暂时不可用");
+    }
+    return options.repository;
+  };
+  const characterForIdentity = async (identity: SessionIdentity) => {
+    const character = await options.repository.getCharacter(identity.accountId);
+    if (!character) throw new AppError("CHARACTER_REQUIRED", 409, "请先创建角色");
+    return character;
+  };
+
+  app.get("/api/v1/game/state", async (request) => {
+    const identity = authenticateRequest(request);
+    const repository = requireGameRepository();
+    const character = await characterForIdentity(identity);
+    return { ok: true, character, state: await repository.getGameState!(character.id) };
+  });
+
+  const gameCommand = async (request: FastifyRequest, command: string) => {
+    const identity = authenticateRequest(request);
+    const repository = requireGameRepository();
+    const character = await characterForIdentity(identity);
+    const body = bodyObject(request.body);
+    validateRulesVersion(body.rules_version, rulesVersion);
+    const requestId = validateRequestId(body.request_id);
+    const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
+      ? body.payload as Record<string, unknown>
+      : {};
+    const result = await repository.executeGameCommand!({ characterId: character.id, requestId, command, payload });
+    const updatedCharacter = await options.repository.getCharacter(identity.accountId);
+    return { ok: true, character: updatedCharacter, state: result.state, event: result.event };
+  };
+
+  app.post("/api/v1/game/roll", async (request) => gameCommand(request, "roll"));
+  app.post("/api/v1/game/item/use", async (request) => gameCommand(request, "item_use"));
+  app.post("/api/v1/game/equipment/equip", async (request) => gameCommand(request, "equipment_equip"));
+  app.post("/api/v1/game/equipment/unequip", async (request) => gameCommand(request, "equipment_unequip"));
+  app.post("/api/v1/game/equipment/dismantle", async (request) => gameCommand(request, "equipment_dismantle"));
+  app.post("/api/v1/game/equipment/lock", async (request) => gameCommand(request, "equipment_lock"));
+  app.post("/api/v1/game/equipment/enhance", async (request) => gameCommand(request, "equipment_enhance"));
+  app.post("/api/v1/game/inventory/expand", async (request) => gameCommand(request, "inventory_expand"));
+  app.post("/api/v1/game/equipment/expand", async (request) => gameCommand(request, "equipment_expand"));
+  app.post("/api/v1/game/skill/unlock", async (request) => gameCommand(request, "skill_unlock"));
+  app.post("/api/v1/game/skill/slot", async (request) => gameCommand(request, "skill_slot"));
+  app.post("/api/v1/game/skill/cast", async (request) => gameCommand(request, "skill_cast"));
+
+  app.get("/api/v1/auction/listings", async (request) => {
+    const identity = authenticateRequest(request);
+    if (!options.repository.listAuctionListings) throw new AppError("SERVICE_UNAVAILABLE", 503, "拍卖行暂时不可用");
+    await characterForIdentity(identity);
+    const query = request.query && typeof request.query === "object" ? request.query as Record<string, unknown> : {};
+    const limit = query.limit === undefined ? 50 : Number(query.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw badRequest("limit需为1～100的整数");
+    return { ok: true, listings: await options.repository.listAuctionListings(limit) };
+  });
+
+  app.get("/api/v1/auction/mine", async (request) => {
+    const identity = authenticateRequest(request);
+    if (!options.repository.listMyAuctionListings) throw new AppError("SERVICE_UNAVAILABLE", 503, "拍卖行暂时不可用");
+    const character = await characterForIdentity(identity);
+    return { ok: true, listings: await options.repository.listMyAuctionListings(character.id, 100) };
+  });
+
+  app.post("/api/v1/auction/list", async (request) => {
+    const identity = authenticateRequest(request);
+    if (!options.repository.createAuctionListing) throw new AppError("SERVICE_UNAVAILABLE", 503, "拍卖行暂时不可用");
+    const character = await characterForIdentity(identity);
+    const body = bodyObject(request.body);
+    validateRulesVersion(body.rules_version, rulesVersion);
+    const requestId = validateRequestId(body.request_id);
+    const itemKind = body.item_kind;
+    if (itemKind !== "item" && itemKind !== "equipment" && itemKind !== "gem") throw badRequest("物品类型不正确");
+    const itemId = typeof body.item_id === "string" || typeof body.item_id === "number" ? body.item_id : "";
+    const itemCount = Number(body.item_count ?? 1);
+    const buyoutPrice = Number(body.buyout_price);
+    const durationHours = Number(body.duration_hours ?? 24);
+    const listing = await options.repository.createAuctionListing({ characterId: character.id, requestId, itemKind, itemId, itemCount, buyoutPrice, durationHours });
+    return { ok: true, listing, character: await options.repository.getCharacter(identity.accountId) };
+  });
+
+  app.post("/api/v1/auction/buy", async (request) => {
+    const identity = authenticateRequest(request);
+    if (!options.repository.buyAuctionListing) throw new AppError("SERVICE_UNAVAILABLE", 503, "拍卖行暂时不可用");
+    const character = await characterForIdentity(identity);
+    const body = bodyObject(request.body);
+    validateRulesVersion(body.rules_version, rulesVersion);
+    const requestId = validateRequestId(body.request_id);
+    if (typeof body.listing_id !== "string" || body.listing_id.length < 8) throw badRequest("订单编号不正确");
+    const result = await options.repository.buyAuctionListing(character.id, requestId, body.listing_id);
+    return { ok: true, ...result, character: await options.repository.getCharacter(identity.accountId) };
+  });
+
+  app.post("/api/v1/auction/cancel", async (request) => {
+    const identity = authenticateRequest(request);
+    if (!options.repository.cancelAuctionListing) throw new AppError("SERVICE_UNAVAILABLE", 503, "拍卖行暂时不可用");
+    const character = await characterForIdentity(identity);
+    const body = bodyObject(request.body);
+    if (typeof body.listing_id !== "string" || body.listing_id.length < 8) throw badRequest("订单编号不正确");
+    return { ok: true, listing: await options.repository.cancelAuctionListing(character.id, body.listing_id) };
+  });
+
+  app.post("/api/v1/auction/claim", async (request) => {
+    const identity = authenticateRequest(request);
+    if (!options.repository.claimAuctionListing) throw new AppError("SERVICE_UNAVAILABLE", 503, "拍卖行暂时不可用");
+    const character = await characterForIdentity(identity);
+    const body = bodyObject(request.body);
+    if (typeof body.listing_id !== "string" || body.listing_id.length < 8) throw badRequest("订单编号不正确");
+    const result = await options.repository.claimAuctionListing(character.id, body.listing_id);
+    return { ok: true, ...result, character: await options.repository.getCharacter(identity.accountId) };
+  });
+
   app.get("/ws", { websocket: true }, (socket: WebSocket) => {
     let identity: SessionIdentity | null = null;
     const authenticationTimeout = setTimeout(() => {

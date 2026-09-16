@@ -25,14 +25,28 @@ if not exist "node_modules\tsx\dist\cli.mjs" (
   exit /b 1
 )
 
-if not exist "dist\server.js" (
-  echo Compiled server was not found. Building now...
-  call npm run build
+echo Updating the database and compiled server...
+if exist "..\web-client\build.mjs" (
+  node "..\web-client\build.mjs"
   if errorlevel 1 (
-    echo ERROR: build failed. The server was not started.
+    echo ERROR: web client build failed. The server was not started.
     pause
     exit /b 1
   )
+)
+
+call npm run migrate
+if errorlevel 1 (
+  echo ERROR: database migration failed. The server was not started.
+  pause
+  exit /b 1
+)
+
+call npm run build
+if errorlevel 1 (
+  echo ERROR: build failed. The server was not started.
+  pause
+  exit /b 1
 )
 
 set "HOST=0.0.0.0"

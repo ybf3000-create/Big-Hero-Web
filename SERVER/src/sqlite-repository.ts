@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { AppError } from "./errors.js";
+import { applyGameCommand, createInitialGameState } from "./game-engine.js";
+import { addItem, parseGameState, removeItem, serializeGameState, type EquipmentItem, type GameState } from "./game-state.js";
 import type {
   AccountForLogin,
   AccountSummary,
@@ -10,6 +12,9 @@ import type {
   CreateCharacterInput,
   CreateSessionInput,
   GameRepository,
+  AuctionListing,
+  CreateAuctionInput,
+  GameCommandInput,
   RegisterAccountInput,
 } from "./repository.js";
 import { openSqliteDatabase } from "./sqlite-database.js";
@@ -52,6 +57,23 @@ function chatMessageFromRow(row: Record<string, unknown>): ChatMessage {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function listingFromRow(row: Record<string, unknown>): AuctionListing {
+  return {
+    id: String(row.id),
+    sellerCharacterId: String(row.seller_character_id),
+    sellerName: String(row.seller_name),
+    itemKind: row.item_kind as AuctionListing["itemKind"],
+    item: JSON.parse(String(row.item_json)) as Record<string, unknown>,
+    itemCount: Number(row.item_count),
+    buyoutPrice: Number(row.buyout_price),
+    status: String(row.status),
+    createdAt: Number(row.created_at),
+    expiresAt: Number(row.expires_at),
+    buyerCharacterId: row.buyer_character_id === null ? null : String(row.buyer_character_id),
+    claimCharacterId: row.claim_character_id === null ? null : String(row.claim_character_id),
+  };
 }
 
 export class SqliteRepository implements GameRepository {
@@ -244,6 +266,9 @@ export class SqliteRepository implements GameRepository {
         value.normalizedName,
         value.requestId,
       );
+      this.database.prepare(
+        `INSERT INTO character_states (character_id, state_json) VALUES (?, ?)`,
+      ).run(id, serializeGameState(createInitialGameState()));
       const inserted = this.database.prepare(
         `SELECT id, display_name, level, experience, gold, revision
            FROM characters
@@ -264,6 +289,225 @@ export class SqliteRepository implements GameRepository {
       }
       throw error;
     }
+  }
+
+  async getGameState(characterId: string): Promise<GameState> {
+    const row = this.database.prepare(
+      `SELECT state_json FROM character_states WHERE character_id = ?`,
+    ).get(characterId) as { state_json: string } | undefined;
+    if (!row) {
+      const state = createInitialGameState();
+      this.database.prepare(
+        `INSERT INTO character_states (character_id, state_json) VALUES (?, ?)`,
+      ).run(characterId, serializeGameState(state));
+      return state;
+    }
+    return parseGameState(row.state_json);
+  }
+
+  async executeGameCommand(input: GameCommandInput) {
+    const execute = this.database.transaction((value: GameCommandInput) => {
+      const repeated = this.database.prepare(
+        `SELECT command, result_json FROM game_commands WHERE character_id = ? AND request_id = ?`,
+      ).get(value.characterId, value.requestId) as { command: string; result_json: string } | undefined;
+      if (repeated) {
+        if (repeated.command !== value.command) throw new AppError("REQUEST_ID_REUSED", 409, "request_id已用于其他游戏操作");
+        return JSON.parse(repeated.result_json) as ReturnType<typeof applyGameCommand>;
+      }
+
+      const characterRow = this.database.prepare(
+        `SELECT level, experience, gold FROM characters WHERE id = ? AND deleted_at IS NULL`,
+      ).get(value.characterId) as { level: number; experience: number; gold: number } | undefined;
+      if (!characterRow) throw new AppError("CHARACTER_REQUIRED", 409, "请先创建角色");
+      const stateRow = this.database.prepare(
+        `SELECT state_json FROM character_states WHERE character_id = ?`,
+      ).get(value.characterId) as { state_json: string } | undefined;
+      const result = applyGameCommand(
+        parseGameState(stateRow?.state_json),
+        { level: Number(characterRow.level), experience: Number(characterRow.experience), gold: Number(characterRow.gold) },
+        value.command,
+        value.payload,
+      );
+      this.database.prepare(
+        `INSERT INTO character_states (character_id, state_json, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(character_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`,
+      ).run(value.characterId, serializeGameState(result.state), Date.now());
+      this.database.prepare(
+        `UPDATE characters SET level = ?, experience = ?, gold = ?, revision = revision + 1 WHERE id = ?`,
+      ).run(result.character.level, result.character.experience, result.character.gold, value.characterId);
+      const stored = { ...result, character: result.character };
+      this.database.prepare(
+        `INSERT INTO game_commands (character_id, request_id, command, result_json) VALUES (?, ?, ?, ?)`,
+      ).run(value.characterId, value.requestId, value.command, JSON.stringify(stored));
+      return stored;
+    });
+    try {
+      return execute.immediate(input);
+    } catch (error) {
+      const message = errorMessage(error);
+      if (message.includes("物品不足") || message.includes("金币不足") || message.includes("不存在") || message.includes("无法") || message.includes("不支持")) {
+        throw new AppError("GAME_COMMAND_INVALID", 400, message);
+      }
+      throw error;
+    }
+  }
+
+  async listAuctionListings(limit: number): Promise<AuctionListing[]> {
+    const safeLimit = Math.max(1, Math.min(Math.floor(limit), 100));
+    const now = Date.now();
+    this.database.prepare(
+      `UPDATE auction_listings SET status = 'expired', claim_character_id = seller_character_id
+       WHERE status = 'active' AND expires_at <= ?`,
+    ).run(now);
+    const rows = this.database.prepare(
+      `SELECT * FROM auction_listings WHERE status = 'active' ORDER BY created_at DESC LIMIT ?`,
+    ).all(safeLimit) as Record<string, unknown>[];
+    return rows.map(listingFromRow);
+  }
+
+  async listMyAuctionListings(characterId: string, limit: number): Promise<AuctionListing[]> {
+    const safeLimit = Math.max(1, Math.min(Math.floor(limit), 100));
+    const now = Date.now();
+    this.database.prepare(
+      `UPDATE auction_listings SET status = 'expired', claim_character_id = seller_character_id
+       WHERE status = 'active' AND expires_at <= ?`,
+    ).run(now);
+    const rows = this.database.prepare(
+      `SELECT * FROM auction_listings WHERE seller_character_id = ? ORDER BY created_at DESC LIMIT ?`,
+    ).all(characterId, safeLimit) as Record<string, unknown>[];
+    return rows.map(listingFromRow);
+  }
+
+  async createAuctionListing(input: CreateAuctionInput): Promise<AuctionListing> {
+    const create = this.database.transaction((value: CreateAuctionInput) => {
+      const repeated = this.database.prepare(
+        `SELECT * FROM auction_listings WHERE seller_character_id = ? AND client_request_id = ?`,
+      ).get(value.characterId, value.requestId) as Record<string, unknown> | undefined;
+      if (repeated) {
+        const listing = listingFromRow(repeated);
+        const itemId = listing.itemKind === "equipment" ? String(listing.item.id) : listing.itemKind === "item" ? Number(listing.item.itemId) : Number(listing.item.gemId);
+        if (listing.itemKind !== value.itemKind || itemId !== (value.itemKind === "equipment" ? String(value.itemId) : Number(value.itemId)) || listing.itemCount !== value.itemCount || listing.buyoutPrice !== value.buyoutPrice) {
+          throw new AppError("REQUEST_ID_REUSED", 409, "request_id已用于其他上架请求");
+        }
+        return listing;
+      }
+      if (![8, 12, 24].includes(value.durationHours)) throw new AppError("AUCTION_INVALID", 400, "上架时长需为8、12或24小时");
+      if (!Number.isSafeInteger(value.buyoutPrice) || value.buyoutPrice < 1 || value.buyoutPrice > 9_000_000_000_000_000) throw new AppError("AUCTION_INVALID", 400, "价格需为正整数");
+      const count = this.database.prepare(
+        `SELECT count(*) AS count FROM auction_listings WHERE seller_character_id = ? AND status = 'active'`,
+      ).get(value.characterId) as { count: number };
+      if (Number(count.count) >= 3) throw new AppError("AUCTION_LIMIT", 400, "每个角色最多同时上架3件物品");
+      const warehouse = this.database.prepare(
+        `SELECT count(*) AS count FROM auction_listings
+          WHERE seller_character_id = ? AND status IN ('active', 'sold', 'cancelled', 'expired')`,
+      ).get(value.characterId) as { count: number };
+      if (Number(warehouse.count) >= 30) throw new AppError("AUCTION_LIMIT", 400, "拍卖仓库已满，请先领取订单");
+      const character = this.database.prepare(
+        `SELECT display_name FROM characters WHERE id = ? AND deleted_at IS NULL`,
+      ).get(value.characterId) as { display_name: string } | undefined;
+      if (!character) throw new AppError("CHARACTER_REQUIRED", 409, "请先创建角色");
+      const stateRow = this.database.prepare(`SELECT state_json FROM character_states WHERE character_id = ?`).get(value.characterId) as { state_json: string } | undefined;
+      const state = parseGameState(stateRow?.state_json);
+      let item: Record<string, unknown> | undefined;
+      if (value.itemKind === "equipment") {
+        const id = String(value.itemId);
+        const equipment = state.equipmentBag.find((entry) => entry.id === id);
+        if (!equipment || equipment.locked || equipment.bound || Object.values(state.equipped).includes(id)) throw new AppError("AUCTION_INVALID", 400, "该装备无法上架");
+        item = { ...equipment };
+        state.equipmentBag = state.equipmentBag.filter((entry) => entry.id !== id);
+      } else if (value.itemKind === "item") {
+        const id = Number(value.itemId);
+        if (!Number.isInteger(value.itemCount) || value.itemCount < 1 || !removeItem(state, id, value.itemCount)) throw new AppError("AUCTION_INVALID", 400, "物品数量不足");
+        item = { itemId: id };
+      } else {
+        const id = Number(value.itemId);
+        const gem = state.gemBag.find((entry) => entry.gemId === id);
+        if (!gem || gem.count < value.itemCount) throw new AppError("AUCTION_INVALID", 400, "宝石数量不足");
+        gem.count -= value.itemCount;
+        item = { gemId: id };
+      }
+      const now = Date.now();
+      const id = randomUUID();
+      this.database.prepare(`UPDATE character_states SET state_json = ?, updated_at = ? WHERE character_id = ?`).run(serializeGameState(state), now, value.characterId);
+      this.database.prepare(
+        `INSERT INTO auction_listings (id, seller_character_id, seller_name, item_kind, item_json, item_count, buyout_price, created_at, expires_at, client_request_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, value.characterId, character.display_name, value.itemKind, JSON.stringify(item), value.itemCount, value.buyoutPrice, now, now + value.durationHours * 60 * 60_000, value.requestId);
+      const row = this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(id) as Record<string, unknown>;
+      return listingFromRow(row);
+    });
+    return create.immediate(input);
+  }
+
+  async buyAuctionListing(characterId: string, requestId: string, listingId: string) {
+    const buy = this.database.transaction(() => {
+      const repeated = this.database.prepare(
+        `SELECT result_json FROM game_commands WHERE character_id = ? AND request_id = ? AND command = 'auction_buy'`,
+      ).get(characterId, requestId) as { result_json: string } | undefined;
+      if (repeated) {
+        const result = JSON.parse(repeated.result_json) as { listing: AuctionListing; state: GameState; gold: number };
+        if (result.listing.id !== listingId) throw new AppError("REQUEST_ID_REUSED", 409, "request_id已用于其他购买请求");
+        return result;
+      }
+      const listingRow = this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown> | undefined;
+      if (!listingRow) throw new AppError("AUCTION_NOT_FOUND", 404, "拍卖订单不存在");
+      const listing = listingFromRow(listingRow);
+      if (listing.sellerCharacterId === characterId) throw new AppError("AUCTION_INVALID", 400, "不能购买自己的订单");
+      if (listing.status !== "active" || listing.expiresAt <= Date.now()) throw new AppError("AUCTION_UNAVAILABLE", 409, "订单已不可购买");
+      const buyer = this.database.prepare(`SELECT gold FROM characters WHERE id = ?`).get(characterId) as { gold: number } | undefined;
+      if (!buyer || buyer.gold < listing.buyoutPrice) throw new AppError("GOLD_INSUFFICIENT", 400, "金币不足");
+      const state = parseGameState((this.database.prepare(`SELECT state_json FROM character_states WHERE character_id = ?`).get(characterId) as { state_json: string } | undefined)?.state_json);
+      if (listing.itemKind === "item") {
+        if (!addItem(state, Number(listing.item.itemId), listing.itemCount)) throw new AppError("INVENTORY_FULL", 400, "背包空间不足");
+      } else if (listing.itemKind === "gem") {
+        const gem = state.gemBag.find((entry) => entry.gemId === Number(listing.item.gemId));
+        if (gem) gem.count += listing.itemCount; else state.gemBag.push({ gemId: Number(listing.item.gemId), count: listing.itemCount });
+      } else {
+        if (state.equipmentBag.length >= state.equipmentCapacity) throw new AppError("EQUIPMENT_FULL", 400, "装备背包空间不足");
+        state.equipmentBag.push({ ...(listing.item as unknown as EquipmentItem), bound: true });
+      }
+      this.database.prepare(`UPDATE character_states SET state_json = ?, updated_at = ? WHERE character_id = ?`).run(serializeGameState(state), Date.now(), characterId);
+      this.database.prepare(`UPDATE characters SET gold = gold - ?, revision = revision + 1 WHERE id = ?`).run(listing.buyoutPrice, characterId);
+      this.database.prepare(`UPDATE auction_listings SET status = 'sold', buyer_character_id = ?, claim_character_id = seller_character_id, sold_at = ? WHERE id = ? AND status = 'active'`).run(characterId, Date.now(), listingId);
+      const updated = this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown>;
+      const result = { listing: listingFromRow(updated), state, gold: Number(buyer.gold) - listing.buyoutPrice };
+      this.database.prepare(
+        `INSERT INTO game_commands (character_id, request_id, command, result_json) VALUES (?, ?, 'auction_buy', ?)`,
+      ).run(characterId, requestId, JSON.stringify(result));
+      return result;
+    });
+    return buy.immediate();
+  }
+
+  async cancelAuctionListing(characterId: string, listingId: string): Promise<AuctionListing> {
+    const cancel = this.database.transaction(() => {
+      const row = this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown> | undefined;
+      if (!row || String(row.seller_character_id) !== characterId || String(row.status) !== "active") throw new AppError("AUCTION_INVALID", 400, "订单无法取消");
+      this.database.prepare(`UPDATE auction_listings SET status = 'cancelled', claim_character_id = seller_character_id WHERE id = ?`).run(listingId);
+      return listingFromRow(this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown>);
+    });
+    return cancel.immediate();
+  }
+
+  async claimAuctionListing(characterId: string, listingId: string) {
+    const claim = this.database.transaction(() => {
+      const row = this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown> | undefined;
+      if (!row) throw new AppError("AUCTION_NOT_FOUND", 404, "拍卖订单不存在");
+      const listing = listingFromRow(row);
+      if (listing.claimCharacterId !== characterId || !["sold", "cancelled", "expired"].includes(listing.status)) throw new AppError("AUCTION_INVALID", 400, "没有可领取的订单");
+      const state = parseGameState((this.database.prepare(`SELECT state_json FROM character_states WHERE character_id = ?`).get(characterId) as { state_json: string } | undefined)?.state_json);
+      let gold = 0;
+      if (listing.status === "sold") gold = Math.max(0, listing.buyoutPrice - Math.floor(listing.buyoutPrice * 5 / 100));
+      else if (listing.itemKind === "item") {
+        if (!addItem(state, Number(listing.item.itemId), listing.itemCount)) throw new AppError("INVENTORY_FULL", 400, "背包空间不足");
+      } else if (listing.itemKind === "equipment") state.equipmentBag.push(listing.item as unknown as EquipmentItem);
+      else { const gem = state.gemBag.find((entry) => entry.gemId === Number(listing.item.gemId)); if (gem) gem.count += listing.itemCount; else state.gemBag.push({ gemId: Number(listing.item.gemId), count: listing.itemCount }); }
+      this.database.prepare(`UPDATE characters SET gold = gold + ?, revision = revision + 1 WHERE id = ?`).run(gold, characterId);
+      this.database.prepare(`UPDATE character_states SET state_json = ?, updated_at = ? WHERE character_id = ?`).run(serializeGameState(state), Date.now(), characterId);
+      this.database.prepare(`UPDATE auction_listings SET status = 'claimed' WHERE id = ?`).run(listingId);
+      return { listing: listingFromRow(this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown>), state, gold };
+    });
+    return claim.immediate();
   }
 
   async listChatMessages(channel: "world" | "system", limit: number): Promise<ChatMessage[]> {

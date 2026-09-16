@@ -1,3 +1,6 @@
+import type { GameCommandResult } from "./game-engine.js";
+import type { GameState } from "./game-state.js";
+
 export interface AccountForLogin {
   id: string;
   username: string;
@@ -33,6 +36,38 @@ export interface CreateChatMessageInput {
   accountId: string;
   body: string;
   clientMessageId: string;
+}
+
+export interface GameCommandInput {
+  characterId: string;
+  requestId: string;
+  command: string;
+  payload: Record<string, unknown>;
+}
+
+export interface AuctionListing {
+  id: string;
+  sellerCharacterId: string;
+  sellerName: string;
+  itemKind: "equipment" | "item" | "gem";
+  item: Record<string, unknown>;
+  itemCount: number;
+  buyoutPrice: number;
+  status: string;
+  createdAt: number;
+  expiresAt: number;
+  buyerCharacterId: string | null;
+  claimCharacterId: string | null;
+}
+
+export interface CreateAuctionInput {
+  characterId: string;
+  requestId: string;
+  itemKind: "equipment" | "item" | "gem";
+  itemId: string | number;
+  itemCount: number;
+  buyoutPrice: number;
+  durationHours: number;
 }
 
 export interface RegisterAccountInput {
@@ -78,4 +113,12 @@ export interface GameRepository {
   createCharacter(input: CreateCharacterInput): Promise<CharacterSummary>;
   listChatMessages?(channel: "world" | "system", limit: number): Promise<ChatMessage[]>;
   createChatMessage?(input: CreateChatMessageInput): Promise<ChatMessage>;
+  getGameState?(characterId: string): Promise<GameState>;
+  executeGameCommand?(input: GameCommandInput): Promise<GameCommandResult>;
+  listAuctionListings?(limit: number): Promise<AuctionListing[]>;
+  listMyAuctionListings?(characterId: string, limit: number): Promise<AuctionListing[]>;
+  createAuctionListing?(input: CreateAuctionInput): Promise<AuctionListing>;
+  buyAuctionListing?(characterId: string, requestId: string, listingId: string): Promise<{ listing: AuctionListing; state: GameState; gold: number }>;
+  cancelAuctionListing?(characterId: string, listingId: string): Promise<AuctionListing>;
+  claimAuctionListing?(characterId: string, listingId: string): Promise<{ listing: AuctionListing; state: GameState; gold: number }>;
 }

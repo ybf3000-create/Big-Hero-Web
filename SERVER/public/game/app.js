@@ -1,16 +1,19 @@
 const RULES_VERSION = "network-1";
 const TOKEN_KEY = "big-hero.session-token";
 const ACCOUNT_KEY = "big-hero.account";
-const state = { token: sessionStorage.getItem(TOKEN_KEY), account: readJson(ACCOUNT_KEY), character: null, socket: null, heartbeat: null, reconnectTimer: null, reconnectStartedAt: 0, messages: [], registerMode: false };
+const state = { token: sessionStorage.getItem(TOKEN_KEY), account: readJson(ACCOUNT_KEY), character: null, game: null, socket: null, heartbeat: null, reconnectTimer: null, reconnectStartedAt: 0, autoTimer: null, messages: [], registerMode: false };
 
+const ITEM_NAMES = { 1: "回复药水", 2: "大回复药", 3: "经验卷轴", 4: "金币袋", 5: "天命卡", 6: "打孔器", 90: "铁矿石", 91: "龙鳞片" };
+const ITEM_ICONS = { 1: "🧪", 2: "🧴", 3: "📜", 4: "💰", 5: "🃏", 6: "🛠", 90: "⛰", 91: "🪶" };
+const SKILLS = [
+  [1, "重击", 0], [2, "猛力一击", 1000], [3, "蓄力斩", 10000], [4, "碎裂打击", 10000], [5, "致命一击", 100000], [6, "终结技", 100000], [7, "快速打击", 1000], [8, "连击", 1000], [9, "旋风斩", 10000], [10, "连射", 10000], [11, "回旋镖", 10000], [12, "无尽打击", 50000], [13, "冰冻射击", 10000], [14, "冰霜新星", 50000], [15, "眩晕锤", 10000], [16, "雷霆一击", 10000], [17, "静默领域", 50000], [18, "深度冻结", 100000], [19, "腐蚀之触", 50000], [20, "时间凝滞", 100000], [21, "护盾", 1000], [22, "治疗波", 0], [23, "铁壁姿态", 10000], [24, "坚毅", 50000], [25, "生命绽放", 50000], [26, "不屈意志", 100000], [27, "毒刃", 1000], [28, "烈焰灼烧", 10000], [29, "撕裂", 10000], [30, "毒雾", 50000], [31, "剧毒爆发", 50000], [32, "瘟疫传播", 100000], [33, "穿刺射击", 1000], [34, "裂地斩", 50000], [35, "穿透箭雨", 10000], [36, "暗影突袭", 100000],
+];
+const GRID_ICONS = ["🏠", "⚔️", "🗡️", "🏆", "🛌", "🎁", "🔨", "🎲", "🏛", "🔮", "⚡", "💀", "🟩", "💰", "🎰"];
 const $ = (id) => document.getElementById(id);
 const show = (id) => { $(id).hidden = false; };
 const hide = (id) => { $(id).hidden = true; };
 function readJson(key) { try { return JSON.parse(sessionStorage.getItem(key) || "null"); } catch { return null; } }
-function requestId(prefix) {
-  const random = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-  return `${prefix}_${Date.now().toString(36)}_${random}`.slice(0, 64);
-}
+function requestId(prefix) { return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`.slice(0, 64); }
 function setError(id, message = "") { $(id).textContent = message; }
 function errorText(error) { return error?.message || "网络暂时不可用，请稍后重试"; }
 
@@ -22,7 +25,11 @@ async function api(path, options = {}) {
   if (!response.ok || payload.ok === false) throw Object.assign(new Error(payload.error?.message || "请求失败"), { code: payload.error?.code, status: response.status });
   return payload;
 }
-
+async function gameCommand(path, command, payload = {}) {
+  const result = await api(path, { method: "POST", body: JSON.stringify({ rules_version: RULES_VERSION, request_id: requestId(command), payload }) });
+  updateGame(result);
+  return result;
+}
 function setAuthMode(register) {
   state.registerMode = register;
   $("auth-title").textContent = register ? "申请账号" : "进入冒险";
@@ -34,7 +41,6 @@ function setAuthMode(register) {
   $("invite-code").required = register;
   setError("auth-error");
 }
-
 function updatePlayer() {
   const character = state.character;
   if (!character) return;
@@ -42,73 +48,61 @@ function updatePlayer() {
   $("map-player-name").textContent = character.name;
   $("player-meta").textContent = `Lv.${character.level} · ${character.experience} EXP · ${character.gold} 金币`;
 }
-
-function showLoggedIn() {
-  hide("auth-view"); hide("character-view"); show("game-view"); updatePlayer(); connectSocket(); refreshOnlineCount();
-}
+function showLoggedIn() { hide("auth-view"); hide("character-view"); show("game-view"); updatePlayer(); connectSocket(); refreshOnlineCount(); loadGameState(); }
 function showCharacterCreation() { hide("auth-view"); hide("game-view"); show("character-view"); $("character-name").focus(); }
 function showLogin() { hide("game-view"); hide("character-view"); show("auth-view"); $("username").focus(); }
-
 async function login() {
-  const payload = { rules_version: RULES_VERSION, username: $("username").value, password: $("password").value };
-  const result = await api("/api/v1/auth/login", { method: "POST", body: JSON.stringify(payload) });
+  const result = await api("/api/v1/auth/login", { method: "POST", body: JSON.stringify({ rules_version: RULES_VERSION, username: $("username").value, password: $("password").value }) });
   state.token = result.session.token; state.account = result.account; state.character = result.character;
-  sessionStorage.setItem(TOKEN_KEY, state.token); sessionStorage.setItem(ACCOUNT_KEY, JSON.stringify(state.account));
-  $("password").value = "";
+  sessionStorage.setItem(TOKEN_KEY, state.token); sessionStorage.setItem(ACCOUNT_KEY, JSON.stringify(state.account)); $("password").value = "";
   if (state.character) showLoggedIn(); else showCharacterCreation();
 }
-
 async function register() {
   const payload = { rules_version: RULES_VERSION, request_id: requestId("register"), username: $("username").value, password: $("password").value, password_confirm: $("password-confirm").value, invite_code: $("invite-code").value };
   await api("/api/v1/auth/register", { method: "POST", body: JSON.stringify(payload) });
   setAuthMode(false); $("username").value = payload.username; $("password").value = ""; setError("auth-error", "账号创建成功，请登录。");
 }
-
-async function createCharacter(event) {
-  event.preventDefault(); setError("character-error");
-  try {
-    const result = await api("/api/v1/characters", { method: "POST", body: JSON.stringify({ rules_version: RULES_VERSION, request_id: requestId("character"), name: $("character-name").value }) });
-    state.character = result.character; showLoggedIn();
-  } catch (error) { setError("character-error", errorText(error)); }
-}
+async function createCharacter(event) { event.preventDefault(); setError("character-error"); try { const result = await api("/api/v1/characters", { method: "POST", body: JSON.stringify({ rules_version: RULES_VERSION, request_id: requestId("character"), name: $("character-name").value }) }); state.character = result.character; showLoggedIn(); } catch (error) { setError("character-error", errorText(error)); } }
 
 function setConnection(online, label = online ? "已连接" : "连接中") { $("connection-dot").classList.toggle("online", online); $("connection-label").textContent = label; }
 function connectSocket() {
   if (!state.token || state.socket?.readyState === WebSocket.OPEN || state.socket?.readyState === WebSocket.CONNECTING) return;
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(`${protocol}//${location.host}/ws`); state.socket = socket; setConnection(false, "连接中");
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:"; const socket = new WebSocket(`${protocol}//${location.host}/ws`); state.socket = socket; setConnection(false, "连接中");
   socket.addEventListener("open", () => { state.reconnectStartedAt = 0; setConnection(true); socket.send(JSON.stringify({ type: "authenticate", token: state.token })); state.heartbeat = window.setInterval(() => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "heartbeat" })); }, 10000); });
   socket.addEventListener("message", (event) => handleSocketMessage(JSON.parse(event.data)));
   socket.addEventListener("close", (event) => { window.clearInterval(state.heartbeat); state.heartbeat = null; state.socket = null; if (event.code === 4001 || event.code === 4003) { clearSession(); return; } setConnection(false, "重连中"); scheduleReconnect(); });
   socket.addEventListener("error", () => setConnection(false, "连接异常"));
 }
 function scheduleReconnect() { if (state.reconnectTimer || !state.token) return; if (!state.reconnectStartedAt) state.reconnectStartedAt = Date.now(); if (Date.now() - state.reconnectStartedAt > 30000) { clearSession(); return; } state.reconnectTimer = window.setTimeout(() => { state.reconnectTimer = null; connectSocket(); }, 2000); }
-function handleSocketMessage(packet) {
-  if (packet.type === "authenticated") { setConnection(true); return; }
-  if (packet.type === "chat_history") { state.messages = Array.isArray(packet.messages) ? packet.messages : []; renderMessages(); return; }
-  if (packet.type === "chat_message" && packet.message) { if (!state.messages.some((item) => item.id === packet.message.id)) state.messages.push(packet.message); state.messages = state.messages.slice(-100); renderMessages(); return; }
-  if (packet.type === "error") { if (packet.code === "SESSION_INVALID" || packet.code === "KICKED" || packet.code === "REPLACED_BY_NEW_LOGIN") clearSession(); else setError("chat-error", packet.message); }
-}
-function renderMessages() {
-  const container = $("chat-messages"); container.replaceChildren();
-  for (const message of state.messages) {
-    const item = document.createElement("article"); item.className = "chat-message";
-    const header = document.createElement("header"); const name = document.createElement("strong"); name.textContent = message.senderName || "系统"; const time = document.createElement("time"); time.textContent = new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); header.append(name, time);
-    const body = document.createElement("p"); body.textContent = message.body; item.append(header, body); container.append(item);
-  }
-  container.scrollTop = container.scrollHeight; $("chat-count").textContent = String(state.messages.length);
-}
+function handleSocketMessage(packet) { if (packet.type === "authenticated") { setConnection(true); return; } if (packet.type === "chat_history") { state.messages = Array.isArray(packet.messages) ? packet.messages : []; renderMessages(); return; } if (packet.type === "chat_message" && packet.message) { if (!state.messages.some((item) => item.id === packet.message.id)) state.messages.push(packet.message); state.messages = state.messages.slice(-100); renderMessages(); return; } if (packet.type === "error") { if (["SESSION_INVALID", "KICKED", "REPLACED_BY_NEW_LOGIN"].includes(packet.code)) clearSession(); else setError("chat-error", packet.message); } }
+function renderMessages() { const container = $("chat-messages"); container.replaceChildren(); for (const message of state.messages) { const item = document.createElement("article"); item.className = "chat-message"; const header = document.createElement("header"); const name = document.createElement("strong"); name.textContent = message.senderName || "系统"; const time = document.createElement("time"); time.textContent = new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); header.append(name, time); const body = document.createElement("p"); body.textContent = message.body; item.append(header, body); container.append(item); } container.scrollTop = container.scrollHeight; $("chat-count").textContent = String(state.messages.length); }
 function sendChat(event) { event.preventDefault(); const input = $("chat-input"); const body = input.value.trim(); if (!body || state.socket?.readyState !== WebSocket.OPEN) return; setError("chat-error"); state.socket.send(JSON.stringify({ type: "chat_send", body, client_message_id: requestId("chat") })); input.value = ""; }
 async function refreshOnlineCount() { try { const result = await fetch("/healthz"); const data = await result.json(); $("online-count").textContent = data.online_players ?? "-"; } catch { $("online-count").textContent = "-"; } }
+
+async function loadGameState() { try { const result = await api("/api/v1/game/state"); updateGame(result); } catch (error) { setError("game-event", errorText(error)); } }
+function updateGame(result) { if (result.character) { state.character = result.character; updatePlayer(); } if (result.state) state.game = result.state; if (result.event) { const event = result.event; const summary = event.message || (event.won === true ? "战斗胜利，获得奖励" : event.won === false ? "战斗失败，消耗了一枚复活币" : "行动完成"); $("game-event").textContent = `${event.gridName ? `${event.icon || ""} ${event.gridName}：` : ""}${summary}`; $("world-status").textContent = summary; } renderGame(); }
+function renderGame() { const game = state.game; if (!game) return; $("hp-value").textContent = `${game.hp} / ${game.maxHp}`; $("dice-value").textContent = game.lastDiceRoll ?? "-"; $("grid-value").textContent = String((game.gridIndex ?? 0) + 1); renderMap(game); renderInventory(game); renderSkills(game); renderAuctionChoices(); }
+function renderMap(game) { const container = $("map-cells"); container.replaceChildren(); const total = game.mapTotalGrids || 28; for (let index = 0; index < total; index += 1) { const cell = document.createElement("div"); cell.className = `map-cell${index === game.gridIndex ? " current" : ""}`; const angle = -Math.PI / 2 + index / total * Math.PI * 2; cell.style.left = `${50 + Math.cos(angle) * 38}%`; cell.style.top = `${50 + Math.sin(angle) * 37}%`; cell.innerHTML = `<span>${GRID_ICONS[game.mapGrids[index]] || "·"}</span><small>${index + 1}</small>`; container.append(cell); } }
+function renderInventory(game) { $("inventory-capacity").textContent = `${game.inventory.length} / ${game.inventoryCapacity}`; $("equipment-capacity").textContent = `${game.equipmentBag.length} / ${game.equipmentCapacity}`; const items = $("inventory-list"); items.replaceChildren(); for (const stack of game.inventory) { const row = document.createElement("div"); row.className = "asset-row"; row.innerHTML = `<span class="asset-icon">${ITEM_ICONS[stack.itemId] || "◈"}</span><span><strong>${ITEM_NAMES[stack.itemId] || `物品${stack.itemId}`}</strong><small>#${stack.itemId} · ×${stack.count}</small></span><button class="small-button" data-use-item="${stack.itemId}">使用</button>`; items.append(row); } const equipment = $("equipment-list"); equipment.replaceChildren(); for (const item of game.equipmentBag) { const equipped = game.equipped[item.slot] === item.id; const enhance = game.slotEnhance[item.slot] || 0; const value = Math.round(item.mainValue * (1 + enhance * .03)); const row = document.createElement("div"); row.className = "asset-row"; row.innerHTML = `<span class="asset-icon">${item.slot === "weapon" ? "⚔️" : item.slot === "armor" ? "🛡️" : "◇"}</span><span><strong>${item.name}${enhance ? ` +${enhance}` : ""}</strong><small>${item.mainStat} +${value}${equipped ? " · 已穿戴" : ""}${item.bound ? " · 绑定" : ""}</small></span><button class="small-button" data-lock="${item.id}" title="${item.locked ? "解锁" : "锁定"}">${item.locked ? "🔒" : "🔓"}</button><button class="small-button" data-equip="${item.id}">${equipped ? "卸下" : "穿戴"}</button><button class="small-button" data-enhance="${item.id}">+强化</button><button class="danger-button" data-dismantle="${item.id}" title="分解">×</button>`; equipment.append(row); } }
+function renderSkills(game) { const level = state.character?.level || 1; const maxSlots = level >= 45 ? 6 : level >= 35 ? 5 : level >= 15 ? 4 : level >= 5 ? 3 : 2; $("skill-slots").textContent = `技能槽 ${game.skillSlots.length} / ${maxSlots}`; const list = $("skill-list"); list.replaceChildren(); for (const [id, name, price] of SKILLS) { const unlocked = game.skills.includes(id); const slotted = game.skillSlots.includes(id); const row = document.createElement("div"); row.className = `skill-row${unlocked ? " unlocked" : " locked"}`; row.innerHTML = `<span class="skill-icon">✦</span><span><strong>${name}</strong><small>${unlocked ? (slotted ? "已装备到技能槽" : `已解锁 · ${price === 0 ? "免费" : "可装配"}`) : `解锁需要 ${price} 金币`}</small></span>${slotted ? `<button class="small-button" data-cast-skill="${id}">释放</button>` : ""}<button class="small-button" data-skill="${id}" data-unlocked="${unlocked}">${unlocked ? (slotted ? "移出" : "装备") : "解锁"}</button>`; list.append(row); } }
+
+async function roll() { $("roll-button").disabled = true; setError("game-event", ""); try { await gameCommand("/api/v1/game/roll", "roll"); } catch (error) { setError("game-event", errorText(error)); } finally { $("roll-button").disabled = false; } }
+function setAutoRoll(enabled) { window.clearInterval(state.autoTimer); state.autoTimer = null; if (enabled) { state.autoTimer = window.setInterval(() => { if (!$("roll-button").disabled && state.token) void roll(); }, 2600); } }
+async function handleInventoryClick(event) { const use = event.target.closest("[data-use-item]"); const lock = event.target.closest("[data-lock]"); const equip = event.target.closest("[data-equip]"); const enhance = event.target.closest("[data-enhance]"); const dismantle = event.target.closest("[data-dismantle]"); try { if (use) await gameCommand("/api/v1/game/item/use", "item_use", { item_id: Number(use.dataset.useItem) }); else if (lock) await gameCommand("/api/v1/game/equipment/lock", "equipment_lock", { equipment_id: lock.dataset.lock }); else if (equip) { const item = state.game.equipmentBag.find((entry) => entry.id === equip.dataset.equip); const equipped = item && state.game.equipped[item.slot] === item.id; await gameCommand(equipped ? "/api/v1/game/equipment/unequip" : "/api/v1/game/equipment/equip", equipped ? "equipment_unequip" : "equipment_equip", equipped ? { slot: item.slot } : { equipment_id: item.id }); } else if (enhance) await gameCommand("/api/v1/game/equipment/enhance", "equipment_enhance", { equipment_id: enhance.dataset.enhance }); else if (dismantle) await gameCommand("/api/v1/game/equipment/dismantle", "equipment_dismantle", { equipment_id: dismantle.dataset.dismantle }); } catch (error) { setError("inventory-error", errorText(error)); } }
+async function handleSkillClick(event) { const cast = event.target.closest("[data-cast-skill]"); const button = event.target.closest("[data-skill]"); try { if (cast) { await gameCommand("/api/v1/game/skill/cast", "skill_cast", { skill_id: Number(cast.dataset.castSkill) }); return; } if (!button) return; const id = Number(button.dataset.skill); const unlocked = button.dataset.unlocked === "true"; if (unlocked) { const slots = state.game.skillSlots.includes(id) ? state.game.skillSlots.filter((skillId) => skillId !== id) : [...state.game.skillSlots, id]; await gameCommand("/api/v1/game/skill/slot", "skill_slot", { skill_id: id, slots }); } else await gameCommand("/api/v1/game/skill/unlock", "skill_unlock", { skill_id: id }); } catch (error) { setError("skill-error", errorText(error)); } }
+async function refreshAuction() { try { const result = await api("/api/v1/auction/listings?limit=50"); renderAuction(result.listings); const mine = await api("/api/v1/auction/mine"); renderMyAuction(mine.listings); } catch (error) { setError("auction-error", errorText(error)); } }
+function renderAuctionChoices() { if (!state.game) return; const kind = $("auction-kind").value; const select = $("auction-item-id"); const selected = select.value; select.replaceChildren(); let choices = []; if (kind === "item") choices = state.game.inventory.map((item) => [String(item.itemId), `${ITEM_NAMES[item.itemId] || `物品${item.itemId}`} ×${item.count}`]); else if (kind === "equipment") choices = state.game.equipmentBag.filter((item) => !item.bound && !item.locked && !Object.values(state.game.equipped).includes(item.id)).map((item) => [item.id, item.name]); else choices = state.game.gemBag.filter((gem) => gem.count > 0).map((gem) => [String(gem.gemId), `宝石 #${gem.gemId} ×${gem.count}`]); if (!choices.length) choices = [["", "没有可上架物品"]]; for (const [value, label] of choices) { const option = document.createElement("option"); option.value = value; option.textContent = label; select.append(option); } if ([...select.options].some((option) => option.value === selected)) select.value = selected; $("auction-count").disabled = kind === "equipment"; if (kind === "equipment") $("auction-count").value = "1"; }
+function renderAuction(listings = []) { const list = $("auction-list"); list.replaceChildren(); if (!listings.length) { list.innerHTML = `<p class="muted-copy">当前没有可购买订单。</p>`; return; } for (const listing of listings) { const row = document.createElement("div"); row.className = "auction-row"; const itemLabel = listing.itemKind === "equipment" ? (listing.item.name || "装备") : listing.itemKind === "gem" ? `宝石 #${listing.item.gemId}` : `${ITEM_NAMES[listing.item.itemId] || `物品${listing.item.itemId}`}`; row.innerHTML = `<div><strong>${itemLabel} ×${listing.itemCount}</strong><small>卖家 ${listing.sellerName} · ${new Date(listing.expiresAt).toLocaleString()}</small></div><b>${listing.buyoutPrice} 金币</b><button class="small-button" data-buy-auction="${listing.id}">购买</button>`; list.append(row); } }
+function renderMyAuction(listings = []) { const list = $("auction-mine-list"); list.replaceChildren(); if (!listings.length) { list.innerHTML = `<p class="muted-copy">你还没有订单。</p>`; return; } for (const listing of listings) { const row = document.createElement("div"); row.className = "auction-row"; const label = listing.itemKind === "equipment" ? (listing.item.name || "装备") : listing.itemKind === "gem" ? `宝石 #${listing.item.gemId}` : `${ITEM_NAMES[listing.item.itemId] || `物品${listing.item.itemId}`}`; const canCancel = listing.status === "active"; const canClaim = ["sold", "cancelled", "expired"].includes(listing.status); row.innerHTML = `<div><strong>${label} ×${listing.itemCount}</strong><small>${listing.status} · ${listing.buyoutPrice} 金币</small></div>${canCancel ? `<button class="small-button" data-cancel-auction="${listing.id}">取消</button>` : ""}${canClaim ? `<button class="small-button" data-claim-auction="${listing.id}">领取</button>` : ""}`; list.append(row); } }
+async function submitAuction(event) { event.preventDefault(); setError("auction-error"); try { if (!$("auction-item-id").value) throw new Error("没有可上架物品"); await api("/api/v1/auction/list", { method: "POST", body: JSON.stringify({ rules_version: RULES_VERSION, request_id: requestId("auction"), item_kind: $("auction-kind").value, item_id: $("auction-item-id").value, item_count: Number($("auction-count").value), buyout_price: Number($("auction-price").value), duration_hours: Number($("auction-duration").value) }) }); $("auction-price").value = ""; await loadGameState(); await refreshAuction(); } catch (error) { setError("auction-error", errorText(error)); } }
+async function buyAuction(event) { const button = event.target.closest("[data-buy-auction]"); if (!button) return; try { await api("/api/v1/auction/buy", { method: "POST", body: JSON.stringify({ rules_version: RULES_VERSION, request_id: requestId("buy"), listing_id: button.dataset.buyAuction }) }); await loadGameState(); await refreshAuction(); } catch (error) { setError("auction-error", errorText(error)); } }
+async function manageAuction(event) { const cancel = event.target.closest("[data-cancel-auction]"); const claim = event.target.closest("[data-claim-auction]"); if (!cancel && !claim) return; try { const path = cancel ? "/api/v1/auction/cancel" : "/api/v1/auction/claim"; await api(path, { method: "POST", body: JSON.stringify({ listing_id: (cancel || claim).dataset[cancel ? "cancelAuction" : "claimAuction"] }) }); await loadGameState(); await refreshAuction(); } catch (error) { setError("auction-error", errorText(error)); } }
 async function logout() { try { if (state.token) await api("/api/v1/auth/logout", { method: "POST" }); } catch { /* local logout still clears the session */ } clearSession(); }
-function clearSession() { if (state.socket) state.socket.close(); window.clearTimeout(state.reconnectTimer); window.clearInterval(state.heartbeat); state.token = null; state.account = null; state.character = null; sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(ACCOUNT_KEY); showLogin(); }
+function clearSession() { if (state.socket) state.socket.close(); window.clearTimeout(state.reconnectTimer); window.clearInterval(state.heartbeat); window.clearInterval(state.autoTimer); state.autoTimer = null; state.token = null; state.account = null; state.character = null; state.game = null; sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(ACCOUNT_KEY); showLogin(); }
 
 $("auth-switch").addEventListener("click", () => setAuthMode(!state.registerMode));
 $("auth-form").addEventListener("submit", async (event) => { event.preventDefault(); setError("auth-error"); const button = $("auth-submit"); button.disabled = true; try { if (state.registerMode) await register(); else await login(); } catch (error) { setError("auth-error", errorText(error)); } finally { button.disabled = false; } });
-$("character-form").addEventListener("submit", createCharacter);
-$("chat-form").addEventListener("submit", sendChat);
-$("logout-button").addEventListener("click", logout);
-document.querySelectorAll(".nav-item").forEach((button) => button.addEventListener("click", () => { document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item === button)); document.querySelectorAll(".tab-panel").forEach((panel) => { panel.hidden = panel.id !== `${button.dataset.tab}-panel`; }); }));
-
+$("character-form").addEventListener("submit", createCharacter); $("chat-form").addEventListener("submit", sendChat); $("logout-button").addEventListener("click", logout); $("roll-button").addEventListener("click", roll); $("auto-roll").addEventListener("change", (event) => setAutoRoll(event.target.checked)); $("inventory-list").addEventListener("click", handleInventoryClick); $("equipment-list").addEventListener("click", handleInventoryClick); $("skill-list").addEventListener("click", handleSkillClick); $("auction-form").addEventListener("submit", submitAuction); $("auction-kind").addEventListener("change", renderAuctionChoices); $("auction-refresh").addEventListener("click", refreshAuction); $("auction-list").addEventListener("click", buyAuction); $("auction-mine-list").addEventListener("click", manageAuction); $("inventory-expand").addEventListener("click", async () => { try { await gameCommand("/api/v1/game/inventory/expand", "inventory_expand"); } catch (error) { setError("inventory-error", errorText(error)); } }); $("equipment-expand").addEventListener("click", async () => { try { await gameCommand("/api/v1/game/equipment/expand", "equipment_expand"); } catch (error) { setError("inventory-error", errorText(error)); } });
+document.querySelectorAll(".nav-item").forEach((button) => button.addEventListener("click", () => { document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item === button)); document.querySelectorAll(".tab-panel").forEach((panel) => { panel.hidden = panel.id !== `${button.dataset.tab}-panel`; }); if (button.dataset.tab === "auction") refreshAuction(); }));
 async function restoreSession() { if (!state.token) return; try { const result = await api("/api/v1/characters/me"); state.character = result.character; if (state.character) showLoggedIn(); else showCharacterCreation(); } catch { clearSession(); } }
 setAuthMode(false); restoreSession();

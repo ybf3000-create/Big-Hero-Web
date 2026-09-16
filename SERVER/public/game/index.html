@@ -68,12 +68,26 @@
                 <div class="landmark camp"><span>⌂</span><small>旅人营地</small></div>
                 <div class="hero-token"><img src="./hero.png" alt="角色头像"><span id="map-player-name">勇者</span></div>
                 <div class="map-route route-one"></div><div class="map-route route-two"></div>
+                <div id="map-cells" class="map-cells"></div>
               </div>
-              <div class="map-footer"><div><span class="eyebrow">WORLD STATUS</span><strong>冒险准备就绪</strong></div><span>在线玩家 <b id="online-count">-</b> / 20</span></div>
+              <div class="map-controls"><button id="roll-button" class="primary-button" type="button">掷骰冒险</button><label class="auto-toggle"><input id="auto-roll" type="checkbox"><span>自动冒险</span></label><div class="map-stats"><span>生命 <b id="hp-value">-</b></span><span>骰子 <b id="dice-value">-</b></span><span>在线 <b id="online-count">-</b> / 20</span></div></div>
+              <p id="game-event" class="game-event" role="status">冒险准备就绪。</p>
+              <div class="map-footer"><div><span class="eyebrow">WORLD STATUS</span><strong id="world-status">冒险准备就绪</strong></div><span>地图进度 <b id="grid-value">1</b> / 28</span></div>
             </div>
-            <div id="inventory-panel" class="tab-panel empty-panel" hidden><span class="empty-icon">▦</span><h2>背包</h2><p>该模块正在迁移。</p></div>
-            <div id="skills-panel" class="tab-panel empty-panel" hidden><span class="empty-icon">✦</span><h2>技能</h2><p>该模块正在迁移。</p></div>
-            <div id="auction-panel" class="tab-panel empty-panel" hidden><span class="empty-icon">◇</span><h2>拍卖行</h2><p>交易模块正在迁移，当前不会创建或扣除任何物品与金币。</p></div>
+            <div id="inventory-panel" class="tab-panel" hidden>
+              <div class="panel-heading"><div><span class="eyebrow">INVENTORY</span><h2>背包与装备</h2></div><div class="heading-actions"><button id="inventory-expand" class="small-button" type="button">背包扩容</button><button id="equipment-expand" class="small-button" type="button">装备扩容</button></div></div>
+              <div class="asset-columns"><section><h3>道具 <span id="inventory-capacity"></span></h3><div id="inventory-list" class="asset-list"></div></section><section><h3>装备 <span id="equipment-capacity"></span></h3><div id="equipment-list" class="asset-list"></div></section></div>
+              <p id="inventory-error" class="form-error" role="alert"></p>
+            </div>
+            <div id="skills-panel" class="tab-panel" hidden>
+              <div class="panel-heading"><div><span class="eyebrow">SKILL BOOK</span><h2>技能</h2></div><span id="skill-slots" class="location-badge"></span></div>
+              <div id="skill-list" class="skill-list"></div><p id="skill-error" class="form-error" role="alert"></p>
+            </div>
+            <div id="auction-panel" class="tab-panel" hidden>
+              <div class="panel-heading"><div><span class="eyebrow">MARKET</span><h2>拍卖行</h2></div><button id="auction-refresh" class="small-button" type="button">刷新</button></div>
+              <form id="auction-form" class="auction-form"><select id="auction-kind"><option value="item">道具</option><option value="equipment">装备</option><option value="gem">宝石</option></select><select id="auction-item-id" required></select><input id="auction-count" type="number" min="1" value="1" placeholder="数量"><input id="auction-price" type="number" min="1" required placeholder="一口价"><select id="auction-duration"><option value="8">8小时</option><option value="12">12小时</option><option value="24" selected>24小时</option></select><button class="primary-button" type="submit">上架</button></form>
+              <div id="auction-list" class="auction-list"></div><h3 class="auction-subheading">我的订单</h3><div id="auction-mine-list" class="auction-list"></div><p id="auction-error" class="form-error" role="alert"></p>
+            </div>
           </section>
           <aside class="chat-panel">
             <div class="chat-heading"><div><span class="eyebrow">COMMUNITY</span><h2>世界聊天</h2></div><span id="chat-count" class="chat-count">0</span></div>
