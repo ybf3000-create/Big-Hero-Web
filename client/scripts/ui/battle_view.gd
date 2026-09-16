@@ -596,6 +596,7 @@ func _add_status(target: Control, status_name: String, duration: float, kind: St
 	if existing:
 		existing.set_meta("duration", duration)
 		existing.text = _status_icon(status_name) + (" %ds" % int(ceil(duration)) if duration > 0 else "")
+		existing.tooltip_text = _status_hover_text(status_name, duration)
 		return
 	if row.get_child_count() >= 5:
 		row.get_child(0).queue_free()
@@ -610,6 +611,7 @@ func _add_status(target: Control, status_name: String, duration: float, kind: St
 	button.set_meta("status_name", status_name)
 	button.set_meta("duration", duration)
 	button.set_meta("kind", kind)
+	button.tooltip_text = _status_hover_text(status_name, duration)
 	button.pressed.connect(_show_status_tip.bind(button))
 	row.add_child(button)
 
@@ -636,6 +638,10 @@ func _show_status_tip(button: Button) -> void:
 func _hide_status_tip() -> void:
 	_status_tip.visible = false
 	_status_tip_overlay.visible = false
+
+
+func _status_hover_text(status_name: String, duration: float) -> String:
+	return status_name + "\n" + _status_description(status_name) + ("\n剩余时间：%.1f 秒" % duration if duration > 0 else "")
 
 
 func _status_description(status_name: String) -> String:

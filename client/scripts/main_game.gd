@@ -126,6 +126,8 @@ var _scroll_offset: float = 0.0     # 地块左滑偏移
 const STEP_PAUSE: float = 0.21      # 每步停顿（原 0.3，缩短30%）
 const STEP_SLIDE: float = 0.175     # 滑动时长（原 0.25，缩短30%）
 const STEP_TOTAL: float = STEP_PAUSE + STEP_SLIDE  # 单步总时长
+const DETAIL_CLICK_DELAY: float = 0.45  # 等待浏览器判定双击后再打开单击详情
+var _detail_click_generation: int = 0
 
 # 平行四边形地块尺寸（顶边宽 × 高，斜边由 GridTile.SHEAR 控制）
 const TILE_W: float = 160.0       # 上下边水平宽度
@@ -1924,6 +1926,19 @@ func _close_all_tooltips() -> void:
 	if d2:
 		d2.queue_free()
 
+
+func _queue_detail_click(action: Callable) -> void:
+	_detail_click_generation += 1
+	var generation := _detail_click_generation
+	await get_tree().create_timer(DETAIL_CLICK_DELAY).timeout
+	if generation == _detail_click_generation:
+		action.call()
+
+
+func _cancel_pending_detail_click() -> void:
+	_detail_click_generation += 1
+
+
 func _on_test_generate_equip() -> void:
 	var slots: Array[String] = ["weapon","armor","shoes","ring","necklace","cape","helmet","charm"]
 	var slot: String = slots[randi() % slots.size()]
@@ -1955,7 +1970,7 @@ func _add_gem(gid: int, lv: int, cnt: int) -> void:
 	gem_bag.append({ "id": gid, "level": lv, "count": cnt })
 
 
-## 宝石合成：右键同等级宝石
+## 宝石合成：使用宝石卡片上的“3合1”按钮
 func _synthesize_gem(gid: int, lv: int) -> void:
 	if lv >= 10:
 		_show_float_text("宝石已达到最高等级", Color(0.65, 0.45, 0.35))
@@ -2375,22 +2390,28 @@ func _build_inventory_panel() -> void:
 					gt.position = Vector2(rx + 2, info_y + 12)
 					equip_panel.add_child(gt)
 
-				# 点击已装备 → tips
+				# 悬停查看摘要；单击打开详情；双击快速卸下。
 				var slot_btn: Button = Button.new()
 				slot_btn.flat = true
 				slot_btn.position = Vector2(rx, ry + 16)
 				slot_btn.size = Vector2(50, 50)
 				UIUtils.btn_transparent2(slot_btn)
 				var esn: String = es["name"]
+				slot_btn.tooltip_text = _equipment_hover_text(eqp, esn)
 				slot_btn.gui_input.connect(func(ev: InputEvent):
-					if ev is InputEventMouseButton and ev.pressed:
-						if ev.button_index == MOUSE_BUTTON_RIGHT:
-							slot_btn.accept_event()
+					if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+						slot_btn.accept_event()
+						if ev.double_click:
+							_cancel_pending_detail_click()
 							_on_unequip_instance(esn)
 							_show_inventory_panel()
 						else:
-							_close_all_tooltips()
-							_show_equip_tooltip(eqp, -1, esn, panel)
+							_queue_detail_click(func():
+								if not is_instance_valid(panel):
+									return
+								_close_all_tooltips()
+								_show_equip_tooltip(eqp, -1, esn, panel)
+							)
 					)
 				equip_panel.add_child(slot_btn)
 			else:
@@ -3109,27 +3130,33 @@ func _build_equip_tab(area: Panel, main_panel: Panel) -> void:
 			ename.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			area.add_child(ename)
 
-			# 点击 → tooltip, 右键快速装备
+			# 悬停查看摘要；单击打开详情；双击快速装备。
 			var btn: Button = Button.new()
 			btn.flat = true
 			btn.position = Vector2(x, y)
 			btn.size = Vector2(icon_s, icon_s + 16)
 			UIUtils.btn_transparent2(btn)
 			var eidx: int = ei
+			btn.tooltip_text = _equipment_hover_text(eqp)
 			btn.gui_input.connect(func(ev: InputEvent):
-				if ev is InputEventMouseButton and ev.pressed:
-					if ev.button_index == MOUSE_BUTTON_RIGHT:
-						btn.accept_event()
+				if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+					btn.accept_event()
+					if ev.double_click:
+						_cancel_pending_detail_click()
 						_on_equip_instance(eidx)
 						_show_inventory_panel()
 					else:
-						_close_all_tooltips()
-						var s: String = eqp.get("slot", "")
-						var weq: Dictionary = equipment.get_slot_item(s)
-						if not weq.is_empty():
-							_show_compare_tooltips(eqp, weq, s, main_panel)
-						else:
-							_show_equip_tooltip(eqp, eidx, "", main_panel)
+						_queue_detail_click(func():
+							if not is_instance_valid(main_panel):
+								return
+							_close_all_tooltips()
+							var s: String = eqp.get("slot", "")
+							var weq: Dictionary = equipment.get_slot_item(s)
+							if not weq.is_empty():
+								_show_compare_tooltips(eqp, weq, s, main_panel)
+							else:
+								_show_equip_tooltip(eqp, eidx, "", main_panel)
+						)
 			)
 			area.add_child(btn)
 		else:
@@ -3383,6 +3410,32 @@ func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_pane
 
 	# 把 tip 放到 root 层，确保在遮罩层之上
 	add_child(tip)
+
+
+func _equipment_hover_text(eqp: Dictionary, slot_name: String = "") -> String:
+	var lines: Array[String] = []
+	var quality_name := str(eqp.get("quality_name", ""))
+	var display_name := str(eqp.get("base_name", "???"))
+	lines.append(("[" + quality_name + "] " if not quality_name.is_empty() else "") + display_name)
+	var effective_slot := slot_name if not slot_name.is_empty() else str(eqp.get("slot", ""))
+	var enhance := int(equipment.get_slot_enhance(effective_slot))
+	var main_stat := str(eqp.get("main_stat", ""))
+	if not main_stat.is_empty():
+		var main_value := EquipmentRulesCls.enhanced_main_value(eqp, enhance)
+		lines.append("%s：%s%s" % [main_stat, str(snapped(main_value, 0.1)), "  槽位+%d" % enhance if enhance > 0 else ""])
+	var suit_name := str(eqp.get("suit_name", ""))
+	if not suit_name.is_empty():
+		lines.append("套装：" + suit_name)
+	for affix in eqp.get("affixes", []).slice(0, 4):
+		lines.append(str(affix.get("name", "")) + " " + str(affix.get("display", "")))
+	var gem_slots := int(eqp.get("gem_slots", 0))
+	if gem_slots > 0:
+		var filled := 0
+		for gem in eqp.get("gems", []):
+			if _gem_entry_id(gem) > 0:
+				filled += 1
+		lines.append("宝石：%d/%d" % [filled, gem_slots])
+	return "\n".join(lines)
 
 
 func _ensure_overlay() -> void:
@@ -4203,7 +4256,7 @@ func _build_skill_tab(panel: Panel) -> void:
 	help_btn.add_theme_font_size_override("font_size", 11)
 	UIUtils.btn_style_mini(help_btn, Color(0.15, 0.22, 0.38))
 	help_btn.pressed.connect(func():
-		_show_stat_tooltip("优先级规则", "点击数字 ①/②/③ 切换优先级\n右键已装备技能可卸下\n\n技能按自身行动次数冷却\n同时就绪时：③>②>①\n同级按槽位从左到右释放\n全部冷却中→普攻\n\n槽位解锁(角色等级):\nLv.1=2槽  Lv.5=3槽  Lv.15=4槽\nLv.35=5槽  Lv.45=6槽")
+		_show_stat_tooltip("优先级规则", "点击数字 ①/②/③ 切换优先级\n双击已装备技能可卸下\n\n技能按自身行动次数冷却\n同时就绪时：③>②>①\n同级按槽位从左到右释放\n全部冷却中→普攻\n\n槽位解锁(角色等级):\nLv.1=2槽  Lv.5=3槽  Lv.15=4槽\nLv.35=5槽  Lv.45=6槽")
 	)
 	panel.add_child(help_btn)
 
@@ -4308,13 +4361,19 @@ func _build_skill_tab(panel: Panel) -> void:
 			detail_btn.size = Vector2(slot_w - 50, slot_h)
 			UIUtils.btn_transparent2(detail_btn)
 			var sid_cap: int = sid
+			detail_btn.tooltip_text = _skill_hover_text(sdata)
 			detail_btn.gui_input.connect(func(ev: InputEvent):
-				if ev is InputEventMouseButton and ev.pressed:
-					if ev.button_index == MOUSE_BUTTON_RIGHT:
+				if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+					detail_btn.accept_event()
+					if ev.double_click:
+						_cancel_pending_detail_click()
 						skill_system.unequip_skill(si)
 						_refresh_stats_panel()
-					elif ev.button_index == MOUSE_BUTTON_LEFT:
-						_show_skill_tooltip(sid_cap, true, si, panel)
+					else:
+						_queue_detail_click(func():
+							if is_instance_valid(panel):
+								_show_skill_tooltip(sid_cap, true, si, panel)
+						)
 			)
 			panel.add_child(detail_btn)
 		else:
@@ -4491,6 +4550,7 @@ func _build_skill_tab(panel: Panel) -> void:
 		UIUtils.btn_transparent2(click_btn)
 		var sid_val: int = sdata["id"]
 		var eq_slot: int = equipped_slot
+		click_btn.tooltip_text = _skill_hover_text(sdata)
 		click_btn.pressed.connect(func():
 			_close_all_tooltips()
 			_show_skill_tooltip(sid_val, equipped, eq_slot, panel)
@@ -4672,6 +4732,17 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 	# 遮罩
 	_ensure_overlay()
 	add_child(tip)
+
+
+func _skill_hover_text(skill: Dictionary) -> String:
+	var lines: Array[String] = [
+		str(skill.get("icon", "?")) + " " + str(skill.get("name", "???")),
+		SkillDataRef.school_name(int(skill.get("school", 0))) + "  |  间隔 " + SkillDataRef.action_cd_text(skill),
+	]
+	var description := str(skill.get("desc", ""))
+	if not description.is_empty():
+		lines.append(description)
+	return "\n".join(lines)
 
 
 ## 技能流派颜色
