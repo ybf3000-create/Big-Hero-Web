@@ -14,7 +14,9 @@
     "backup": "tsx src/backup.ts",
     "invite:create": "tsx src/create-invites.ts",
     "test": "node --import tsx --test tests/**/*.test.ts",
-    "check": "npm run build && npm test"
+    "web:patch": "node ../client/tools/patch-web-export.mjs",
+    "web:check": "node ../client/tools/patch-web-export.mjs --check",
+    "check": "npm run web:check && npm run build && npm test"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",

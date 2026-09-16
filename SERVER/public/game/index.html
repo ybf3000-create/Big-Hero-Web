@@ -1,135 +1,219 @@
-<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#b93647">
-    <title>大勇者</title>
-    <link rel="stylesheet" href="./styles.css">
-  </head>
-  <body>
-    <main class="shell">
-      <section id="auth-view" class="auth-view">
-        <div class="auth-scene" aria-hidden="true">
-          <div class="auth-sun"></div><div class="auth-cloud cloud-a"></div><div class="auth-cloud cloud-b"></div>
-          <div class="auth-mountain mountain-far"></div><div class="auth-mountain mountain-near"></div>
-          <div class="auth-torii"><i></i><i></i><i></i><i></i></div>
-          <div class="auth-title"><span>朱樱神社</span><strong>大勇者</strong><small>在骰子指引下踏上冒险</small></div>
-        </div>
-        <form id="auth-form" class="paper-window auth-card">
-          <div class="window-crest">勇</div>
-          <p class="kicker">BIG HERO ONLINE</p>
-          <h1 id="auth-title">勇者归来</h1>
-          <p id="auth-subtitle" class="subcopy">登录账号，继续朱樱山道的旅程。</p>
-          <label>账号<input id="username" name="username" autocomplete="username" required minlength="4" maxlength="20" pattern="[A-Za-z][A-Za-z0-9_]{3,19}"></label>
-          <label>密码<input id="password" name="password" type="password" autocomplete="current-password" required minlength="10" maxlength="64"></label>
-          <div id="register-fields" hidden>
-            <label>确认密码<input id="password-confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="10" maxlength="64"></label>
-            <label>邀请码<input id="invite-code" name="invite_code" autocomplete="off" maxlength="64"></label>
-          </div>
-          <button id="auth-submit" class="shrine-button" type="submit">进入游戏</button>
-          <button id="auth-switch" class="link-button" type="button">使用邀请码注册账号</button>
-          <p id="auth-error" class="form-error" role="alert"></p>
-        </form>
-      </section>
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">
+		<title>BIG_HREO</title>
+		<style>
+html, body, #canvas {
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
 
-      <section id="character-view" class="character-view" hidden>
-        <form id="character-form" class="paper-window character-card">
-          <div class="window-crest">名</div><p class="kicker">NEW ADVENTURE</p><h1>创建勇者</h1>
-          <p class="subcopy">为这段旅程留下名字。</p>
-          <label>角色名<input id="character-name" maxlength="14" autocomplete="off" required placeholder="最多7个汉字或14个字母数字"></label>
-          <button class="shrine-button" type="submit">启程</button><p id="character-error" class="form-error" role="alert"></p>
-        </form>
-      </section>
+body {
+	color: white;
+	background-color: black;
+	overflow: hidden;
+	touch-action: none;
+}
 
-      <section id="game-view" class="game-view" hidden>
-        <div class="game-frame">
-          <header class="hero-topbar">
-            <section class="hero-summary">
-              <div class="portrait"><img src="./assets/map-hero.png" alt="主角"><b id="hero-level">Lv.1</b></div>
-              <div class="hero-copy">
-                <div class="hero-name-row"><strong id="player-name">勇者</strong><span>初行的冒险者</span></div>
-                <div class="meter-row"><span>生命</span><div class="meter hp-meter"><i id="hp-bar"></i></div><b id="hp-value">500 / 500</b></div>
-                <div class="meter-row"><span>经验</span><div class="meter exp-meter"><i id="exp-bar"></i></div><b id="exp-value">0 / 100</b></div>
-              </div>
-            </section>
-            <section class="resource-strip">
-              <div class="resource"><span>●</span><small>金币</small><strong id="gold-value">0</strong></div>
-              <div class="resource life"><span>♥</span><small>复活次数</small><strong id="revive-value">3 / 3</strong></div>
-              <div class="resource buff"><span>✦</span><small>当前神祇</small><strong>财神 · <b id="lap-value">0</b>圈</strong></div>
-            </section>
-            <section class="dice-zone">
-              <div id="dice-card" class="dice-card"><strong id="dice-value">⚄</strong><span id="dice-suit">♥</span></div>
-              <div class="poker-area"><div class="poker-head"><span>牌型记录 · 最近3次</span><b id="poker-result"></b></div><div id="dice-history" class="cards"></div></div>
-            </section>
-            <div class="top-actions"><span id="connection-dot" class="status-dot"></span><span id="connection-label">连接中</span><span>在线 <b id="online-count">-</b>/20</span><button id="logout-button" class="icon-button" type="button" title="退出登录" aria-label="退出登录">↪</button></div>
-          </header>
+#canvas {
+	display: block;
+}
 
-          <section id="map-panel" class="map-stage">
-            <div class="sky"><div class="sun"></div><div class="cloud c1"></div><div class="cloud c2"></div><div class="far-hills"></div><div class="near-hills"></div><div class="ground"></div><div class="torii"><i></i><i></i><i></i><i></i></div></div>
-            <div class="map-status">第 <b id="round-value">1</b> 圈 · 格子 <b id="grid-value">1</b> / 28 · <span>Boss <b id="boss-value">0</b> / 20</span></div>
-            <label class="auto-toggle"><span>自动挂机</span><input id="auto-roll" type="checkbox"><i></i><b>2.6s</b></label>
-            <div id="game-event" class="event-banner" role="status">冒险准备就绪</div>
-            <div id="hero-token" class="map-hero"><img src="./assets/map-hero.png" alt="移动中的主角"><b id="map-player-name">勇者</b></div>
-            <div id="nearby-cells" class="route-cells"></div>
-          </section>
+#canvas:focus {
+	outline: none;
+}
 
-          <footer class="command-bar">
-            <button class="command" data-open="inventory-panel" type="button"><span>▣</span><b>背包</b></button>
-            <button class="command" data-open="skills-panel" type="button"><span>✦</span><b>技能</b></button>
-            <button id="roll-button" class="command roll-command" type="button"><span>⚄</span><b>掷骰前进</b></button>
-            <button class="command" data-open="chat-panel" type="button"><span>▤</span><b>聊天</b><i id="chat-count">0</i></button>
-            <button class="command" data-open="auction-panel" type="button"><span>◇</span><b>拍卖行</b></button>
-            <button class="command compact-command" data-open="stats-panel" type="button"><span>人</span><b>角色</b></button>
-          </footer>
-        </div>
+#status, #status-splash, #status-progress {
+	position: absolute;
+	left: 0;
+	right: 0;
+}
 
-        <section id="inventory-panel" class="overlay" hidden>
-          <div class="paper-window inventory-window">
-            <header class="window-title"><div><span class="seal">装</span><div><h2>背包与装备</h2><p>装备槽强化会永久保留</p></div></div><button class="close-button" data-close type="button" aria-label="关闭">×</button></header>
-            <div class="inventory-layout">
-              <section class="paper-doll">
-                <div class="doll-slots left"><button data-slot="helmet"><small>头盔</small></button><button data-slot="armor"><small>防具</small></button><button data-slot="shoes"><small>鞋子</small></button><button data-slot="ring"><small>戒指</small></button></div>
-                <img src="./assets/battle-hero.png" alt="勇者装备预览">
-                <div class="doll-slots right"><button data-slot="weapon"><small>武器</small></button><button data-slot="cape"><small>披风</small></button><button data-slot="necklace"><small>项链</small></button><button data-slot="charm"><small>护符</small></button></div>
-                <div id="set-summary" class="set-summary">尚未激活套装效果</div>
-              </section>
-              <section class="bag-area">
-                <div class="bag-toolbar"><div class="segmented"><button class="active" data-bag-tab="equipment" type="button">装备</button><button data-bag-tab="items" type="button">道具</button><button data-bag-tab="gems" type="button">宝石</button></div><span id="equipment-capacity"></span><button id="equipment-expand" class="small-button" type="button">扩容</button><button id="inventory-expand" class="small-button" type="button">道具扩容</button></div>
-                <div id="equipment-list" class="equipment-grid"></div><div id="inventory-list" class="item-grid" hidden></div><div id="gem-list" class="item-grid" hidden></div>
-                <div id="equipment-detail" class="equipment-detail"><p>选择装备查看属性</p></div><span id="inventory-capacity" hidden></span><p id="inventory-error" class="form-error" role="alert"></p>
-              </section>
-            </div>
-          </div>
-        </section>
+#status, #status-splash {
+	top: 0;
+	bottom: 0;
+}
 
-        <section id="skills-panel" class="overlay" hidden>
-          <div class="paper-window skills-window"><header class="window-title"><div><span class="seal">技</span><div><h2>技能配置</h2><p>优先级从左至右，战斗自动释放</p></div></div><span id="skill-slots" class="badge"></span><button class="close-button" data-close type="button" aria-label="关闭">×</button></header><div id="equipped-skills" class="equipped-skills"></div><h3>技能池</h3><div id="skill-list" class="skill-grid"></div><p id="skill-error" class="form-error" role="alert"></p></div>
-        </section>
+#status {
+	background-color: #242424;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	align-items: center;
+	visibility: hidden;
+}
 
-        <section id="auction-panel" class="overlay" hidden>
-          <div class="paper-window auction-window"><header class="window-title"><div><span class="seal">市</span><div><h2>拍卖行</h2><p>一口价交易 · 成交收取5%手续费</p></div></div><button id="auction-refresh" class="small-button" type="button">刷新</button><button class="close-button" data-close type="button" aria-label="关闭">×</button></header><form id="auction-form" class="auction-form"><select id="auction-kind"><option value="item">道具</option><option value="equipment">装备</option><option value="gem">宝石</option></select><select id="auction-item-id" required></select><input id="auction-count" type="number" min="1" value="1" aria-label="数量"><input id="auction-price" type="number" min="1" required placeholder="一口价"><select id="auction-duration"><option value="8">8小时</option><option value="12">12小时</option><option value="24" selected>24小时</option></select><button class="shrine-button" type="submit">上架</button></form><div class="market-columns"><section><h3>市场订单</h3><div id="auction-list" class="auction-list"></div></section><section><h3>我的订单</h3><div id="auction-mine-list" class="auction-list"></div></section></div><p id="auction-error" class="form-error" role="alert"></p></div>
-        </section>
+#status-splash {
+	max-height: 100%;
+	max-width: 100%;
+	margin: auto;
+}
 
-        <section id="chat-panel" class="overlay" hidden>
-          <div class="paper-window chat-window"><header class="window-title"><div><span class="seal">言</span><div><h2>世界聊天</h2><p>所有在线勇者共享频道</p></div></div><button class="close-button" data-close type="button" aria-label="关闭">×</button></header><div id="chat-messages" class="chat-messages" aria-live="polite"></div><form id="chat-form" class="chat-form"><input id="chat-input" maxlength="120" autocomplete="off" placeholder="输入聊天内容"><button class="shrine-button" type="submit">发送</button></form><p id="chat-error" class="form-error" role="alert"></p></div>
-        </section>
+#status-splash.show-image--false {
+	display: none;
+}
 
-        <section id="stats-panel" class="overlay" hidden>
-          <div class="paper-window stats-window"><header class="window-title"><div><span class="seal">人</span><div><h2>角色属性</h2><p id="player-meta">Lv.1 · 0 EXP · 0 金币</p></div></div><button class="close-button" data-close type="button" aria-label="关闭">×</button></header><div id="stats-list" class="stats-list"></div></div>
-        </section>
+#status-splash.fullsize--true {
+	height: 100%;
+	width: 100%;
+	object-fit: contain;
+}
 
-        <section id="battle-panel" class="battle-overlay" hidden>
-          <div class="battle-stage">
-            <header class="battle-header"><span class="battle-crest">戦</span><div><h2 id="battle-title">遭遇战</h2><p id="battle-subtitle">朱樱山道</p></div><span id="battle-weather" class="weather-badge">天气 · 晴朗</span><div class="battle-controls"><button id="battle-speed" type="button">×1</button><button id="battle-skip" type="button" title="跳过战斗">≫</button></div></header>
-            <div class="battle-scenery"><div class="battle-hills far"></div><div class="battle-hills near"></div><div class="battle-ground"></div><div class="battle-torii"></div><div class="battle-axis"></div></div>
-            <div id="battle-player" class="battle-unit player-unit"><img src="./assets/battle-hero.png" alt="勇者"><strong id="battle-player-name">勇者</strong><div class="unit-hp"><i></i><span></span></div><div class="status-icons"></div></div>
-            <div id="battle-enemies" class="battle-enemies"></div><div id="battle-callout" class="battle-callout"></div><div id="combat-log" class="combat-log"></div>
-            <div id="battle-result" class="battle-result paper-window" hidden><h2 id="result-title">战斗胜利</h2><div id="result-body"></div><button id="battle-confirm" class="shrine-button" type="button">领取并返回地图</button></div>
-          </div>
-        </section>
-      </section>
-    </main>
-    <script type="module" src="./app.js"></script>
-  </body>
+#status-splash.use-filter--false {
+	image-rendering: pixelated;
+}
+
+#status-progress, #status-notice {
+	display: none;
+}
+
+#status-progress {
+	bottom: 10%;
+	width: 50%;
+	margin: 0 auto;
+}
+
+#status-notice {
+	background-color: #5b3943;
+	border-radius: 0.5rem;
+	border: 1px solid #9b3943;
+	color: #e0e0e0;
+	font-family: 'Noto Sans', 'Droid Sans', Arial, sans-serif;
+	line-height: 1.3;
+	margin: 0 2rem;
+	overflow: hidden;
+	padding: 1rem;
+	text-align: center;
+	z-index: 1;
+}
+		</style>
+		<link id="-gd-engine-icon" rel="icon" type="image/png" href="index.icon.png" />
+<link rel="apple-touch-icon" href="index.apple-touch-icon.png"/>
+
+	</head>
+	<body>
+		<canvas id="canvas">
+			Your browser does not support the canvas tag.
+		</canvas>
+
+		<noscript>
+			Your browser does not support JavaScript.
+		</noscript>
+
+		<div id="status">
+			<img id="status-splash" class="show-image--true fullsize--true use-filter--true" src="index.png" alt="">
+			<progress id="status-progress"></progress>
+			<div id="status-notice"></div>
+		</div>
+
+		<script src="index.js"></script>
+		<script>
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"ensureCrossOriginIsolationHeaders":true,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":8918704,"index.wasm":43682606},"focusCanvas":true,"gdextensionLibs":[]};
+const GODOT_THREADS_ENABLED = false;
+const engine = new Engine(GODOT_CONFIG);
+
+(function () {
+	const statusOverlay = document.getElementById('status');
+	const statusProgress = document.getElementById('status-progress');
+	const statusNotice = document.getElementById('status-notice');
+
+	let initializing = true;
+	let statusMode = '';
+
+	function setStatusMode(mode) {
+		if (statusMode === mode || !initializing) {
+			return;
+		}
+		if (mode === 'hidden') {
+			statusOverlay.remove();
+			initializing = false;
+			return;
+		}
+		statusOverlay.style.visibility = 'visible';
+		statusProgress.style.display = mode === 'progress' ? 'block' : 'none';
+		statusNotice.style.display = mode === 'notice' ? 'block' : 'none';
+		statusMode = mode;
+	}
+
+	function setStatusNotice(text) {
+		while (statusNotice.lastChild) {
+			statusNotice.removeChild(statusNotice.lastChild);
+		}
+		const lines = text.split('\n');
+		lines.forEach((line) => {
+			statusNotice.appendChild(document.createTextNode(line));
+			statusNotice.appendChild(document.createElement('br'));
+		});
+	}
+
+	function displayFailureNotice(err) {
+		console.error(err);
+		if (err instanceof Error) {
+			setStatusNotice(err.message);
+		} else if (typeof err === 'string') {
+			setStatusNotice(err);
+		} else {
+			setStatusNotice('An unknown error occurred.');
+		}
+		setStatusMode('notice');
+		initializing = false;
+	}
+
+	const missing = Engine.getMissingFeatures({
+		threads: GODOT_THREADS_ENABLED,
+	});
+
+	if (missing.length !== 0) {
+		if (GODOT_CONFIG['serviceWorker'] && GODOT_CONFIG['ensureCrossOriginIsolationHeaders'] && 'serviceWorker' in navigator) {
+			let serviceWorkerRegistrationPromise;
+			try {
+				serviceWorkerRegistrationPromise = navigator.serviceWorker.getRegistration();
+			} catch (err) {
+				serviceWorkerRegistrationPromise = Promise.reject(new Error('Service worker registration failed.'));
+			}
+			// There's a chance that installing the service worker would fix the issue
+			Promise.race([
+				serviceWorkerRegistrationPromise.then((registration) => {
+					if (registration != null) {
+						return Promise.reject(new Error('Service worker already exists.'));
+					}
+					return registration;
+				}).then(() => engine.installServiceWorker()),
+				// For some reason, `getRegistration()` can stall
+				new Promise((resolve) => {
+					setTimeout(() => resolve(), 2000);
+				}),
+			]).then(() => {
+				// Reload if there was no error.
+				window.location.reload();
+			}).catch((err) => {
+				console.error('Error while registering service worker:', err);
+			});
+		} else {
+			// Display the message as usual
+			const missingMsg = 'Error\nThe following features required to run Godot projects on the Web are missing:\n';
+			displayFailureNotice(missingMsg + missing.join('\n'));
+		}
+	} else {
+		setStatusMode('progress');
+		engine.startGame({
+			'onProgress': function (current, total) {
+				if (current > 0 && total > 0) {
+					statusProgress.value = current;
+					statusProgress.max = total;
+				} else {
+					statusProgress.removeAttribute('value');
+					statusProgress.removeAttribute('max');
+				}
+			},
+		}).then(() => {
+			setStatusMode('hidden');
+		}, displayFailureNotice);
+	}
+}());
+		</script>
+	</body>
 </html>

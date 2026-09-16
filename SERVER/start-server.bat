@@ -26,13 +26,12 @@ if not exist "node_modules\tsx\dist\cli.mjs" (
 )
 
 echo Updating the database and compiled server...
-if exist "..\web-client\build.mjs" (
-  node "..\web-client\build.mjs"
-  if errorlevel 1 (
-    echo ERROR: web client build failed. The server was not started.
-    pause
-    exit /b 1
-  )
+call npm run web:check
+if errorlevel 1 (
+  echo ERROR: Godot web export is not ready for ZeroTier HTTP access.
+  echo Run: npm run web:patch
+  pause
+  exit /b 1
 )
 
 call npm run migrate
