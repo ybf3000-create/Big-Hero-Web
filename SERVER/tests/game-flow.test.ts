@@ -112,3 +112,17 @@ test("game HTTP endpoints expose state and roll result", async (context) => {
   assert.equal(typeof roll.json().event.dice, "number");
   await app.close();
 });
+
+test("battle grids return a browser-playable combat timeline", () => {
+  let state = createInitialGameState();
+  state.mapGrids = state.mapGrids.map(() => 1);
+  state.gridIndex = 0;
+  const character = { level: 1, experience: 0, gold: 0 };
+  const result = applyGameCommand(state, character, "roll", {});
+  assert.equal(result.event.kind, "battle");
+  assert.ok(Array.isArray(result.event.events));
+  assert.ok((result.event.events as Array<unknown>).length >= 2);
+  const encounter = result.event.encounter as { units: Array<{ asset: string }> };
+  assert.ok(encounter.units.length >= 1);
+  assert.match(encounter.units[0]?.asset ?? "", /\.png$/);
+});

@@ -15,6 +15,7 @@ export interface GameCommandResult {
 }
 
 const EXPANSION_COSTS = [5_000, 15_000, 30_000, 50_000, 75_000, 100_000, 150_000, 200_000, 300_000, 400_000, 500_000, 750_000, 1_000_000, 1_500_000];
+const MONSTER_ASSETS = ["char_0001.png", "char_0007.png", "char_0016.png", "char_0031.png", "char_0048.png", "char_0067.png", "char_0085.png", "char_0094.png", "char_0125.png", "char_0170.png", "char_0198.png", "char_0240.png", "char_0305.png", "char_0371.png", "char_0430.png"];
 
 function expansionCost(count: number): number {
   if (count < EXPANSION_COSTS.length) return EXPANSION_COSTS[count] ?? 5_000;
@@ -123,15 +124,30 @@ function battle(state: GameState, character: CharacterProgress, kind: "normal" |
   const templates = kind === "normal" ? NORMAL_TEMPLATES : kind === "elite" ? ELITE_TEMPLATES : [[BOSS_NAMES[state.bossIndex % BOSS_NAMES.length]]];
   const names = templates[Math.floor(Math.random() * templates.length)] ?? ["史莱姆·战士"];
   const scale = (character.level + (kind === "elite" ? 4 : kind === "boss" ? 10 : 0)) / 10;
+  const playerStartHp = state.hp;
+  const units: Array<Record<string, unknown> & { id: number; maxHp: number; currentHp: number; attack: number }> = [];
   let enemyHp = 0;
   let enemyAttack = 0;
   let enemyDefense = 0;
-  for (const name of names) {
+  for (const [index, name] of names.entries()) {
     if (!name) continue;
     const base = MONSTER_DEFS[name] ?? { hp: 1, atk: 1, def: 1, speed: 5 };
-    enemyHp += Math.max(50, base.hp * 300 * scale);
-    enemyAttack += base.atk * 35 * scale;
+    const unitHp = Math.max(50, Math.floor(base.hp * 300 * scale));
+    const unitAttack = Math.max(1, Math.floor(base.atk * 35 * scale));
+    enemyHp += unitHp;
+    enemyAttack += unitAttack;
     enemyDefense += base.def * 12 * scale;
+    units.push({
+      id: index + 1,
+      name,
+      displayName: name.replace("·", " "),
+      row: index > 1 ? "back" : "front",
+      maxHp: unitHp,
+      currentHp: unitHp,
+      attack: unitAttack,
+      isBoss: kind === "boss",
+      asset: kind === "boss" ? `${name}.png` : MONSTER_ASSETS[Math.abs([...name].reduce((sum, char) => sum + (char.codePointAt(0) ?? 0), 0)) % MONSTER_ASSETS.length],
+    });
   }
   const selectedSkills = state.skillSlots.map((id) => skillById(id)).filter((skill) => skill !== undefined);
   const strongestSkill = selectedSkills.reduce((best, skill) => Math.max(best, (skill.damagePct ?? 100) * (skill.hits ?? 1)), 100);
@@ -141,16 +157,29 @@ function battle(state: GameState, character: CharacterProgress, kind: "normal" |
   let rounds = 0;
   let dealt = 0;
   let taken = 0;
+  const events: Array<Record<string, unknown>> = [];
+  const activeSkill = selectedSkills.reduce((best, skill) => ((skill.damagePct ?? 100) * (skill.hits ?? 1) > (best?.damagePct ?? 100) * (best?.hits ?? 1) ? skill : best), selectedSkills[0]);
   while (enemyHp > 0 && state.hp > 0 && rounds < 20) {
     rounds += 1;
     const critical = Math.random() * 100 < state.stats.crit;
     const damage = Math.max(1, Math.floor((playerAttack * (critical ? 1.8 : 1)) - enemyDefense));
     enemyHp -= damage;
     dealt += damage;
+    events.push({ type: "cast", source: "player", sourceId: 0, skillName: activeSkill?.name ?? "普通攻击", skillIcon: activeSkill?.icon ?? "⚔" });
+    let remainingDamage = damage;
+    for (const target of units) {
+      if (remainingDamage <= 0 || target.currentHp <= 0) continue;
+      const applied = Math.min(remainingDamage, target.currentHp);
+      target.currentHp -= applied;
+      remainingDamage -= applied;
+      events.push({ type: "damage", source: "player", sourceId: 0, target: "enemy", targetId: target.id, targetName: target.name, value: applied, critical, remainingHp: target.currentHp, maxHp: target.maxHp });
+    }
     if (enemyHp > 0) {
       const incoming = Math.max(1, Math.floor(enemyAttack - playerDefense * 0.35));
       state.hp = Math.max(0, state.hp - incoming);
       taken += incoming;
+      const attacker = units.find((unit) => unit.currentHp > 0) ?? units[0];
+      events.push({ type: "damage", source: "enemy", sourceId: attacker?.id ?? 1, sourceName: attacker?.name ?? "敌人", target: "player", targetId: 0, value: incoming, critical: false, remainingHp: state.hp, maxHp: state.maxHp });
     }
   }
   const won = enemyHp <= 0;
@@ -167,18 +196,18 @@ function battle(state: GameState, character: CharacterProgress, kind: "normal" |
     const passiveHeal = selectedSkills.filter((skill) => skill.healPct).reduce((sum, skill) => sum + Math.floor(state.stats.attack * (skill.healPct ?? 0) / 100), 0);
     if (passiveHeal > 0) state.hp = Math.min(state.maxHp, state.hp + passiveHeal);
     if (kind === "boss") state.bossIndex = (state.bossIndex + 1) % BOSS_NAMES.length;
-    return { kind: "battle", won: true, enemy: names, rounds, dealt, taken, skillPower: strongestSkill, rewards: { gold: (60 + character.level * 12) * multiplier, experience: (40 + character.level * 15) * multiplier, equipment, passiveHeal, messages } };
+    return { kind: "battle", battleKind: kind, won: true, enemy: names, rounds, dealt, taken, skillPower: strongestSkill, playerStartHp, playerMaxHp: state.maxHp, playerBattleEndHp: Math.max(0, state.hp), encounter: { templateName: kind === "boss" ? "朱樱神社·首领" : kind === "elite" ? "朱樱山道·精英" : "朱樱山道", weather: state.weather, units }, events, rewards: { gold: (60 + character.level * 12) * multiplier, experience: (40 + character.level * 15) * multiplier, equipment, passiveHeal, messages } };
   }
   if (state.reviveCoins > 0) {
     state.reviveCoins -= 1;
     state.hp = state.maxHp;
-    return { kind: "battle", won: false, enemy: names, rounds, dealt, taken, message: "战败，消耗1复活币重新站起", rewards: { reviveCoins: state.reviveCoins } };
+    return { kind: "battle", battleKind: kind, won: false, enemy: names, rounds, dealt, taken, playerStartHp, playerMaxHp: state.maxHp, playerBattleEndHp: 0, encounter: { templateName: kind === "boss" ? "朱樱神社·首领" : "朱樱山道", weather: state.weather, units }, events, message: "战败，消耗1复活币重新站起", rewards: { reviveCoins: state.reviveCoins } };
   }
   const penalty = Math.floor(character.gold * .15);
   character.gold -= penalty;
   state.hp = state.maxHp;
   state.gridIndex = 0;
-  return { kind: "battle", won: false, enemy: names, rounds, dealt, taken, message: `战败，强制回家并损失${penalty}金币`, rewards: { reviveCoins: 0, goldPenalty: penalty } };
+  return { kind: "battle", battleKind: kind, won: false, enemy: names, rounds, dealt, taken, playerStartHp, playerMaxHp: state.maxHp, playerBattleEndHp: 0, encounter: { templateName: kind === "boss" ? "朱樱神社·首领" : "朱樱山道", weather: state.weather, units }, events, message: `战败，强制回家并损失${penalty}金币`, rewards: { reviveCoins: 0, goldPenalty: penalty } };
 }
 
 export function createInitialGameState(): GameState {
