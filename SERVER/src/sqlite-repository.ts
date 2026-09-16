@@ -4,7 +4,9 @@ import { AppError } from "./errors.js";
 import type {
   AccountForLogin,
   AccountSummary,
+  ChatMessage,
   CharacterSummary,
+  CreateChatMessageInput,
   CreateCharacterInput,
   CreateSessionInput,
   GameRepository,
@@ -32,6 +34,19 @@ function characterFromRow(row: Record<string, unknown>): CharacterSummary {
     experience: Number(row.experience),
     gold: String(row.gold),
     revision: Number(row.revision),
+  };
+}
+
+function chatMessageFromRow(row: Record<string, unknown>): ChatMessage {
+  const channel = String(row.channel);
+  return {
+    id: Number(row.id),
+    channel: channel === "system" ? "system" : "world",
+    senderName: row.sender_name === null || row.sender_name === undefined
+      ? null
+      : String(row.sender_name),
+    body: String(row.body),
+    createdAt: Number(row.created_at),
   };
 }
 
@@ -246,6 +261,88 @@ export class SqliteRepository implements GameRepository {
       }
       if (message.includes("UNIQUE constraint failed: characters.display_name_normalized")) {
         throw new AppError("CHARACTER_NAME_UNAVAILABLE", 409, "该角色名已被使用");
+      }
+      throw error;
+    }
+  }
+
+  async listChatMessages(channel: "world" | "system", limit: number): Promise<ChatMessage[]> {
+    const safeLimit = Math.max(1, Math.min(Math.floor(limit), 100));
+    const rows = this.database.prepare(
+      `SELECT m.id, m.channel, c.display_name AS sender_name, m.body, m.created_at
+         FROM chat_messages m
+         LEFT JOIN characters c ON c.id = m.sender_character_id
+        WHERE m.channel = ?
+        ORDER BY m.id DESC
+        LIMIT ?`,
+    ).all(channel, safeLimit) as Record<string, unknown>[];
+    return rows.reverse().map(chatMessageFromRow);
+  }
+
+  async createChatMessage(input: CreateChatMessageInput): Promise<ChatMessage> {
+    const create = this.database.transaction((value: CreateChatMessageInput) => {
+      const character = this.database.prepare(
+        `SELECT id FROM characters
+          WHERE account_id = ? AND deleted_at IS NULL`,
+      ).get(value.accountId) as { id: string } | undefined;
+      if (!character) {
+        throw new AppError("CHARACTER_REQUIRED", 409, "请先创建角色");
+      }
+
+      const repeated = this.database.prepare(
+        `SELECT m.id, m.channel, c.display_name AS sender_name, m.body, m.created_at
+           FROM chat_messages m
+           LEFT JOIN characters c ON c.id = m.sender_character_id
+          WHERE m.sender_character_id = ? AND m.client_message_id = ?`,
+      ).get(character.id, value.clientMessageId) as Record<string, unknown> | undefined;
+      if (repeated) {
+        return chatMessageFromRow(repeated);
+      }
+
+      const at = Date.now();
+      const mute = this.database.prepare(
+        `SELECT 1 FROM chat_mutes
+          WHERE account_id = ? AND revoked_at IS NULL
+            AND starts_at <= ? AND ends_at > ?
+          LIMIT 1`,
+      ).get(value.accountId, at, at);
+      if (mute) {
+        throw new AppError("CHAT_MUTED", 403, "你当前被禁言，暂时不能发言");
+      }
+
+      this.database.prepare(
+        `DELETE FROM chat_messages
+          WHERE channel = 'world' AND created_at < ?`,
+      ).run(at - 7 * 24 * 60 * 60_000);
+      const result = this.database.prepare(
+        `INSERT INTO chat_messages (channel, sender_character_id, body, client_message_id, created_at)
+         VALUES ('world', ?, ?, ?, ?)`,
+      ).run(character.id, value.body, value.clientMessageId, at);
+      const inserted = this.database.prepare(
+        `SELECT m.id, m.channel, c.display_name AS sender_name, m.body, m.created_at
+           FROM chat_messages m
+           LEFT JOIN characters c ON c.id = m.sender_character_id
+          WHERE m.id = ?`,
+      ).get(result.lastInsertRowid) as Record<string, unknown>;
+      return chatMessageFromRow(inserted);
+    });
+
+    try {
+      return create.immediate(input);
+    } catch (error) {
+      const message = errorMessage(error);
+      if (
+        message.includes("chat_messages.sender_character_id") &&
+        message.includes("chat_messages.client_message_id")
+      ) {
+        const repeated = this.database.prepare(
+          `SELECT m.id, m.channel, c.display_name AS sender_name, m.body, m.created_at
+             FROM chat_messages m
+             LEFT JOIN characters c ON c.id = m.sender_character_id
+            JOIN characters sender ON sender.id = m.sender_character_id
+            WHERE sender.account_id = ? AND m.client_message_id = ?`,
+        ).get(input.accountId, input.clientMessageId) as Record<string, unknown> | undefined;
+        if (repeated) return chatMessageFromRow(repeated);
       }
       throw error;
     }

@@ -156,3 +156,54 @@ test("SQLite enforces single-character and single-active-session rules", async (
   assert.equal(sessions[0]?.revoke_reason, "replaced_by_new_login");
   assert.equal(sessions[1]?.revoked_at, null);
 });
+
+test("SQLite chat persists messages, supports retries, and honors mutes", async (context) => {
+  const { directory, repository } = await createTestRepository();
+  context.after(async () => {
+    await repository.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const inviteHash = hashSecret("SQLITE-CHAT");
+  repository.insertInviteCode("invite-chat", inviteHash);
+  const account = await repository.registerAccount({
+    requestId: "sqlite_register_chat",
+    username: "chat_hero",
+    passwordHash: "hash:chat",
+    inviteCodeHash: inviteHash,
+  });
+  await repository.createCharacter({
+    id: "character-chat",
+    requestId: "sqlite_character_chat",
+    accountId: account.id,
+    displayName: "聊天勇者",
+    normalizedName: "聊天勇者",
+  });
+
+  const first = await repository.createChatMessage({
+    accountId: account.id,
+    body: "大家好",
+    clientMessageId: "chat_message_1",
+  });
+  const repeated = await repository.createChatMessage({
+    accountId: account.id,
+    body: "这条内容不会重复插入",
+    clientMessageId: "chat_message_1",
+  });
+  assert.deepEqual(repeated, first);
+  assert.deepEqual(await repository.listChatMessages("world", 10), [first]);
+
+  const now = Date.now();
+  repository.database.prepare(
+    `INSERT INTO chat_mutes (account_id, reason, starts_at, ends_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(account.id, "test", now - 1000, now + 60_000);
+  await assert.rejects(
+    repository.createChatMessage({
+      accountId: account.id,
+      body: "不应发送",
+      clientMessageId: "chat_message_2",
+    }),
+    appErrorCode("CHAT_MUTED"),
+  );
+});

@@ -21,6 +21,20 @@ export interface CharacterSummary {
   revision: number;
 }
 
+export interface ChatMessage {
+  id: number;
+  channel: "world" | "system";
+  senderName: string | null;
+  body: string;
+  createdAt: number;
+}
+
+export interface CreateChatMessageInput {
+  accountId: string;
+  body: string;
+  clientMessageId: string;
+}
+
 export interface RegisterAccountInput {
   requestId: string;
   username: string;
@@ -62,4 +76,6 @@ export interface GameRepository {
   ): Promise<void>;
   getCharacter(accountId: string): Promise<CharacterSummary | null>;
   createCharacter(input: CreateCharacterInput): Promise<CharacterSummary>;
+  listChatMessages?(channel: "world" | "system", limit: number): Promise<ChatMessage[]>;
+  createChatMessage?(input: CreateChatMessageInput): Promise<ChatMessage>;
 }

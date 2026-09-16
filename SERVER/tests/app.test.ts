@@ -7,7 +7,9 @@ import { AppError } from "../src/errors.js";
 import type {
   AccountForLogin,
   AccountSummary,
+  ChatMessage,
   CharacterSummary,
+  CreateChatMessageInput,
   CreateCharacterInput,
   CreateSessionInput,
   GameRepository,
@@ -126,6 +128,33 @@ class MemoryRepository implements GameRepository {
     this.characters.set(input.accountId, character);
     this.creationRequests.set(input.requestId, character);
     return character;
+  }
+}
+
+class ChatMemoryRepository extends MemoryRepository {
+  readonly chatMessages: ChatMessage[] = [];
+  private nextMessageId = 1;
+
+  async listChatMessages(channel: "world" | "system", limit: number): Promise<ChatMessage[]> {
+    return this.chatMessages.filter((message) => message.channel === channel).slice(-limit);
+  }
+
+  async createChatMessage(input: CreateChatMessageInput): Promise<ChatMessage> {
+    const character = this.characters.get(input.accountId);
+    assert.ok(character);
+    const repeated = this.chatMessages.find(
+      (message) => message.senderName === character.name && message.body === input.body,
+    );
+    if (repeated) return repeated;
+    const message: ChatMessage = {
+      id: this.nextMessageId++,
+      channel: "world",
+      senderName: character.name,
+      body: input.body,
+      createdAt: Date.now(),
+    };
+    this.chatMessages.push(message);
+    return message;
   }
 }
 
@@ -295,5 +324,37 @@ test("client request format errors remain 4xx responses", async () => {
   assert.equal(response.statusCode, 415);
   assert.equal(response.json().error.code, "UNSUPPORTED_MEDIA_TYPE");
 
+  await app.close();
+});
+
+test("authenticated WebSocket receives and broadcasts world chat", async () => {
+  const repository = new ChatMemoryRepository();
+  repository.invites.add(hashSecret("CHATINVITE"));
+  const app = await buildApp({ repository, passwordHasher: new FakeHasher() });
+  assert.equal((await register(app, "CHATINVITE", "Chat_Hero", "register_chat")).statusCode, 201);
+  const login = await app.inject({
+    method: "POST",
+    url: "/api/v1/auth/login",
+    payload: { rules_version: "network-1", username: "chat_hero", password: "Good-password-2026" },
+  });
+  const token = login.json().session.token as string;
+  await app.inject({
+    method: "POST",
+    url: "/api/v1/characters",
+    headers: { authorization: `Bearer ${token}` },
+    payload: { request_id: "character_chat", rules_version: "network-1", name: "聊天勇者" },
+  });
+  const socket = await app.injectWS("/ws");
+  socket.send(JSON.stringify({ type: "authenticate", token }));
+  const [authenticated] = await once(socket, "message");
+  assert.equal(JSON.parse(authenticated.toString()).type, "authenticated");
+  const [history] = await once(socket, "message");
+  assert.equal(JSON.parse(history.toString()).type, "chat_history");
+  socket.send(JSON.stringify({ type: "chat_send", body: "大家好", client_message_id: "chat_client_1" }));
+  const [broadcast] = await once(socket, "message");
+  assert.equal(JSON.parse(broadcast.toString()).message.body, "大家好");
+  const closed = once(socket, "close");
+  socket.terminate();
+  await closed;
   await app.close();
 });

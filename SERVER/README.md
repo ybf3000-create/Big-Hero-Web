@@ -2,13 +2,13 @@
 tags: [服务端, 部署, SQLite, 网页游戏, 大勇者]
 parent: "[[网页网络游戏改造总案【定案】]]"
 created: 2026-09-11
-version: v0.4
-status: N2账号底座已验收
+version: v0.5
+status: N3原生网页第一阶段可运行
 ---
 
-# 大勇者服务端 v0.4
+# 大勇者服务端 v0.5
 
-本目录是网页网络版的单体服务。首批代码覆盖邀请码注册、账号密码登录、最多20个账号同时在线、同账号新端踢旧端、30秒断线恢复、每账号1个角色和WebSocket心跳。聊天与拍卖数据表已预留，业务接口按开发阶段继续接入。
+本目录是网页网络版的单体服务。当前代码覆盖邀请码注册、账号密码登录、最多20个账号同时在线、同账号新端踢旧端、30秒断线恢复、每账号1个角色、WebSocket心跳和世界聊天持久化广播。拍卖行数据表与资产权威模型尚未接入，网页入口会明确显示迁移中。
 
 ## 1. 运行条件
 
@@ -16,22 +16,21 @@ status: N2账号底座已验收
 |------|------|-----------|
 | Node.js | 22或更高 | 已安装24.13.1 |
 | SQLite | 由服务端内置，无需单独安装 | 已完成真实数据库验收 |
-| Godot | 4.4 stable与Web导出模板 | 已安装并成功导出Web包 |
+| 浏览器 | Chrome或Edge | 访问服务器网页即可 |
 
-SQLite只允许单个游戏服务进程读写。运行库使用WAL、外键、5秒写锁等待和强同步；公网只暴露由穿透服务提供的HTTPS/WSS入口，不提供数据库访问入口。
+SQLite只允许单个游戏服务进程读写。运行库使用WAL、外键、5秒写锁等待和强同步；ZeroTier网络只暴露游戏HTTP端口，不提供数据库访问入口。ZeroTier负责网络连通和加密，浏览器不需要额外证书或命令。
 
 ## 2. 首次启动
 
 ```powershell
 cd D:\onedrive\note\Game\Game-大勇者\SERVER
 Copy-Item .env.example .env
-npm install
+npm ci --include=dev --ignore-scripts
 npm run migrate
 npm run invite:create -- --count=5
-npm run dev
 ```
 
-无需安装数据库服务。迁移脚本会创建`.env`中`DATABASE_PATH`指定的数据库和目录。运行中的SQLite文件不得放在OneDrive等云同步目录；当前本机使用`C:\BigHeroData\big-hero.sqlite`。邀请码只在生成时显示一次，数据库只保存摘要。成功启动后，本机访问`http://127.0.0.1:3000/game/`。
+无需安装数据库服务。迁移脚本会创建`.env`中`DATABASE_PATH`指定的数据库和目录。运行中的SQLite文件不得放在OneDrive等云同步目录；当前本机使用`C:\BigHeroData\big-hero.sqlite`。邀请码只在生成时显示一次，数据库只保存摘要。准备完成后双击 `start-server.bat`，本机访问`http://127.0.0.1:3000/game/`，其他已加入同一 ZeroTier 网络的电脑访问`http://服务器的ZeroTier地址:3000/game/`。
 
 失败处理：
 
@@ -50,18 +49,16 @@ npm run backup
 
 该命令使用SQLite在线备份接口，把一致性快照写入`BACKUP_DIRECTORY`。服务器运行时不要直接复制`.sqlite`、`.sqlite-wal`和`.sqlite-shm`文件。当前备份目录为`C:\BigHeroBackups`；自动定时备份与恢复演练在N7完成。
 
-## 4. Web导出
+## 4. 原生网页客户端
 
-当前开发机已安装与4.4 stable完全匹配的Web Export Templates。重新构建时执行：
+网页源码位于仓库根目录的 `web-client/`，不依赖 Godot、WebAssembly 或安全上下文 API。重新构建时执行：
 
 ```powershell
-& 'D:\Godot4\Godot_v4.4-stable_win64.exe' --headless `
-  --path 'D:\onedrive\note\Game\Game-大勇者\client' `
-  --export-release Web `
-  'D:\onedrive\note\Game\Game-大勇者\SERVER\public\game\index.html'
+cd D:\onedrive\note\Game\Game-大勇者\web-client
+npm run build
 ```
 
-Web预设关闭线程支持，因此首版不要求入口配置跨源隔离响应头。浏览器客户端使用同源`/api/v1`和`/ws`，会话令牌不放进URL。
+构建结果写入 `SERVER/public/game/`，服务器启动后由 Fastify 同源提供。浏览器客户端使用同源 `/api/v1` 和 `/ws`，会话令牌不放进URL。旧 Godot 源码仍保留在 `client/`，后续玩法移植可继续参考。
 
 ## 5. 检查
 
@@ -70,7 +67,7 @@ npm run check
 npm audit --omit=dev
 ```
 
-检查覆盖账号与角色输入、Q32手续费边界、20/21人容量、同账号替换会话、30秒断线名额、注册登录角色主流程、请求格式、登录审计故障隔离，以及SQLite迁移、WAL/外键/强同步、事务幂等和失败回滚。当前共16项自动测试；真实SQLite注册、登录和角色创建已通过。
+检查覆盖账号与角色输入、Q32手续费边界、20/21人容量、同账号替换会话、30秒断线名额、注册登录角色主流程、请求格式、登录审计故障隔离、WebSocket聊天广播，以及SQLite迁移、WAL/外键/强同步、事务幂等和失败回滚。当前共18项自动测试；真实SQLite注册、登录、角色创建和聊天已通过。
 
 > 设计柱检验：服务端权威资产保护柱2与柱6；20人硬上限、单体部署和确定性失败处理控制维护成本，符合柱5。
 
@@ -84,3 +81,4 @@ npm audit --omit=dev
 | v0.2 | 2026-09-11 | Web模板安装并导出成功；浏览器验证中文字体、登录页和邀请码注册页正常 |
 | v0.3 | 2026-09-11 | 登录审计失败不再改变玩家应收到的登录结果；自动测试增至12项并重新导出Web包 |
 | v0.4 | 2026-09-14 | PostgreSQL改为SQLite；完成真实迁移与注册登录角色验收，增加在线备份命令，自动测试增至16项 |
+| v0.5 | 2026-09-16 | 切换原生网页入口；接入世界聊天持久化、历史推送、广播、防刷与禁言检查；增加网页联调测试 |

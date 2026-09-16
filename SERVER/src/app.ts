@@ -43,6 +43,11 @@ interface JsonObject {
   [key: string]: unknown;
 }
 
+interface ChatConnection {
+  socket: WebSocket;
+  identity: SessionIdentity;
+}
+
 function bodyObject(body: unknown): JsonObject {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw badRequest("请求内容格式不正确");
@@ -73,6 +78,25 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function chatBody(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new AppError("CHAT_MESSAGE_INVALID", 400, "聊天内容格式不正确");
+  }
+  const body = value.trim();
+  const length = Array.from(body).length;
+  if (length < 1 || length > 120 || Buffer.byteLength(body, "utf8") > 480) {
+    throw new AppError("CHAT_MESSAGE_INVALID", 400, "聊天内容需为1～120个字符");
+  }
+  return body;
+}
+
+function chatClientMessageId(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{8,80}$/.test(value)) {
+    throw new AppError("CHAT_MESSAGE_INVALID", 400, "聊天消息编号格式不正确");
+  }
+  return value;
+}
+
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   const rulesVersion = options.rulesVersion ?? "network-1";
   const maxOnlinePlayers = options.maxOnlinePlayers ?? 20;
@@ -97,6 +121,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       });
     },
   );
+  const chatConnections = new Set<ChatConnection>();
+  const lastChatSentAt = new Map<string, number>();
   const cleanupTimer = setInterval(() => sessionManager.cleanupExpired(), 10_000);
   cleanupTimer.unref();
 
@@ -326,6 +352,25 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     };
   });
 
+  app.get("/api/v1/chat/world", async (request) => {
+    authenticateRequest(request);
+    if (!options.repository.listChatMessages) {
+      throw new AppError("SERVICE_UNAVAILABLE", 503, "聊天服务暂时不可用");
+    }
+    const query = (request.query && typeof request.query === "object")
+      ? request.query as Record<string, unknown>
+      : {};
+    const rawLimit = query.limit;
+    const limit = rawLimit === undefined ? 50 : Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw badRequest("limit需为1～100的整数");
+    }
+    return {
+      ok: true,
+      messages: await options.repository.listChatMessages("world", limit),
+    };
+  });
+
   app.post("/api/v1/characters", async (request, reply) => {
     const identity = authenticateRequest(request);
     const body = bodyObject(request.body);
@@ -372,15 +417,34 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           }
           try {
             identity = sessionManager.attachSocket(hashSecret(message.token), socket);
-            clearTimeout(authenticationTimeout);
-            socket.send(JSON.stringify({
-              type: "authenticated",
-              session_id: identity.sessionId,
-              rules_version: rulesVersion,
-              heartbeat_interval_seconds: 10,
-            }));
           } catch {
             socket.close(4003, "SESSION_INVALID");
+            return;
+          }
+          clearTimeout(authenticationTimeout);
+          chatConnections.add({ socket, identity });
+          socket.send(JSON.stringify({
+            type: "authenticated",
+            session_id: identity.sessionId,
+            rules_version: rulesVersion,
+            heartbeat_interval_seconds: 10,
+          }));
+          if (options.repository.listChatMessages) {
+            try {
+              const messages = await options.repository.listChatMessages("world", 50);
+              if (socket.readyState === 1) {
+                socket.send(JSON.stringify({ type: "chat_history", channel: "world", messages }));
+              }
+            } catch (error) {
+              app.log.error({ err: error }, "failed to load chat history");
+              if (socket.readyState === 1) {
+                socket.send(JSON.stringify({
+                  type: "error",
+                  code: "SERVICE_UNAVAILABLE",
+                  message: "聊天记录暂时不可用",
+                }));
+              }
+            }
           }
           return;
         }
@@ -400,6 +464,38 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           return;
         }
 
+        if (message.type === "chat_send") {
+          if (!options.repository.createChatMessage) {
+            throw new AppError("SERVICE_UNAVAILABLE", 503, "聊天服务暂时不可用");
+          }
+          const body = chatBody(message.body);
+          const clientMessageId = chatClientMessageId(message.client_message_id);
+          const sentAt = now();
+          const previousSentAt = lastChatSentAt.get(identity.accountId) ?? 0;
+          if (sentAt - previousSentAt < 1_500) {
+            throw new AppError("CHAT_RATE_LIMITED", 429, "发言太快了，请稍后再试");
+          }
+          lastChatSentAt.set(identity.accountId, sentAt);
+          const chatMessage = await options.repository.createChatMessage({
+            accountId: identity.accountId,
+            body,
+            clientMessageId,
+          });
+          const packet = JSON.stringify({ type: "chat_message", message: chatMessage });
+          for (const connection of chatConnections) {
+            if (connection.socket.readyState === 1) {
+              try {
+                connection.socket.send(packet);
+              } catch {
+                chatConnections.delete(connection);
+              }
+            } else {
+              chatConnections.delete(connection);
+            }
+          }
+          return;
+        }
+
         socket.send(JSON.stringify({
           type: "error",
           code: "UNSUPPORTED_MESSAGE",
@@ -407,16 +503,18 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         }));
       })().catch((error) => {
         app.log.error({ err: error }, "websocket message failed");
-        socket.send(JSON.stringify({
-          type: "error",
-          code: "SERVICE_UNAVAILABLE",
-          message: "服务暂时不可用",
-        }));
+        const packet = error instanceof AppError
+          ? { type: "error", code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) }
+          : { type: "error", code: "SERVICE_UNAVAILABLE", message: "服务暂时不可用" };
+        if (socket.readyState === 1) socket.send(JSON.stringify(packet));
       });
     });
 
     socket.on("close", () => {
       clearTimeout(authenticationTimeout);
+      for (const connection of chatConnections) {
+        if (connection.socket === socket) chatConnections.delete(connection);
+      }
       if (identity) {
         sessionManager.markDisconnected(identity.sessionId, socket);
       }
