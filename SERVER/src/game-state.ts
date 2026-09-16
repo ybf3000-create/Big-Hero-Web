@@ -70,20 +70,18 @@ export function defaultGameState(): GameState {
     hp: 500,
     maxHp: 500,
     reviveCoins: 3,
-    stats: { attack: 100, defense: 50, maxHp: 500, speed: 10, crit: 5, skillDamage: 0 },
+    // 与Godot新档一致：等级1白值，不预发装备或消耗品。
+    stats: { attack: 25, defense: 15, maxHp: 500, speed: 0, crit: 0, skillDamage: 0 },
     gridIndex: 0,
     mapTotalGrids: MAP_BASE.length,
     mapGrids: [...MAP_BASE],
     lastDiceRoll: null,
     lastDiceSuit: null,
     diceHistory: [],
-    inventory: [{ itemId: 1, count: 3 }],
+    inventory: [],
     inventoryCapacity: 100,
     inventoryExpansionCount: 0,
-    equipmentBag: [
-      { id: "starter-sword", slot: "weapon", name: "新手长剑", quality: 0, enhance: 0, mainStat: "攻击力", mainValue: 40, locked: false, bound: true },
-      { id: "starter-armor", slot: "armor", name: "新手护甲", quality: 0, enhance: 0, mainStat: "防御力", mainValue: 30, locked: false, bound: true },
-    ],
+    equipmentBag: [],
     equipmentCapacity: 100,
     equipmentExpansionCount: 0,
     equipped,
@@ -164,7 +162,7 @@ export function removeItem(state: GameState, itemId: number, count: number): boo
 }
 
 export function recalculateStats(state: GameState): void {
-  const base = { attack: 100, defense: 50, maxHp: 500, speed: 10, crit: 5, skillDamage: 0 };
+  const base = { attack: 25, defense: 15, maxHp: 500, speed: 0, crit: 0, skillDamage: 0 };
   for (const itemId of Object.values(state.equipped)) {
     if (!itemId) continue;
     const item = state.equipmentBag.find((entry) => entry.id === itemId);

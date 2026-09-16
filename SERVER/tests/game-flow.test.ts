@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { buildApp } from "../src/app.js";
 import { applyGameCommand, createInitialGameState } from "../src/game-engine.js";
+import { addItem, serializeGameState } from "../src/game-state.js";
 import { applyMigrations } from "../src/migrations.js";
 import { hashSecret } from "../src/security.js";
 import { SqliteRepository } from "../src/sqlite-repository.js";
@@ -22,6 +23,14 @@ async function setup() {
   return { directory, repository };
 }
 
+function grantItem(repository: SqliteRepository, characterId: string, itemId: number, count: number): void {
+  const state = createInitialGameState();
+  assert.equal(addItem(state, itemId, count), true);
+  repository.database.prepare(
+    "UPDATE character_states SET state_json = ?, updated_at = ? WHERE character_id = ?",
+  ).run(serializeGameState(state), Date.now(), characterId);
+}
+
 test("game state survives commands and repeated roll requests are idempotent", async (context) => {
   const { directory, repository } = await setup();
   context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
@@ -30,7 +39,11 @@ test("game state survives commands and repeated roll requests are idempotent", a
   const account = await repository.registerAccount({ requestId: "game_register_1", username: "game_hero", passwordHash: "test:Good-password-2026", inviteCodeHash: inviteHash });
   const character = await repository.createCharacter({ id: "game-character", requestId: "game_character_1", accountId: account.id, displayName: "测试勇者", normalizedName: "测试勇者" });
   const before = await repository.getGameState(character.id);
-  assert.equal(before.inventory[0]?.count, 3);
+  assert.deepEqual(before.inventory, []);
+  assert.deepEqual(before.equipmentBag, []);
+  assert.equal(before.stats.attack, 25);
+  assert.equal(before.stats.defense, 15);
+  assert.equal(before.stats.crit, 0);
   const first = await repository.executeGameCommand({ characterId: character.id, requestId: "game_roll_01", command: "roll", payload: {} });
   const repeated = await repository.executeGameCommand({ characterId: character.id, requestId: "game_roll_01", command: "roll", payload: {} });
   assert.deepEqual(repeated, first);
@@ -45,11 +58,12 @@ test("dice, skill slots, equipment locks and enhancement limits enforce game rul
     state = result.state;
     assert.ok((state.lastDiceRoll ?? 0) >= 1 && (state.lastDiceRoll ?? 7) <= 6);
   }
-  const locked = applyGameCommand(state, character, "equipment_lock", { equipment_id: "starter-sword", locked: true });
-  assert.equal(locked.state.equipmentBag.find((item) => item.id === "starter-sword")?.locked, true);
+  state.equipmentBag.push({ id: "test-sword", slot: "weapon", name: "测试长剑", quality: 0, enhance: 0, mainStat: "攻击力", mainValue: 4, locked: false, bound: true });
+  const locked = applyGameCommand(state, character, "equipment_lock", { equipment_id: "test-sword", locked: true });
+  assert.equal(locked.state.equipmentBag.find((item) => item.id === "test-sword")?.locked, true);
   const maxed = createInitialGameState();
-  const sword = maxed.equipmentBag.find((item) => item.id === "starter-sword");
-  assert.ok(sword);
+  const sword = { id: "test-sword", slot: "weapon", name: "测试长剑", quality: 0, enhance: 0, mainStat: "攻击力", mainValue: 4, locked: false, bound: true };
+  maxed.equipmentBag.push(sword);
   maxed.slotEnhance.weapon = 200;
   assert.throws(() => applyGameCommand(maxed, character, "equipment_enhance", { equipment_id: sword.id }), /强化上限/);
   const limited = { ...createInitialGameState(), skills: [1, 2, 3, 22], skillSlots: [1, 22] };
@@ -68,6 +82,7 @@ test("auction purchase transfers an item once and charges the buyer once", async
   const buyer = await repository.registerAccount({ requestId: "auction_register_2", username: "buyer_hero", passwordHash: "x", inviteCodeHash: secondInvite });
   const sellerCharacter = await repository.createCharacter({ id: "seller-character", requestId: "auction_character_1", accountId: seller.id, displayName: "卖家勇者", normalizedName: "卖家勇者" });
   const buyerCharacter = await repository.createCharacter({ id: "buyer-character", requestId: "auction_character_2", accountId: buyer.id, displayName: "买家勇者", normalizedName: "买家勇者" });
+  grantItem(repository, sellerCharacter.id, 1, 1);
   repository.database.prepare("UPDATE characters SET gold = 1000 WHERE id = ?").run(buyerCharacter.id);
   const listing = await repository.createAuctionListing({ characterId: sellerCharacter.id, requestId: "auction_list_1", itemKind: "item", itemId: 1, itemCount: 1, buyoutPrice: 100, durationHours: 24 });
   await assert.rejects(repository.buyAuctionListing(sellerCharacter.id, "auction_self_1", listing.id), /不能购买自己的订单/);
@@ -76,7 +91,7 @@ test("auction purchase transfers an item once and charges the buyer once", async
   assert.equal(purchased.gold, 900);
   assert.equal(repeated.gold, 900);
   assert.equal(purchased.listing.status, "sold");
-  assert.equal((await repository.getGameState(buyerCharacter.id)).inventory.find((item) => item.itemId === 1)?.count, 4);
+  assert.equal((await repository.getGameState(buyerCharacter.id)).inventory.find((item) => item.itemId === 1)?.count, 1);
   const claimed = await repository.claimAuctionListing(sellerCharacter.id, listing.id);
   assert.equal(claimed.gold, 95);
 });
@@ -88,6 +103,7 @@ test("auction price and active listing boundaries are enforced", async (context)
   repository.insertInviteCode("auction-limits", inviteHash);
   const account = await repository.registerAccount({ requestId: "limits_register_1", username: "limit_hero", passwordHash: "x", inviteCodeHash: inviteHash });
   const character = await repository.createCharacter({ id: "limit-character", requestId: "limits_character_1", accountId: account.id, displayName: "边界勇者", normalizedName: "边界勇者" });
+  grantItem(repository, character.id, 1, 4);
   await assert.rejects(repository.createAuctionListing({ characterId: character.id, requestId: "limits_price_0", itemKind: "item", itemId: 1, itemCount: 1, buyoutPrice: 0, durationHours: 24 }), /价格需为正整数/);
   for (let index = 0; index < 3; index += 1) {
     await repository.createAuctionListing({ characterId: character.id, requestId: `limits_list_${index}`, itemKind: "item", itemId: 1, itemCount: 1, buyoutPrice: index + 1, durationHours: 24 });
