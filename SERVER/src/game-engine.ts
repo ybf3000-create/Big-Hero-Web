@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { BOSS_NAMES, ELITE_TEMPLATES, EQUIPMENT_SLOTS, GRID_ICONS, GRID_NAMES, MONSTER_DEFS, NORMAL_TEMPLATES, QUALITY_NAMES, QUALITY_WEIGHTS, itemById, skillById } from "./game-catalog.js";
-import { addItem, defaultGameState, recalculateStats, removeItem, type EquipmentItem, type GameState } from "./game-state.js";
+import { addItem, defaultGameState, recalculateStats, reconcileAttributePoints, removeItem, type EquipmentItem, type FreeAttributes, type GameState } from "./game-state.js";
 
 export interface CharacterProgress {
   level: number;
@@ -31,7 +31,7 @@ function levelUp(character: CharacterProgress): string[] {
   while (character.level < 100 && character.experience >= character.level * 100) {
     character.experience -= character.level * 100;
     character.level += 1;
-    messages.push(`等级提升至 ${character.level}`);
+    messages.push(`等级提升至 ${character.level}，获得2点自由属性点`);
   }
   return messages;
 }
@@ -224,6 +224,7 @@ export function applyGameCommand(
 ): GameCommandResult {
   const state: GameState = JSON.parse(JSON.stringify(original)) as GameState;
   const character = { ...characterInput };
+  reconcileAttributePoints(state, character.level);
   recalculateStats(state);
   let event: Record<string, unknown>;
   if (command === "roll") {
@@ -371,8 +372,48 @@ export function applyGameCommand(
     const healing = skill.healPct ? Math.max(1, Math.floor(state.stats.attack * skill.healPct / 100)) : 0;
     if (healing > 0) state.hp = Math.min(state.maxHp, state.hp + healing);
     event = { kind: "skill", action: "cast", skillId, skillName: skill.name, healing, message: healing > 0 ? `释放${skill.name}，恢复${healing}生命` : `释放了${skill.name}` };
+  } else if (command === "attribute_allocate") {
+    const aliases: Record<string, keyof FreeAttributes> = {
+      atk: "attack",
+      attack: "attack",
+      def: "defense",
+      defense: "defense",
+      spd: "speed",
+      speed: "speed",
+      luk: "luck",
+      luck: "luck",
+    };
+    const key = typeof payload.attribute === "string" ? aliases[payload.attribute] : undefined;
+    if (!key) throw new Error("属性不存在");
+    if (state.freeAttributePoints < 1) throw new Error("没有可用属性点");
+    state.attributes[key] += 1;
+    state.freeAttributePoints -= 1;
+    event = {
+      kind: "attribute",
+      action: "allocate",
+      attribute: key,
+      freeAttributePoints: state.freeAttributePoints,
+      attributes: state.attributes,
+    };
+  } else if (command === "attribute_reset") {
+    const allocated = Object.values(state.attributes).reduce((sum, value) => sum + value, 0);
+    if (allocated < 1) throw new Error("没有已分配的属性点需要重置");
+    const price = character.level * 200;
+    if (character.gold < price) throw new Error("金币不足");
+    character.gold -= price;
+    state.attributes = { attack: 0, defense: 0, speed: 0, luck: 0 };
+    state.freeAttributePoints += allocated;
+    event = {
+      kind: "attribute",
+      action: "reset",
+      returnedPoints: allocated,
+      price,
+      freeAttributePoints: state.freeAttributePoints,
+      attributes: state.attributes,
+    };
   } else {
     throw new Error("不支持的游戏操作");
   }
+  reconcileAttributePoints(state, character.level);
   return { state, character, event };
 }

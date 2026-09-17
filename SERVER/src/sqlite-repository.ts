@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { AppError } from "./errors.js";
 import { applyGameCommand, createInitialGameState } from "./game-engine.js";
-import { addItem, parseGameState, removeItem, serializeGameState, type EquipmentItem, type GameState } from "./game-state.js";
+import { addItem, parseGameState, reconcileAttributePoints, removeItem, serializeGameState, type EquipmentItem, type GameState } from "./game-state.js";
 import type {
   AccountForLogin,
   AccountSummary,
@@ -292,17 +292,25 @@ export class SqliteRepository implements GameRepository {
   }
 
   async getGameState(characterId: string): Promise<GameState> {
-    const row = this.database.prepare(
-      `SELECT state_json FROM character_states WHERE character_id = ?`,
-    ).get(characterId) as { state_json: string } | undefined;
-    if (!row) {
-      const state = createInitialGameState();
-      this.database.prepare(
-        `INSERT INTO character_states (character_id, state_json) VALUES (?, ?)`,
-      ).run(characterId, serializeGameState(state));
+    const load = this.database.transaction((id: string) => {
+      const character = this.database.prepare(
+        `SELECT level FROM characters WHERE id = ? AND deleted_at IS NULL`,
+      ).get(id) as { level: number } | undefined;
+      if (!character) throw new AppError("CHARACTER_REQUIRED", 409, "请先创建角色");
+      const row = this.database.prepare(
+        `SELECT state_json FROM character_states WHERE character_id = ?`,
+      ).get(id) as { state_json: string } | undefined;
+      const state = parseGameState(row?.state_json);
+      const changed = reconcileAttributePoints(state, Number(character.level));
+      if (!row || changed) {
+        this.database.prepare(
+          `INSERT INTO character_states (character_id, state_json, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(character_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`,
+        ).run(id, serializeGameState(state), Date.now());
+      }
       return state;
-    }
-    return parseGameState(row.state_json);
+    });
+    return load.immediate(characterId);
   }
 
   async executeGameCommand(input: GameCommandInput) {
@@ -345,7 +353,7 @@ export class SqliteRepository implements GameRepository {
       return execute.immediate(input);
     } catch (error) {
       const message = errorMessage(error);
-      if (message.includes("物品不足") || message.includes("金币不足") || message.includes("不存在") || message.includes("无法") || message.includes("不支持")) {
+      if (message.includes("物品不足") || message.includes("金币不足") || message.includes("不存在") || message.includes("无法") || message.includes("不支持") || message.includes("属性点")) {
         throw new AppError("GAME_COMMAND_INVALID", 400, message);
       }
       throw error;

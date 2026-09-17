@@ -83,6 +83,39 @@ func create_character(character_name: String) -> Dictionary:
 	return response
 
 
+func get_game_state() -> Dictionary:
+	var response := await _request_json("/api/v1/game/state", HTTPClient.METHOD_GET, {}, true)
+	if response.get("ok", false):
+		character = response.get("character")
+	return response
+
+
+func allocate_attribute(attribute: String) -> Dictionary:
+	return await _request_json(
+		"/api/v1/game/attributes/allocate",
+		HTTPClient.METHOD_POST,
+		{
+			"request_id": create_request_id(),
+			"rules_version": RULES_VERSION,
+			"payload": {"attribute": attribute},
+		},
+		true
+	)
+
+
+func reset_attributes() -> Dictionary:
+	return await _request_json(
+		"/api/v1/game/attributes/reset",
+		HTTPClient.METHOD_POST,
+		{
+			"request_id": create_request_id(),
+			"rules_version": RULES_VERSION,
+			"payload": {},
+		},
+		true
+	)
+
+
 func logout() -> void:
 	_should_reconnect = false
 	if not session_token.is_empty():
@@ -112,11 +145,12 @@ func _request_json(path: String, method: HTTPClient.Method, payload: Dictionary,
 			return _error_response("SESSION_INVALID", "登录已失效，请重新登录")
 		headers.append("Authorization: Bearer " + session_token)
 
+	var request_body := "" if method == HTTPClient.METHOD_GET else JSON.stringify(payload)
 	var request_error := _http.request(
 		_api_base_url() + path,
 		headers,
 		method,
-		JSON.stringify(payload)
+		request_body
 	)
 	if request_error != OK:
 		_request_in_flight = false

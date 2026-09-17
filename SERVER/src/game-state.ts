@@ -26,12 +26,21 @@ export interface GameStats {
   skillDamage: number;
 }
 
+export interface FreeAttributes {
+  attack: number;
+  defense: number;
+  speed: number;
+  luck: number;
+}
+
 export interface GameState {
   version: 1;
   hp: number;
   maxHp: number;
   reviveCoins: number;
   stats: GameStats;
+  freeAttributePoints: number;
+  attributes: FreeAttributes;
   gridIndex: number;
   mapTotalGrids: number;
   mapGrids: number[];
@@ -72,6 +81,8 @@ export function defaultGameState(): GameState {
     reviveCoins: 3,
     // 与Godot新档一致：等级1白值，不预发装备或消耗品。
     stats: { attack: 25, defense: 15, maxHp: 500, speed: 0, crit: 0, skillDamage: 0 },
+    freeAttributePoints: 0,
+    attributes: { attack: 0, defense: 0, speed: 0, luck: 0 },
     gridIndex: 0,
     mapTotalGrids: MAP_BASE.length,
     mapGrids: [...MAP_BASE],
@@ -109,6 +120,7 @@ export function parseGameState(value: string | null | undefined): GameState {
       ...fallback,
       ...parsed,
       stats: { ...fallback.stats, ...(parsed.stats ?? {}) },
+      attributes: { ...fallback.attributes, ...(parsed.attributes ?? {}) },
       equipped: { ...fallback.equipped, ...(parsed.equipped ?? {}) },
       slotEnhance: { ...fallback.slotEnhance, ...(parsed.slotEnhance ?? {}) },
       mapGrids: Array.isArray(parsed.mapGrids) && parsed.mapGrids.length > 0 ? parsed.mapGrids : fallback.mapGrids,
@@ -116,6 +128,33 @@ export function parseGameState(value: string | null | undefined): GameState {
   } catch {
     return defaultGameState();
   }
+}
+
+function nonNegativeInteger(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+export function earnedAttributePoints(level: number): number {
+  const safeLevel = Math.max(1, Math.min(100, Math.floor(level)));
+  return (safeLevel - 1) * 2;
+}
+
+export function reconcileAttributePoints(state: GameState, level: number): boolean {
+  const previous = JSON.stringify({ free: state.freeAttributePoints, attributes: state.attributes });
+  const normalized: FreeAttributes = {
+    attack: nonNegativeInteger(state.attributes?.attack),
+    defense: nonNegativeInteger(state.attributes?.defense),
+    speed: nonNegativeInteger(state.attributes?.speed),
+    luck: nonNegativeInteger(state.attributes?.luck),
+  };
+  const earned = earnedAttributePoints(level);
+  const allocated = Object.values(normalized).reduce((sum, value) => sum + value, 0);
+  state.attributes = allocated <= earned
+    ? normalized
+    : { attack: 0, defense: 0, speed: 0, luck: 0 };
+  const validAllocated = Object.values(state.attributes).reduce((sum, value) => sum + value, 0);
+  state.freeAttributePoints = earned - validAllocated;
+  return previous !== JSON.stringify({ free: state.freeAttributePoints, attributes: state.attributes });
 }
 
 export function serializeGameState(state: GameState): string {

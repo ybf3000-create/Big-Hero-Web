@@ -433,6 +433,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.post("/api/v1/game/skill/unlock", async (request) => gameCommand(request, "skill_unlock"));
   app.post("/api/v1/game/skill/slot", async (request) => gameCommand(request, "skill_slot"));
   app.post("/api/v1/game/skill/cast", async (request) => gameCommand(request, "skill_cast"));
+  app.post("/api/v1/game/attributes/allocate", async (request) => gameCommand(request, "attribute_allocate"));
+  app.post("/api/v1/game/attributes/reset", async (request) => gameCommand(request, "attribute_reset"));
 
   app.get("/api/v1/auction/listings", async (request) => {
     const identity = authenticateRequest(request);

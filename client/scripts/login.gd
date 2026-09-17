@@ -205,15 +205,29 @@ func _on_character_action() -> void:
 			return
 		_show_character_entry()
 		return
-	_start_game(NetworkClient.character as Dictionary)
+	await _start_game(NetworkClient.character as Dictionary)
 
 
 func _start_game(server_character: Dictionary) -> void:
+	_set_busy(true)
+	var game_response: Dictionary = await NetworkClient.get_game_state()
+	_set_busy(false)
+	if not game_response.get("ok", false):
+		_show_response_error(game_response)
+		return
+	server_character = game_response.get("character", server_character) as Dictionary
+	var server_state: Dictionary = game_response.get("state", {}) as Dictionary
+	var attributes: Dictionary = server_state.get("attributes", {}) as Dictionary
 	var data := {
 		"character_name": str(server_character.get("name", "勇者")),
 		"level": int(server_character.get("level", 1)),
 		"exp": int(server_character.get("experience", 0)),
 		"gold": int(str(server_character.get("gold", "0"))),
+		"free_points": int(server_state.get("freeAttributePoints", 0)),
+		"stat_atk": int(attributes.get("attack", 0)),
+		"stat_def": int(attributes.get("defense", 0)),
+		"stat_spd": int(attributes.get("speed", 0)),
+		"stat_luk": int(attributes.get("luck", 0)),
 		"last_online": int(Time.get_unix_time_from_system()),
 	}
 	var main_scene := load("res://scenes/main_game.tscn") as PackedScene

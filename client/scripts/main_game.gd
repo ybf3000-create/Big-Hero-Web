@@ -48,6 +48,7 @@ var player_stat_atk: int = 0
 var player_stat_def: int = 0
 var player_stat_spd: int = 0
 var player_stat_luk: int = 0
+var _attribute_request_in_flight: bool = false
 var player_grid_index: int = 0
 var map_total_grids: int = 28
 var map_grids: Array[int] = []
@@ -1443,6 +1444,9 @@ func _add_exp(amount: int) -> void:
 
 ## 消耗自由属性点加点
 func _add_free_stat(stat_name: String) -> void:
+	if _is_network_game():
+		_add_network_free_stat(stat_name)
+		return
 	if player_free_points <= 0:
 		_show_float_text("没有可用属性点", Color(0.6, 0.6, 0.7))
 		return
@@ -1463,6 +1467,9 @@ func _add_free_stat(stat_name: String) -> void:
 
 ## 洗点：重置自由属性点
 func _reset_stats() -> void:
+	if _is_network_game():
+		_reset_network_stats()
+		return
 	var cost: int = player_level * 200
 	if player_gold < cost:
 		_show_float_text("金币不足！洗点需要 " + str(cost) + " 金", Color(1.0, 0.3, 0.3))
@@ -1481,6 +1488,70 @@ func _reset_stats() -> void:
 	player_stat_luk = 0
 	_show_float_text("洗点成功！消耗 " + str(cost) + " 金币，归还 " + str(total_used) + " 自由属性点", Color(0.3, 1.0, 0.6))
 	_refresh_all_stats_panels()
+
+
+func _is_network_game() -> bool:
+	return has_meta("network_character_id") and not str(get_meta("network_character_id", "")).is_empty()
+
+
+func _network_error_message(response: Dictionary) -> String:
+	var error: Dictionary = response.get("error", {}) as Dictionary
+	return str(error.get("message", "操作失败，请稍后重试"))
+
+
+func _apply_network_attribute_response(response: Dictionary) -> void:
+	var state: Dictionary = response.get("state", {}) as Dictionary
+	var attributes: Dictionary = state.get("attributes", {}) as Dictionary
+	var server_character: Dictionary = response.get("character", {}) as Dictionary
+	player_free_points = int(state.get("freeAttributePoints", player_free_points))
+	player_stat_atk = int(attributes.get("attack", player_stat_atk))
+	player_stat_def = int(attributes.get("defense", player_stat_def))
+	player_stat_spd = int(attributes.get("speed", player_stat_spd))
+	player_stat_luk = int(attributes.get("luck", player_stat_luk))
+	player_level = int(server_character.get("level", player_level))
+	player_exp = int(server_character.get("experience", player_exp))
+	player_gold = int(str(server_character.get("gold", player_gold)))
+	_refresh_all_stats_panels()
+
+
+func _add_network_free_stat(stat_name: String) -> void:
+	if _attribute_request_in_flight:
+		return
+	if player_free_points <= 0:
+		_show_float_text("没有可用属性点", Color(0.6, 0.6, 0.7))
+		return
+	_attribute_request_in_flight = true
+	var network_client := get_node_or_null("/root/NetworkClient")
+	var response: Dictionary = await network_client.call("allocate_attribute", stat_name) if network_client else {
+		"ok": false,
+		"error": {"message": "网络服务不可用，请重新登录"},
+	}
+	_attribute_request_in_flight = false
+	if not response.get("ok", false):
+		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
+		return
+	_apply_network_attribute_response(response)
+
+
+func _reset_network_stats() -> void:
+	if _attribute_request_in_flight:
+		return
+	_attribute_request_in_flight = true
+	var network_client := get_node_or_null("/root/NetworkClient")
+	var response: Dictionary = await network_client.call("reset_attributes") if network_client else {
+		"ok": false,
+		"error": {"message": "网络服务不可用，请重新登录"},
+	}
+	_attribute_request_in_flight = false
+	if not response.get("ok", false):
+		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
+		return
+	var event: Dictionary = response.get("event", {}) as Dictionary
+	_apply_network_attribute_response(response)
+	_show_float_text(
+		"洗点成功！消耗 %d 金币，归还 %d 自由属性点" % [int(event.get("price", 0)), int(event.get("returnedPoints", 0))],
+		Color(0.3, 1.0, 0.6)
+	)
 
 
 ## ============ 闪电跳跃 ============
