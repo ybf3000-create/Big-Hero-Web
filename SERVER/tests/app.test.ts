@@ -12,8 +12,10 @@ import type {
   CreateChatMessageInput,
   CreateCharacterInput,
   CreateSessionInput,
+  CreateRememberedLoginInput,
   GameRepository,
   RegisterAccountInput,
+  RotateRememberedLoginInput,
 } from "../src/repository.js";
 import { hashSecret, type PasswordHasher } from "../src/security.js";
 
@@ -34,6 +36,7 @@ class MemoryRepository implements GameRepository {
   readonly characters = new Map<string, CharacterSummary>();
   readonly creationRequests = new Map<string, CharacterSummary>();
   readonly sessions = new Map<string, CreateSessionInput>();
+  readonly remembered = new Map<string, CreateRememberedLoginInput>();
   failLoginAudit = false;
 
   async ping(): Promise<void> {}
@@ -78,6 +81,41 @@ class MemoryRepository implements GameRepository {
       }
     }
     this.sessions.set(input.id, input);
+  }
+
+  async createRememberedLogin(input: CreateRememberedLoginInput): Promise<void> {
+    await this.revokeAccountRememberedLogins(input.accountId);
+    this.remembered.set(input.tokenHash, input);
+  }
+
+  async findAccountForRememberedLogin(tokenHash: string, at: Date): Promise<AccountForLogin | null> {
+    const remembered = this.remembered.get(tokenHash);
+    if (!remembered || remembered.expiresAt <= at) return null;
+    return Array.from(this.accounts.values()).find((account) => account.id === remembered.accountId) ?? null;
+  }
+
+  async rotateRememberedLogin(input: RotateRememberedLoginInput): Promise<boolean> {
+    if (!this.remembered.delete(input.previousTokenHash)) return false;
+    this.remembered.set(input.tokenHash, input);
+    return true;
+  }
+
+  async revokeRememberedLogin(tokenHash: string): Promise<void> {
+    this.remembered.delete(tokenHash);
+  }
+
+  async revokeAccountRememberedLogins(accountId: string): Promise<void> {
+    for (const [hash, remembered] of this.remembered) {
+      if (remembered.accountId === accountId) this.remembered.delete(hash);
+    }
+  }
+
+  async updateAccountPassword(accountId: string, passwordHash: string): Promise<void> {
+    const account = Array.from(this.accounts.values()).find((value) => value.id === accountId);
+    assert.ok(account);
+    account.passwordHash = passwordHash;
+    account.mustChangePassword = false;
+    await this.revokeAccountRememberedLogins(accountId);
   }
 
   async touchSession(): Promise<void> {}
@@ -306,6 +344,77 @@ test("login audit failures do not change authentication results", async () => {
   assert.equal(rejected.statusCode, 401);
   assert.equal(rejected.json().error.code, "INVALID_CREDENTIALS");
 
+  await app.close();
+});
+
+test("remembered login restores without a password, rotates, and logout revokes it", async () => {
+  const repository = new MemoryRepository();
+  repository.invites.add(hashSecret("REMEMBERINVITE"));
+  const app = await buildApp({ repository, passwordHasher: new FakeHasher() });
+  const absent = await app.inject({ method: "POST", url: "/api/v1/auth/restore" });
+  assert.equal(absent.statusCode, 200);
+  assert.equal(absent.json().error.code, "NO_REMEMBERED_LOGIN");
+  assert.equal((await register(app, "REMEMBERINVITE", "Remember_Hero", "register_remember")).statusCode, 201);
+
+  const login = await app.inject({
+    method: "POST", url: "/api/v1/auth/login",
+    payload: { rules_version: "network-1", username: "remember_hero", password: "Good-password-2026", remember_login: true },
+  });
+  assert.equal(login.statusCode, 200);
+  const cookie = login.headers["set-cookie"] as string;
+  assert.match(cookie, /HttpOnly; SameSite=Strict/);
+  assert.doesNotMatch(cookie, /Good-password-2026/);
+  assert.equal(repository.remembered.size, 1);
+
+  const concurrent = await Promise.all([
+    app.inject({ method: "POST", url: "/api/v1/auth/restore", headers: { cookie } }),
+    app.inject({ method: "POST", url: "/api/v1/auth/restore", headers: { cookie } }),
+  ]);
+  assert.deepEqual(concurrent.map((response) => response.statusCode).sort(), [200, 401]);
+  const restored = concurrent.find((response) => response.statusCode === 200)!;
+  assert.equal(restored.json().account.username, "remember_hero");
+  const nextCookie = restored.headers["set-cookie"] as string;
+  assert.notEqual(nextCookie, cookie);
+  assert.equal((await app.inject({ method: "POST", url: "/api/v1/auth/restore", headers: { cookie } })).statusCode, 401);
+  assert.equal((await app.inject({
+    method: "GET", url: "/api/v1/characters/me",
+    headers: { authorization: `Bearer ${restored.json().session.token as string}` },
+  })).statusCode, 200);
+
+  const logout = await app.inject({
+    method: "POST", url: "/api/v1/auth/logout",
+    headers: { cookie: nextCookie, authorization: `Bearer ${restored.json().session.token as string}` },
+  });
+  assert.equal(logout.statusCode, 200);
+  assert.match(logout.headers["set-cookie"] as string, /Max-Age=0/);
+  assert.equal((await app.inject({ method: "POST", url: "/api/v1/auth/restore", headers: { cookie: nextCookie } })).statusCode, 401);
+  const staleSessionLogout = await app.inject({ method: "POST", url: "/api/v1/auth/logout", headers: { cookie: nextCookie } });
+  assert.equal(staleSessionLogout.statusCode, 200);
+  assert.match(staleSessionLogout.headers["set-cookie"] as string, /Max-Age=0/);
+  await app.close();
+});
+
+test("password changes invalidate remembered logins; a full server cannot restore another account", async () => {
+  const repository = new MemoryRepository();
+  repository.invites.add(hashSecret("FIRSTREMEMBER"));
+  repository.invites.add(hashSecret("SECONDREMEMBER"));
+  const app = await buildApp({ repository, passwordHasher: new FakeHasher(), maxOnlinePlayers: 1 });
+  await register(app, "FIRSTREMEMBER", "First_Remember", "register_first_remember");
+  await register(app, "SECONDREMEMBER", "Second_Remember", "register_second_remember");
+  const first = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: {
+    rules_version: "network-1", username: "first_remember", password: "Good-password-2026", remember_login: true,
+  } });
+  const firstCookie = first.headers["set-cookie"] as string;
+  const changed = await app.inject({ method: "POST", url: "/api/v1/auth/change-password", headers: {
+    cookie: firstCookie, authorization: `Bearer ${first.json().session.token as string}`,
+  }, payload: { rules_version: "network-1", password: "Different-password-2026", password_confirm: "Different-password-2026" } });
+  assert.equal(changed.statusCode, 200);
+  assert.equal((await app.inject({ method: "POST", url: "/api/v1/auth/restore", headers: { cookie: firstCookie } })).statusCode, 401);
+  const second = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: {
+    rules_version: "network-1", username: "second_remember", password: "Good-password-2026", remember_login: true,
+  } });
+  assert.equal(second.statusCode, 503);
+  assert.equal(repository.remembered.size, 0);
   await app.close();
 });
 

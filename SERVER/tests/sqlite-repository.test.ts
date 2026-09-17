@@ -43,7 +43,7 @@ test("SQLite migrations and durability settings are active", async (context) => 
   assert.ok(
     (repository.database.prepare(
       "SELECT count(*) AS count FROM schema_migrations",
-    ).get() as { count: number }).count >= 2,
+    ).get() as { count: number }).count >= 3,
   );
 });
 
@@ -156,6 +156,62 @@ test("SQLite enforces single-character and single-active-session rules", async (
   assert.equal(sessions[1]?.revoked_at, null);
 });
 
+test("SQLite stores only remembered-login hashes and invalidates them after password changes", async (context) => {
+  const { directory, repository } = await createTestRepository();
+  context.after(async () => {
+    await repository.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  const inviteHash = hashSecret("SQLITE-REMEMBER");
+  repository.insertInviteCode("invite-remember", inviteHash);
+  const account = await repository.registerAccount({
+    requestId: "sqlite_register_remember",
+    username: "remember_hero",
+    passwordHash: "hash:secret-password",
+    inviteCodeHash: inviteHash,
+  });
+  const issuedAt = new Date("2026-09-17T00:00:00.000Z");
+  const firstToken = "plain-remember-token";
+  await repository.createRememberedLogin({
+    id: "remember-first",
+    accountId: account.id,
+    tokenHash: hashSecret(firstToken),
+    createdAt: issuedAt,
+    expiresAt: new Date(issuedAt.getTime() + 30 * 24 * 60 * 60_000),
+  });
+  const stored = repository.database.prepare(
+    "SELECT token_hash FROM remembered_logins WHERE id = ?",
+  ).get("remember-first") as { token_hash: string };
+  assert.notEqual(stored.token_hash, firstToken);
+  assert.equal((await repository.findAccountForRememberedLogin(hashSecret(firstToken), issuedAt))?.id, account.id);
+
+  const secondToken = "rotated-remember-token";
+  assert.equal(await repository.rotateRememberedLogin({
+    id: "remember-second",
+    accountId: account.id,
+    previousTokenHash: hashSecret(firstToken),
+    tokenHash: hashSecret(secondToken),
+    createdAt: new Date(issuedAt.getTime() + 1_000),
+    expiresAt: new Date(issuedAt.getTime() + 30 * 24 * 60 * 60_000),
+  }), true);
+  assert.equal(await repository.findAccountForRememberedLogin(hashSecret(firstToken), issuedAt), null);
+  assert.equal((await repository.findAccountForRememberedLogin(hashSecret(secondToken), issuedAt))?.id, account.id);
+
+  const replacementToken = "replacement-remember-token";
+  await repository.createRememberedLogin({
+    id: "remember-replacement",
+    accountId: account.id,
+    tokenHash: hashSecret(replacementToken),
+    createdAt: new Date(issuedAt.getTime() + 2_000),
+    expiresAt: new Date(issuedAt.getTime() + 30 * 24 * 60 * 60_000),
+  });
+  assert.equal(await repository.findAccountForRememberedLogin(hashSecret(secondToken), issuedAt), null);
+  assert.equal((await repository.findAccountForRememberedLogin(hashSecret(replacementToken), issuedAt))?.id, account.id);
+
+  await repository.updateAccountPassword(account.id, "hash:new-password");
+  assert.equal(await repository.findAccountForRememberedLogin(hashSecret(replacementToken), issuedAt), null);
+});
+
 test("SQLite chat persists messages, supports retries, and honors mutes", async (context) => {
   const { directory, repository } = await createTestRepository();
   context.after(async () => {
@@ -205,4 +261,36 @@ test("SQLite chat persists messages, supports retries, and honors mutes", async 
     }),
     appErrorCode("CHAT_MUTED"),
   );
+});
+
+test("local admin enforces 72-hour limits, temporary passwords and auction-safe deletion", async (context) => {
+  const { directory, repository } = await createTestRepository();
+  context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
+  const inviteHash = hashSecret("ADMIN-TEST");
+  repository.insertInviteCode("admin-invite", inviteHash);
+  const account = await repository.registerAccount({ requestId: "admin_register", username: "admin_hero", passwordHash: "old-hash", inviteCodeHash: inviteHash });
+  const hero = await repository.createCharacter({ id: "admin-character", requestId: "admin_create", accountId: account.id, displayName: "管理测试", normalizedName: "管理测试" });
+  assert.throws(() => repository.setBanForAdmin(account.username, 73, "over limit"), /1至72/);
+  assert.throws(() => repository.setMuteForAdmin(account.username, 0, "under limit"), /1至72/);
+  repository.setBanForAdmin(account.username, 72, "test");
+  assert.equal((await repository.findAccountForLogin(account.username))?.status, "banned");
+  repository.setBanForAdmin(account.username, null, "cleared");
+  repository.setMuteForAdmin(account.username, 1, "test");
+  await assert.rejects(repository.createChatMessage({ accountId: account.id, body: "禁言中", clientMessageId: "admin_mute_01" }), appErrorCode("CHAT_MUTED"));
+  repository.setMuteForAdmin(account.username, null, "cleared");
+  await repository.resetPasswordForAdmin(account.username, "temporary-hash");
+  assert.equal((await repository.findAccountForLogin(account.username))?.mustChangePassword, true);
+  await repository.updateAccountPassword(account.id, "new-hash");
+  assert.equal((await repository.findAccountForLogin(account.username))?.mustChangePassword, false);
+  const state = await repository.getGameState(hero.id);
+  state.inventory.push({ itemId: 6, count: 1 });
+  repository.database.prepare("UPDATE character_states SET state_json = ? WHERE character_id = ?").run(JSON.stringify(state), hero.id);
+  const listing = await repository.createAuctionListing({ characterId: hero.id, requestId: "admin_listing", itemKind: "item", itemId: 6, itemCount: 1, buyoutPrice: 100, durationHours: 24 });
+  assert.throws(() => repository.deleteAccountForAdmin(account.username, "test"), /未领取的拍卖订单/);
+  assert.equal((await repository.findAccountForLogin(account.username))?.status, "normal");
+  await repository.cancelAuctionListing(hero.id, listing.id);
+  await repository.claimAuctionListing(hero.id, listing.id);
+  repository.deleteAccountForAdmin(account.username, "test");
+  assert.equal((await repository.findAccountForLogin(account.username))?.status, "deleted");
+  assert.equal(await repository.getCharacter(account.id), null);
 });

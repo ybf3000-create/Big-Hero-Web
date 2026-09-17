@@ -3,6 +3,7 @@ import { EQUIPMENT_SLOTS, MAP_BASE, itemById } from "./game-catalog.js";
 export interface InventoryStack {
   itemId: number;
   count: number;
+  bound?: boolean;
 }
 
 export interface EquipmentItem {
@@ -15,6 +16,18 @@ export interface EquipmentItem {
   mainValue: number;
   locked: boolean;
   bound: boolean;
+  baseName?: string;
+  icon?: string;
+  iconPath?: string;
+  slotTypeId?: number;
+  affixes?: Array<{ name: string; type: string; value: number; display: string }>;
+  gems?: Array<number | { id: number; level?: number }>;
+  gemSlots?: number;
+  initialGemSlots?: number;
+  acquiredAt?: number;
+  suitName?: string;
+  extraSuitName?: string;
+  setAffixes?: Array<{ name: string; type: string; description?: string }>;
 }
 
 export interface GameStats {
@@ -23,7 +36,16 @@ export interface GameStats {
   maxHp: number;
   speed: number;
   crit: number;
+  critDamage: number;
+  hit: number;
+  dodge: number;
+  block: number;
   skillDamage: number;
+  cooldownReduction: number;
+  lifesteal: number;
+  luck: number;
+  goldBonus: number;
+  experienceBonus: number;
 }
 
 export interface FreeAttributes {
@@ -47,6 +69,7 @@ export interface GameState {
   lastDiceRoll: number | null;
   lastDiceSuit: number | null;
   diceHistory: number[];
+  pokerRecords: Array<{ value: number; suit: number }>;
   inventory: InventoryStack[];
   inventoryCapacity: number;
   inventoryExpansionCount: number;
@@ -55,16 +78,31 @@ export interface GameState {
   equipmentExpansionCount: number;
   equipped: Record<string, string | null>;
   slotEnhance: Record<string, number>;
-  gemBag: Array<{ gemId: number; count: number }>;
+  gemBag: Array<{ gemId: number; level?: number; count: number; bound?: boolean }>;
   lotteryTickets: number;
+  lotteryTicketNumbers: number[];
+  lotteryLastDrawLap: number;
   skills: number[];
   skillSlots: number[];
+  skillPriorities: Record<string, number>;
   buffs: Record<string, number>;
   bossTier: number;
   bossIndex: number;
   weather: string;
+  weatherRollCount: number;
+  weatherRollTarget: number;
+  weatherSunnyBuffer: number;
+  nextRollModifier: number;
+  hibernateLaps: number;
+  deityBuffs: Array<Record<string, unknown>>;
+  dismantleEssence: number;
+  autoDismantleEnabled: boolean;
+  autoDismantleRules: Record<string, unknown>;
+  lastGoldPerHour: number;
+  lastExpPerHour: number;
+  lastOnline: number;
   completedLaps: number;
-  activeBattle: null;
+  activeBattle: null | Record<string, unknown>;
 }
 
 export function defaultGameState(): GameState {
@@ -80,7 +118,7 @@ export function defaultGameState(): GameState {
     maxHp: 500,
     reviveCoins: 3,
     // 与Godot新档一致：等级1白值，不预发装备或消耗品。
-    stats: { attack: 25, defense: 15, maxHp: 500, speed: 0, crit: 0, skillDamage: 0 },
+    stats: { attack: 25, defense: 15, maxHp: 500, speed: 0, crit: 0, critDamage: 150, hit: 0, dodge: 0, block: 0, skillDamage: 0, cooldownReduction: 0, lifesteal: 0, luck: 0, goldBonus: 0, experienceBonus: 0 },
     freeAttributePoints: 0,
     attributes: { attack: 0, defense: 0, speed: 0, luck: 0 },
     gridIndex: 0,
@@ -89,6 +127,7 @@ export function defaultGameState(): GameState {
     lastDiceRoll: null,
     lastDiceSuit: null,
     diceHistory: [],
+    pokerRecords: [],
     inventory: [],
     inventoryCapacity: 100,
     inventoryExpansionCount: 0,
@@ -99,12 +138,27 @@ export function defaultGameState(): GameState {
     slotEnhance,
     gemBag: [],
     lotteryTickets: 0,
+    lotteryTicketNumbers: [],
+    lotteryLastDrawLap: 0,
     skills: [1, 22],
     skillSlots: [1, 22],
+    skillPriorities: { "1": 2, "22": 2 },
     buffs: {},
-    bossTier: 1,
-    bossIndex: 0,
-    weather: "晴朗",
+    bossTier: 0,
+    bossIndex: 1,
+    weather: "sunny",
+    weatherRollCount: 0,
+    weatherRollTarget: 8,
+    weatherSunnyBuffer: 10,
+    nextRollModifier: 0,
+    hibernateLaps: 0,
+    deityBuffs: [],
+    dismantleEssence: 0,
+    autoDismantleEnabled: false,
+    autoDismantleRules: {},
+    lastGoldPerHour: 0,
+    lastExpPerHour: 0,
+    lastOnline: Date.now(),
     completedLaps: 0,
     activeBattle: null,
   };
@@ -116,7 +170,7 @@ export function parseGameState(value: string | null | undefined): GameState {
     const parsed = JSON.parse(value) as Partial<GameState>;
     const fallback = defaultGameState();
     if (parsed.version !== 1 || !Array.isArray(parsed.inventory) || !Array.isArray(parsed.equipmentBag)) return fallback;
-    return {
+    const state = {
       ...fallback,
       ...parsed,
       stats: { ...fallback.stats, ...(parsed.stats ?? {}) },
@@ -124,7 +178,22 @@ export function parseGameState(value: string | null | undefined): GameState {
       equipped: { ...fallback.equipped, ...(parsed.equipped ?? {}) },
       slotEnhance: { ...fallback.slotEnhance, ...(parsed.slotEnhance ?? {}) },
       mapGrids: Array.isArray(parsed.mapGrids) && parsed.mapGrids.length > 0 ? parsed.mapGrids : fallback.mapGrids,
+      pokerRecords: Array.isArray(parsed.pokerRecords) ? parsed.pokerRecords : fallback.pokerRecords,
+      lotteryTicketNumbers: Array.isArray(parsed.lotteryTicketNumbers) ? parsed.lotteryTicketNumbers : fallback.lotteryTicketNumbers,
+      deityBuffs: Array.isArray(parsed.deityBuffs) ? parsed.deityBuffs : fallback.deityBuffs,
+      autoDismantleRules: parsed.autoDismantleRules && typeof parsed.autoDismantleRules === "object" && !Array.isArray(parsed.autoDismantleRules)
+        ? parsed.autoDismantleRules
+        : fallback.autoDismantleRules,
+      skillPriorities: parsed.skillPriorities && typeof parsed.skillPriorities === "object" && !Array.isArray(parsed.skillPriorities)
+        ? parsed.skillPriorities
+        : fallback.skillPriorities,
     } as GameState;
+    state.mapTotalGrids = Math.max(1, Math.min(128, Math.floor(Number(state.mapTotalGrids) || fallback.mapTotalGrids)));
+    state.mapGrids = state.mapGrids.map((entry) => Number.isInteger(entry) ? entry : 1).slice(0, state.mapTotalGrids);
+    while (state.mapGrids.length < state.mapTotalGrids) state.mapGrids.push(1);
+    state.bossTier = Math.max(0, Math.min(200, Math.floor(Number(state.bossTier) || 0)));
+    state.bossIndex = Math.max(1, Math.min(200, Math.floor(Number(state.bossIndex) || state.bossTier + 1)));
+    return state;
   } catch {
     return defaultGameState();
   }
@@ -165,15 +234,15 @@ export function inventoryCount(state: GameState): number {
   return state.inventory.length;
 }
 
-export function addItem(state: GameState, itemId: number, count: number): boolean {
+export function addItem(state: GameState, itemId: number, count: number, bound = false): boolean {
   if (!Number.isInteger(itemId) || !Number.isInteger(count) || count < 1) return false;
   const stackMax = itemById(itemId)?.stackMax ?? 1;
-  const room = state.inventory.filter((stack) => stack.itemId === itemId).reduce((sum, stack) => sum + Math.max(0, stackMax - stack.count), 0)
+  const room = state.inventory.filter((stack) => stack.itemId === itemId && Boolean(stack.bound) === bound).reduce((sum, stack) => sum + Math.max(0, stackMax - stack.count), 0)
     + Math.max(0, state.inventoryCapacity - state.inventory.length) * stackMax;
   if (room < count) return false;
   let remaining = count;
   for (const stack of state.inventory) {
-    if (stack.itemId !== itemId || stack.count >= stackMax) continue;
+    if (stack.itemId !== itemId || Boolean(stack.bound) !== bound || stack.count >= stackMax) continue;
     const taken = Math.min(remaining, stackMax - stack.count);
     stack.count += taken;
     remaining -= taken;
@@ -181,7 +250,7 @@ export function addItem(state: GameState, itemId: number, count: number): boolea
   }
   while (remaining > 0) {
     const taken = Math.min(remaining, stackMax);
-    state.inventory.push({ itemId, count: taken });
+    state.inventory.push({ itemId, count: taken, ...(bound ? { bound: true } : {}) });
     remaining -= taken;
   }
   return true;
@@ -200,8 +269,41 @@ export function removeItem(state: GameState, itemId: number, count: number): boo
   return true;
 }
 
-export function recalculateStats(state: GameState): void {
-  const base = { attack: 25, defense: 15, maxHp: 500, speed: 0, crit: 0, skillDamage: 0 };
+export function removeTradableItem(state: GameState, itemId: number, count: number): boolean {
+  if (state.inventory.filter((entry) => entry.itemId === itemId && !entry.bound).reduce((sum, entry) => sum + entry.count, 0) < count) return false;
+  let remaining = count;
+  for (const stack of state.inventory) {
+    if (stack.itemId !== itemId || stack.bound || remaining === 0) continue;
+    const taken = Math.min(remaining, stack.count);
+    stack.count -= taken;
+    remaining -= taken;
+  }
+  state.inventory = state.inventory.filter((entry) => entry.count > 0);
+  return true;
+}
+
+export function recalculateStats(state: GameState, level = 1): void {
+  const safeLevel = Math.max(1, Math.min(100, Math.floor(level)));
+  const rawAttack = 25 + (safeLevel - 1) * 2;
+  const rawDefense = 15 + (safeLevel - 1);
+  const rawMaxHp = 500 + (safeLevel - 1) * 80;
+  const base = {
+    attack: rawAttack,
+    defense: rawDefense,
+    maxHp: rawMaxHp,
+    speed: 0,
+    crit: 0,
+    critDamage: 150,
+    hit: 0,
+    dodge: 0,
+    block: 0,
+    skillDamage: 0,
+    cooldownReduction: 0,
+    lifesteal: 0,
+    luck: state.attributes.luck,
+    goldBonus: 0,
+    experienceBonus: 0,
+  };
   for (const itemId of Object.values(state.equipped)) {
     if (!itemId) continue;
     const item = state.equipmentBag.find((entry) => entry.id === itemId);
@@ -212,7 +314,40 @@ export function recalculateStats(state: GameState): void {
     if (item.mainStat === "生命值") base.maxHp += value;
     if (item.mainStat === "速度") base.speed += value;
     if (item.mainStat === "暴击率") base.crit += value;
+    if (item.mainStat === "闪避率") base.dodge += value;
+    if (item.mainStat === "格挡率") base.block += value;
     if (item.mainStat === "技能伤害") base.skillDamage += value;
+    for (const affix of item.affixes ?? []) {
+      if (affix.name === "攻击%") base.attack += Math.floor(rawAttack * affix.value / 100);
+      if (affix.name === "攻击(数值)") base.attack += Math.floor(affix.value);
+      if (affix.name === "防御%") base.defense += Math.floor(rawDefense * affix.value / 100);
+      if (affix.name === "防御(数值)") base.defense += Math.floor(affix.value);
+      if (affix.name === "生命%") base.maxHp += Math.floor(rawMaxHp * affix.value / 100);
+      if (affix.name === "速度") base.speed += affix.value;
+      if (affix.name === "幸运") base.luck += affix.value;
+      if (affix.name === "暴击率") base.crit += affix.value;
+      if (affix.name === "暴击伤害") base.critDamage += affix.value;
+      if (affix.name === "技能伤害") base.skillDamage += affix.value;
+      if (affix.name === "命中") base.hit += affix.value;
+      if (affix.name === "闪避率") base.dodge += affix.value;
+      if (affix.name === "格挡率") base.block += affix.value;
+      if (affix.name === "冷却缩减") base.cooldownReduction += affix.value;
+      if (affix.name === "吸血") base.lifesteal += affix.value;
+      if (affix.name === "金币加成") base.goldBonus += affix.value;
+      if (affix.name === "经验加成") base.experienceBonus += affix.value;
+    }
+    for (const rawGem of item.gems ?? []) {
+      const gemId = typeof rawGem === "number" ? rawGem : rawGem.id;
+      const gemLevel = typeof rawGem === "number" ? 1 : Math.max(1, Math.floor(rawGem.level ?? 1));
+      if (gemId === 1) base.attack += 10 * gemLevel;
+      if (gemId === 2) base.defense += 10 * gemLevel;
+      if (gemId === 3) base.maxHp += 50 * gemLevel;
+      if (gemId === 4) base.crit += 0.5 * gemLevel;
+      if (gemId === 5) base.skillDamage += 0.5 * gemLevel;
+      if (gemId === 6) base.hit += 0.5 * gemLevel;
+      if (gemId === 7) base.critDamage += 2 * gemLevel;
+      if (gemId === 8) base.block += 0.5 * gemLevel;
+    }
   }
   state.stats = base;
   state.maxHp = base.maxHp;

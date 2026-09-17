@@ -3,6 +3,9 @@ extends Node
 signal realtime_authenticated
 signal realtime_disconnected(message: String)
 signal kicked(message: String)
+signal chat_history_received(messages: Array)
+signal chat_message_received(message: Dictionary)
+signal chat_error(message: String)
 
 const RULES_VERSION := "network-1"
 const DESKTOP_SERVER_URL := "http://127.0.0.1:3000"
@@ -13,9 +16,8 @@ var session_token := ""
 var session_id := ""
 var account: Dictionary = {}
 var character: Variant = null
+var offline_reward: Variant = null
 
-var _http: HTTPRequest
-var _request_in_flight := false
 var _websocket := WebSocketPeer.new()
 var _websocket_authenticated := false
 var _authentication_sent := false
@@ -26,9 +28,6 @@ var _should_reconnect := false
 
 
 func _ready() -> void:
-	_http = HTTPRequest.new()
-	_http.timeout = 8.0
-	add_child(_http)
 	set_process(true)
 
 
@@ -47,7 +46,7 @@ func register_account(username: String, password: String, password_confirm: Stri
 	)
 
 
-func login(username: String, password: String) -> Dictionary:
+func login(username: String, password: String, remember_login := false) -> Dictionary:
 	var response := await _request_json(
 		"/api/v1/auth/login",
 		HTTPClient.METHOD_POST,
@@ -55,16 +54,31 @@ func login(username: String, password: String) -> Dictionary:
 			"rules_version": RULES_VERSION,
 			"username": username,
 			"password": password,
+			"remember_login": remember_login,
 		}
 	)
 	if response.get("ok", false):
-		var session: Dictionary = response.get("session", {})
-		session_token = str(session.get("token", ""))
-		session_id = str(session.get("id", ""))
-		account = response.get("account", {})
-		character = response.get("character")
-		_connect_realtime()
+		_accept_login(response)
 	return response
+
+
+func restore_login() -> Dictionary:
+	if not OS.has_feature("web"):
+		return _error_response("SESSION_INVALID", "请重新登录")
+	var response := await _request_json("/api/v1/auth/restore", HTTPClient.METHOD_POST, {})
+	if response.get("ok", false):
+		_accept_login(response)
+	return response
+
+
+func _accept_login(response: Dictionary) -> void:
+	var session: Dictionary = response.get("session", {})
+	session_token = str(session.get("token", ""))
+	session_id = str(session.get("id", ""))
+	account = response.get("account", {})
+	character = response.get("character")
+	offline_reward = response.get("offline_reward")
+	_connect_realtime()
 
 
 func create_character(character_name: String) -> Dictionary:
@@ -116,6 +130,82 @@ func reset_attributes() -> Dictionary:
 	)
 
 
+func change_password(password: String, password_confirm: String) -> Dictionary:
+	var response := await _request_json(
+		"/api/v1/auth/change-password",
+		HTTPClient.METHOD_POST,
+		{
+			"rules_version": RULES_VERSION,
+			"password": password,
+			"password_confirm": password_confirm,
+		},
+		true
+	)
+	if response.get("ok", false):
+		account["must_change_password"] = false
+	return response
+
+
+func execute_game_command(path: String, payload: Dictionary = {}) -> Dictionary:
+	return await _request_json(
+		"/api/v1/game/" + path.trim_prefix("/"),
+		HTTPClient.METHOD_POST,
+		{
+			"request_id": create_request_id(),
+			"rules_version": RULES_VERSION,
+			"payload": payload,
+		},
+		true
+	)
+
+
+func get_world_chat(limit := 50) -> Dictionary:
+	return await _request_json("/api/v1/chat/world?limit=" + str(clampi(limit, 1, 100)), HTTPClient.METHOD_GET, {}, true)
+
+
+func send_world_chat(body: String) -> bool:
+	if not _websocket_authenticated or body.strip_edges().is_empty():
+		return false
+	return _websocket.send_text(JSON.stringify({
+		"type": "chat_send",
+		"body": body.strip_edges(),
+		"client_message_id": create_request_id(),
+	})) == OK
+
+
+func get_auction_listings(limit := 50) -> Dictionary:
+	return await _request_json("/api/v1/auction/listings?limit=" + str(clampi(limit, 1, 100)), HTTPClient.METHOD_GET, {}, true)
+
+
+func get_my_auction_listings() -> Dictionary:
+	return await _request_json("/api/v1/auction/mine", HTTPClient.METHOD_GET, {}, true)
+
+
+func create_auction_listing(item_kind: String, item_id: Variant, item_count: int, buyout_price: int, duration_hours: int, item_level: int = 1) -> Dictionary:
+	var payload := {
+		"request_id": create_request_id(), "rules_version": RULES_VERSION,
+		"item_kind": item_kind, "item_id": item_id, "item_count": item_count,
+		"buyout_price": buyout_price, "duration_hours": duration_hours,
+	}
+	if item_kind == "gem":
+		payload["item_level"] = item_level
+	return await _request_json("/api/v1/auction/list", HTTPClient.METHOD_POST, payload, true)
+
+
+func buy_auction_listing(listing_id: String) -> Dictionary:
+	return await _request_json("/api/v1/auction/buy", HTTPClient.METHOD_POST, {
+		"request_id": create_request_id(), "rules_version": RULES_VERSION, "listing_id": listing_id,
+	}, true)
+
+
+func cancel_auction_listing(listing_id: String) -> Dictionary:
+	return await _request_json("/api/v1/auction/cancel", HTTPClient.METHOD_POST, {"listing_id": listing_id}, true)
+
+
+func claim_auction_listing(listing_id: String) -> Dictionary:
+	return await _request_json("/api/v1/auction/claim", HTTPClient.METHOD_POST, {"listing_id": listing_id}, true)
+
+
 func logout() -> void:
 	_should_reconnect = false
 	if not session_token.is_empty():
@@ -126,6 +216,7 @@ func logout() -> void:
 	session_id = ""
 	account.clear()
 	character = null
+	offline_reward = null
 	_websocket_authenticated = false
 
 
@@ -134,30 +225,28 @@ func create_request_id() -> String:
 
 
 func _request_json(path: String, method: HTTPClient.Method, payload: Dictionary, authenticated := false) -> Dictionary:
-	if _request_in_flight:
-		return _error_response("REQUEST_IN_PROGRESS", "上一项操作仍在处理中")
-	_request_in_flight = true
-
 	var headers := PackedStringArray(["Content-Type: application/json"])
 	if authenticated:
 		if session_token.is_empty():
-			_request_in_flight = false
 			return _error_response("SESSION_INVALID", "登录已失效，请重新登录")
 		headers.append("Authorization: Bearer " + session_token)
 
+	var http := HTTPRequest.new()
+	http.timeout = 8.0
+	add_child(http)
 	var request_body := "" if method == HTTPClient.METHOD_GET else JSON.stringify(payload)
-	var request_error := _http.request(
+	var request_error := http.request(
 		_api_base_url() + path,
 		headers,
 		method,
 		request_body
 	)
 	if request_error != OK:
-		_request_in_flight = false
+		http.queue_free()
 		return _error_response("NETWORK_ERROR", "无法连接服务器")
 
-	var completed: Array = await _http.request_completed
-	_request_in_flight = false
+	var completed: Array = await http.request_completed
+	http.queue_free()
 	var result := int(completed[0])
 	var response_code := int(completed[1])
 	var response_body := completed[3] as PackedByteArray
@@ -236,6 +325,12 @@ func _handle_realtime_message(text: String) -> void:
 			realtime_authenticated.emit()
 		"heartbeat_ack":
 			pass
+		"chat_history":
+			chat_history_received.emit(data.get("messages", []))
+		"chat_message":
+			var chat_message: Variant = data.get("message", {})
+			if chat_message is Dictionary:
+				chat_message_received.emit(chat_message as Dictionary)
 		"error":
 			var code := str(data.get("code", ""))
 			var detail := str(data.get("message", "连接已结束"))
@@ -243,6 +338,8 @@ func _handle_realtime_message(text: String) -> void:
 				_should_reconnect = false
 				session_token = ""
 				kicked.emit(detail)
+			elif code.begins_with("CHAT_"):
+				chat_error.emit(detail)
 
 
 func _api_base_url() -> String:

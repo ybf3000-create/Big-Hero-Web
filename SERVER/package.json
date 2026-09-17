@@ -13,6 +13,7 @@
     "migrate": "tsx src/migrate.ts",
     "backup": "tsx src/backup.ts",
     "invite:create": "tsx src/create-invites.ts",
+    "admin": "tsx src/admin-tool.ts",
     "test": "node --import tsx --test tests/**/*.test.ts",
     "web:patch": "node ../client/tools/patch-web-export.mjs",
     "web:check": "node ../client/tools/patch-web-export.mjs --check",

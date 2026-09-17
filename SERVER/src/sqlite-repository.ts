@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { AppError } from "./errors.js";
 import { applyGameCommand, createInitialGameState } from "./game-engine.js";
-import { addItem, parseGameState, reconcileAttributePoints, removeItem, serializeGameState, type EquipmentItem, type GameState } from "./game-state.js";
+import { addItem, parseGameState, reconcileAttributePoints, removeTradableItem, serializeGameState, type EquipmentItem, type GameState } from "./game-state.js";
 import type {
   AccountForLogin,
   AccountSummary,
@@ -11,11 +11,14 @@ import type {
   CreateChatMessageInput,
   CreateCharacterInput,
   CreateSessionInput,
+  CreateRememberedLoginInput,
   GameRepository,
   AuctionListing,
   CreateAuctionInput,
   GameCommandInput,
+  OfflineProgressResult,
   RegisterAccountInput,
+  RotateRememberedLoginInput,
 } from "./repository.js";
 import { openSqliteDatabase } from "./sqlite-database.js";
 
@@ -193,12 +196,113 @@ export class SqliteRepository implements GameRepository {
     create.immediate(input);
   }
 
-  async touchSession(sessionId: string, at: Date, idleExpiresAt: Date): Promise<void> {
+  async createRememberedLogin(input: CreateRememberedLoginInput): Promise<void> {
+    const create = this.database.transaction((value: CreateRememberedLoginInput) => {
+      this.database.prepare(
+        `UPDATE remembered_logins
+            SET revoked_at = ?, revoke_reason = 'replaced_by_new_remembered_login'
+          WHERE account_id = ? AND revoked_at IS NULL`,
+      ).run(value.createdAt.getTime(), value.accountId);
+      this.database.prepare(
+        `INSERT INTO remembered_logins (
+           id, token_hash, account_id, created_at, last_used_at, expires_at
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(
+        value.id,
+        value.tokenHash,
+        value.accountId,
+        value.createdAt.getTime(),
+        value.createdAt.getTime(),
+        value.expiresAt.getTime(),
+      );
+    });
+    create.immediate(input);
+  }
+
+  async findAccountForRememberedLogin(tokenHash: string, at: Date): Promise<AccountForLogin | null> {
+    const row = this.database.prepare(
+      `SELECT a.id, a.username, a.password_hash, a.status, a.banned_until,
+              a.must_change_password
+         FROM remembered_logins r
+         JOIN accounts a ON a.id = r.account_id
+        WHERE r.token_hash = ?
+          AND r.revoked_at IS NULL
+          AND r.expires_at > ?
+          AND a.status != 'deleted'`,
+    ).get(tokenHash, at.getTime()) as Record<string, unknown> | undefined;
+    return row ? accountFromRow(row) : null;
+  }
+
+  async rotateRememberedLogin(input: RotateRememberedLoginInput): Promise<boolean> {
+    const rotate = this.database.transaction((value: RotateRememberedLoginInput) => {
+      const revoked = this.database.prepare(
+        `UPDATE remembered_logins
+            SET revoked_at = ?, revoke_reason = 'rotated'
+          WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?`,
+      ).run(
+        value.createdAt.getTime(),
+        value.previousTokenHash,
+        value.createdAt.getTime(),
+      );
+      if (revoked.changes !== 1) return false;
+      this.database.prepare(
+        `INSERT INTO remembered_logins (
+           id, token_hash, account_id, created_at, last_used_at, expires_at
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(
+        value.id,
+        value.tokenHash,
+        value.accountId,
+        value.createdAt.getTime(),
+        value.createdAt.getTime(),
+        value.expiresAt.getTime(),
+      );
+      return true;
+    });
+    return rotate.immediate(input);
+  }
+
+  async revokeRememberedLogin(tokenHash: string, at: Date, reason: string): Promise<void> {
     this.database.prepare(
-      `UPDATE sessions
-          SET last_seen_at = ?, idle_expires_at = ?
-        WHERE id = ? AND revoked_at IS NULL`,
-    ).run(at.getTime(), idleExpiresAt.getTime(), sessionId);
+      `UPDATE remembered_logins
+          SET revoked_at = COALESCE(revoked_at, ?),
+              revoke_reason = COALESCE(revoke_reason, ?)
+        WHERE token_hash = ?`,
+    ).run(at.getTime(), reason, tokenHash);
+  }
+
+  async revokeAccountRememberedLogins(accountId: string, at: Date, reason: string): Promise<void> {
+    this.database.prepare(
+      `UPDATE remembered_logins
+          SET revoked_at = COALESCE(revoked_at, ?),
+              revoke_reason = COALESCE(revoke_reason, ?)
+        WHERE account_id = ? AND revoked_at IS NULL`,
+    ).run(at.getTime(), reason, accountId);
+  }
+
+  async touchSession(sessionId: string, at: Date, idleExpiresAt: Date): Promise<void> {
+    const touch = this.database.transaction(() => {
+      this.database.prepare(
+        `UPDATE sessions
+            SET last_seen_at = ?, idle_expires_at = ?
+          WHERE id = ? AND revoked_at IS NULL`,
+      ).run(at.getTime(), idleExpiresAt.getTime(), sessionId);
+      const row = this.database.prepare(
+        `SELECT cs.character_id, cs.state_json
+           FROM sessions s
+           JOIN characters c ON c.account_id = s.account_id AND c.deleted_at IS NULL
+           JOIN character_states cs ON cs.character_id = c.id
+          WHERE s.id = ? AND s.revoked_at IS NULL`,
+      ).get(sessionId) as { character_id: string; state_json: string } | undefined;
+      if (row) {
+        const state = parseGameState(row.state_json);
+        state.lastOnline = at.getTime();
+        this.database.prepare(
+          `UPDATE character_states SET state_json = ?, updated_at = ? WHERE character_id = ?`,
+        ).run(serializeGameState(state), at.getTime(), row.character_id);
+      }
+    });
+    touch.immediate();
   }
 
   async revokeSession(sessionId: string, at: Date, reason: string): Promise<void> {
@@ -217,6 +321,149 @@ export class SqliteRepository implements GameRepository {
               revoke_reason = COALESCE(revoke_reason, ?)
         WHERE account_id = ? AND revoked_at IS NULL`,
     ).run(at.getTime(), reason, accountId);
+  }
+
+  async updateAccountPassword(accountId: string, passwordHash: string): Promise<void> {
+    const update = this.database.transaction(() => {
+      const result = this.database.prepare(
+        `UPDATE accounts SET password_hash = ?, must_change_password = 0
+          WHERE id = ? AND status != 'deleted'`,
+      ).run(passwordHash, accountId);
+      if (result.changes !== 1) throw new AppError("ACCOUNT_NOT_FOUND", 404, "账号不存在");
+      this.database.prepare(
+        `UPDATE remembered_logins
+            SET revoked_at = COALESCE(revoked_at, ?),
+                revoke_reason = COALESCE(revoke_reason, 'password_changed')
+          WHERE account_id = ? AND revoked_at IS NULL`,
+      ).run(Date.now(), accountId);
+      this.database.prepare(
+        `INSERT INTO audit_events (event_type, target_account_id, details)
+         VALUES ('account.password_changed', ?, '{}')`,
+      ).run(accountId);
+    });
+    update.immediate();
+  }
+
+  listAccountsForAdmin(): Array<{ username: string; status: string; bannedUntil: number | null; mutedUntil: number | null; characterName: string | null }> {
+    return this.database.prepare(
+      `SELECT a.username, a.status, a.banned_until AS bannedUntil,
+              MAX(CASE WHEN m.revoked_at IS NULL AND m.ends_at > ? THEN m.ends_at END) AS mutedUntil,
+              c.display_name AS characterName
+         FROM accounts a
+         LEFT JOIN characters c ON c.account_id = a.id AND c.deleted_at IS NULL
+         LEFT JOIN chat_mutes m ON m.account_id = a.id
+        GROUP BY a.id
+        ORDER BY a.created_at`,
+    ).all(Date.now()) as Array<{ username: string; status: string; bannedUntil: number | null; mutedUntil: number | null; characterName: string | null }>;
+  }
+
+  async resetPasswordForAdmin(username: string, passwordHash: string, at = new Date()): Promise<void> {
+    const reset = this.database.transaction(() => {
+      const account = this.database.prepare(
+        `SELECT id FROM accounts WHERE username_normalized = ? AND status != 'deleted'`,
+      ).get(username) as { id: string } | undefined;
+      if (!account) throw new AppError("ACCOUNT_NOT_FOUND", 404, "账号不存在");
+      this.database.prepare(
+        `UPDATE accounts SET password_hash = ?, must_change_password = 1 WHERE id = ?`,
+      ).run(passwordHash, account.id);
+      this.database.prepare(
+        `UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?), revoke_reason = COALESCE(revoke_reason, 'admin_password_reset')
+          WHERE account_id = ? AND revoked_at IS NULL`,
+      ).run(at.getTime(), account.id);
+      this.database.prepare(
+        `UPDATE remembered_logins SET revoked_at = COALESCE(revoked_at, ?), revoke_reason = COALESCE(revoke_reason, 'admin_password_reset')
+          WHERE account_id = ? AND revoked_at IS NULL`,
+      ).run(at.getTime(), account.id);
+      this.database.prepare(
+        `INSERT INTO audit_events (event_type, target_account_id, details)
+         VALUES ('account.password_reset', ?, '{}')`,
+      ).run(account.id);
+    });
+    reset.immediate();
+  }
+
+  setBanForAdmin(username: string, hours: number | null, reason: string, at = new Date()): void {
+    if (hours !== null && (!Number.isInteger(hours) || hours < 1 || hours > 72)) throw new Error("封号时长需为1至72小时");
+    const change = this.database.transaction(() => {
+      const account = this.database.prepare(
+        `SELECT id FROM accounts WHERE username_normalized = ? AND status != 'deleted'`,
+      ).get(username) as { id: string } | undefined;
+      if (!account) throw new AppError("ACCOUNT_NOT_FOUND", 404, "账号不存在");
+      const until = hours === null ? null : at.getTime() + hours * 60 * 60_000;
+      this.database.prepare(
+        `UPDATE accounts SET status = ?, banned_until = ? WHERE id = ?`,
+      ).run(hours === null ? "normal" : "banned", until, account.id);
+      if (hours !== null) {
+        this.database.prepare(
+          `UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?), revoke_reason = COALESCE(revoke_reason, 'admin_ban')
+            WHERE account_id = ? AND revoked_at IS NULL`,
+        ).run(at.getTime(), account.id);
+        this.database.prepare(
+          `UPDATE remembered_logins SET revoked_at = COALESCE(revoked_at, ?), revoke_reason = COALESCE(revoke_reason, 'admin_ban')
+            WHERE account_id = ? AND revoked_at IS NULL`,
+        ).run(at.getTime(), account.id);
+      }
+      this.database.prepare(
+        `INSERT INTO audit_events (event_type, target_account_id, details) VALUES (?, ?, ?)`,
+      ).run(hours === null ? "account.unbanned" : "account.banned", account.id, JSON.stringify({ hours, reason }));
+    });
+    change.immediate();
+  }
+
+  setMuteForAdmin(username: string, hours: number | null, reason: string, at = new Date()): void {
+    if (hours !== null && (!Number.isInteger(hours) || hours < 1 || hours > 72)) throw new Error("禁言时长需为1至72小时");
+    const change = this.database.transaction(() => {
+      const account = this.database.prepare(
+        `SELECT id FROM accounts WHERE username_normalized = ? AND status != 'deleted'`,
+      ).get(username) as { id: string } | undefined;
+      if (!account) throw new AppError("ACCOUNT_NOT_FOUND", 404, "账号不存在");
+      this.database.prepare(
+        `UPDATE chat_mutes SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL`,
+      ).run(at.getTime(), account.id);
+      if (hours !== null) {
+        this.database.prepare(
+          `INSERT INTO chat_mutes (account_id, reason, starts_at, ends_at)
+           VALUES (?, ?, ?, ?)`,
+        ).run(account.id, reason, at.getTime(), at.getTime() + hours * 60 * 60_000);
+      }
+      this.database.prepare(
+        `INSERT INTO audit_events (event_type, target_account_id, details) VALUES (?, ?, ?)`,
+      ).run(hours === null ? "chat.unmuted" : "chat.muted", account.id, JSON.stringify({ hours, reason }));
+    });
+    change.immediate();
+  }
+
+  deleteAccountForAdmin(username: string, reason: string, at = new Date()): void {
+    const remove = this.database.transaction(() => {
+      const account = this.database.prepare(
+        `SELECT id FROM accounts WHERE username_normalized = ? AND status != 'deleted'`,
+      ).get(username) as { id: string } | undefined;
+      if (!account) throw new AppError("ACCOUNT_NOT_FOUND", 404, "账号不存在");
+      const escrow = this.database.prepare(
+        `SELECT count(*) AS count FROM auction_listings
+          WHERE seller_character_id IN (SELECT id FROM characters WHERE account_id = ?)
+            AND status != 'claimed'`,
+      ).get(account.id) as { count: number };
+      if (escrow.count > 0) throw new AppError("AUCTION_UNAVAILABLE", 409, "账号还有未领取的拍卖订单，请先领取后再删号");
+      this.database.prepare(
+        `UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?), revoke_reason = COALESCE(revoke_reason, 'admin_delete')
+          WHERE account_id = ? AND revoked_at IS NULL`,
+      ).run(at.getTime(), account.id);
+      this.database.prepare(
+        `UPDATE remembered_logins SET revoked_at = COALESCE(revoked_at, ?), revoke_reason = COALESCE(revoke_reason, 'admin_delete')
+          WHERE account_id = ? AND revoked_at IS NULL`,
+      ).run(at.getTime(), account.id);
+      this.database.prepare(
+        `UPDATE characters SET deleted_at = ? WHERE account_id = ? AND deleted_at IS NULL`,
+      ).run(at.getTime(), account.id);
+      this.database.prepare(
+        `INSERT INTO audit_events (event_type, target_account_id, details) VALUES ('account.deleted', ?, ?)`,
+      ).run(account.id, JSON.stringify({ reason }));
+      this.database.prepare(
+        `UPDATE accounts SET status = 'deleted', banned_until = NULL, deleted_at = ? WHERE id = ?`,
+      ).run(at.getTime(), account.id);
+    });
+    remove.immediate();
   }
 
   async recordLoginAttempt(
@@ -313,6 +560,54 @@ export class SqliteRepository implements GameRepository {
     return load.immediate(characterId);
   }
 
+  async claimOfflineProgress(characterId: string, at: Date): Promise<OfflineProgressResult> {
+    const claim = this.database.transaction((id: string, now: number) => {
+      const characterRow = this.database.prepare(
+        `SELECT id, display_name, level, experience, gold, revision
+           FROM characters WHERE id = ? AND deleted_at IS NULL`,
+      ).get(id) as Record<string, unknown> | undefined;
+      if (!characterRow) throw new AppError("CHARACTER_REQUIRED", 409, "请先创建角色");
+      const stateRow = this.database.prepare(
+        `SELECT state_json FROM character_states WHERE character_id = ?`,
+      ).get(id) as { state_json: string } | undefined;
+      const state = parseGameState(stateRow?.state_json);
+      const elapsed = Math.max(0, Math.min(12 * 60 * 60_000, now - Math.max(0, Number(state.lastOnline) || now)));
+      let reward: OfflineProgressResult["reward"] = null;
+      let level = Number(characterRow.level);
+      let experience = Number(characterRow.experience);
+      let gold = Number(characterRow.gold);
+      if (elapsed >= 60_000) {
+        const seconds = Math.floor(elapsed / 1_000);
+        const goldRate = state.lastGoldPerHour > 0 ? state.lastGoldPerHour : Math.max(1, level) * 600;
+        const experienceRate = state.lastExpPerHour > 0 ? state.lastExpPerHour : Math.max(1, level) * 720;
+        const goldGain = Math.max(0, Math.floor(goldRate * seconds / 3_600 * .1));
+        const experienceGain = Math.max(0, Math.floor(experienceRate * seconds / 3_600 * .1));
+        gold = Math.min(9_000_000_000_000_000, gold + goldGain);
+        experience += experienceGain;
+        while (level < 100 && experience >= Math.floor(100 * 1.12 ** (level - 1))) {
+          experience -= Math.floor(100 * 1.12 ** (level - 1));
+          level += 1;
+        }
+        if (level >= 100) experience = 0;
+        reward = { seconds, gold: goldGain, experience: experienceGain };
+      }
+      state.lastOnline = now;
+      reconcileAttributePoints(state, level);
+      this.database.prepare(
+        `INSERT INTO character_states (character_id, state_json, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(character_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`,
+      ).run(id, serializeGameState(state), now);
+      if (reward) {
+        this.database.prepare(
+          `UPDATE characters SET level = ?, experience = ?, gold = ?, revision = revision + 1 WHERE id = ?`,
+        ).run(level, experience, gold, id);
+      }
+      const character = characterFromRow({ ...characterRow, level, experience, gold, revision: Number(characterRow.revision) + (reward ? 1 : 0) });
+      return { state, character, reward };
+    });
+    return claim.immediate(characterId, at.getTime());
+  }
+
   async executeGameCommand(input: GameCommandInput) {
     const execute = this.database.transaction((value: GameCommandInput) => {
       const repeated = this.database.prepare(
@@ -330,12 +625,19 @@ export class SqliteRepository implements GameRepository {
       const stateRow = this.database.prepare(
         `SELECT state_json FROM character_states WHERE character_id = ?`,
       ).get(value.characterId) as { state_json: string } | undefined;
-      const result = applyGameCommand(
-        parseGameState(stateRow?.state_json),
-        { level: Number(characterRow.level), experience: Number(characterRow.experience), gold: Number(characterRow.gold) },
-        value.command,
-        value.payload,
-      );
+      let result: ReturnType<typeof applyGameCommand>;
+      try {
+        result = applyGameCommand(
+          parseGameState(stateRow?.state_json),
+          { level: Number(characterRow.level), experience: Number(characterRow.experience), gold: Number(characterRow.gold) },
+          value.command,
+          value.payload,
+        );
+      } catch (error) {
+        if (error instanceof Error) throw new AppError("GAME_COMMAND_INVALID", 400, error.message);
+        throw error;
+      }
+      result.state.lastOnline = Date.now();
       this.database.prepare(
         `INSERT INTO character_states (character_id, state_json, updated_at) VALUES (?, ?, ?)
          ON CONFLICT(character_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`,
@@ -394,7 +696,8 @@ export class SqliteRepository implements GameRepository {
       if (repeated) {
         const listing = listingFromRow(repeated);
         const itemId = listing.itemKind === "equipment" ? String(listing.item.id) : listing.itemKind === "item" ? Number(listing.item.itemId) : Number(listing.item.gemId);
-        if (listing.itemKind !== value.itemKind || itemId !== (value.itemKind === "equipment" ? String(value.itemId) : Number(value.itemId)) || listing.itemCount !== value.itemCount || listing.buyoutPrice !== value.buyoutPrice) {
+        const itemLevelMatches = value.itemKind !== "gem" || Number(listing.item.level ?? 1) === (value.itemLevel ?? 1);
+        if (listing.itemKind !== value.itemKind || !itemLevelMatches || itemId !== (value.itemKind === "equipment" ? String(value.itemId) : Number(value.itemId)) || listing.itemCount !== value.itemCount || listing.buyoutPrice !== value.buyoutPrice) {
           throw new AppError("REQUEST_ID_REUSED", 409, "request_id已用于其他上架请求");
         }
         return listing;
@@ -420,19 +723,25 @@ export class SqliteRepository implements GameRepository {
       if (value.itemKind === "equipment") {
         const id = String(value.itemId);
         const equipment = state.equipmentBag.find((entry) => entry.id === id);
-        if (!equipment || equipment.locked || equipment.bound || Object.values(state.equipped).includes(id)) throw new AppError("AUCTION_INVALID", 400, "该装备无法上架");
+        const isEligible = equipment?.quality === 4 || Boolean(equipment?.suitName);
+        if (!equipment || !isEligible || equipment.locked || equipment.bound || Object.values(state.equipped).includes(id) || (equipment.gems ?? []).some((gem) => Number(gem) !== 0)) throw new AppError("AUCTION_INVALID", 400, "仅未绑定、未锁定、未镶嵌的传说或套装装备可以上架");
+        if (value.itemCount !== 1) throw new AppError("AUCTION_INVALID", 400, "装备每单只能上架1件");
         item = { ...equipment };
         state.equipmentBag = state.equipmentBag.filter((entry) => entry.id !== id);
       } else if (value.itemKind === "item") {
         const id = Number(value.itemId);
-        if (!Number.isInteger(value.itemCount) || value.itemCount < 1 || !removeItem(state, id, value.itemCount)) throw new AppError("AUCTION_INVALID", 400, "物品数量不足");
-        item = { itemId: id };
+        if (id !== 6) throw new AppError("AUCTION_INVALID", 400, "只有打孔器可以作为道具上架");
+        if (!Number.isInteger(value.itemCount) || value.itemCount < 1 || !removeTradableItem(state, id, value.itemCount)) throw new AppError("AUCTION_INVALID", 400, "可交易打孔器数量不足");
+        item = { itemId: id, bound: false };
       } else {
         const id = Number(value.itemId);
-        const gem = state.gemBag.find((entry) => entry.gemId === id);
+        const level = value.itemLevel ?? 1;
+        if (!Number.isInteger(id) || id < 1 || id > 8 || !Number.isInteger(level) || level < 1 || level > 10 || !Number.isInteger(value.itemCount) || value.itemCount < 1) throw new AppError("AUCTION_INVALID", 400, "宝石参数不正确");
+        const gem = state.gemBag.find((entry) => entry.gemId === id && (entry.level ?? 1) === level && !entry.bound);
         if (!gem || gem.count < value.itemCount) throw new AppError("AUCTION_INVALID", 400, "宝石数量不足");
         gem.count -= value.itemCount;
-        item = { gemId: id };
+        state.gemBag = state.gemBag.filter((entry) => entry.count > 0);
+        item = { gemId: id, level, bound: false };
       }
       const now = Date.now();
       const id = randomUUID();
@@ -466,10 +775,12 @@ export class SqliteRepository implements GameRepository {
       if (!buyer || buyer.gold < listing.buyoutPrice) throw new AppError("GOLD_INSUFFICIENT", 400, "金币不足");
       const state = parseGameState((this.database.prepare(`SELECT state_json FROM character_states WHERE character_id = ?`).get(characterId) as { state_json: string } | undefined)?.state_json);
       if (listing.itemKind === "item") {
-        if (!addItem(state, Number(listing.item.itemId), listing.itemCount)) throw new AppError("INVENTORY_FULL", 400, "背包空间不足");
+        if (!addItem(state, Number(listing.item.itemId), listing.itemCount, true)) throw new AppError("INVENTORY_FULL", 400, "背包空间不足");
       } else if (listing.itemKind === "gem") {
-        const gem = state.gemBag.find((entry) => entry.gemId === Number(listing.item.gemId));
-        if (gem) gem.count += listing.itemCount; else state.gemBag.push({ gemId: Number(listing.item.gemId), count: listing.itemCount });
+        const gemId = Number(listing.item.gemId);
+        const level = Number(listing.item.level ?? 1);
+        const gem = state.gemBag.find((entry) => entry.gemId === gemId && (entry.level ?? 1) === level && entry.bound);
+        if (gem) gem.count += listing.itemCount; else state.gemBag.push({ gemId, level, count: listing.itemCount, bound: true });
       } else {
         if (state.equipmentBag.length >= state.equipmentCapacity) throw new AppError("EQUIPMENT_FULL", 400, "装备背包空间不足");
         state.equipmentBag.push({ ...(listing.item as unknown as EquipmentItem), bound: true });
@@ -508,8 +819,15 @@ export class SqliteRepository implements GameRepository {
       if (listing.status === "sold") gold = Math.max(0, listing.buyoutPrice - Math.floor(listing.buyoutPrice * 5 / 100));
       else if (listing.itemKind === "item") {
         if (!addItem(state, Number(listing.item.itemId), listing.itemCount)) throw new AppError("INVENTORY_FULL", 400, "背包空间不足");
-      } else if (listing.itemKind === "equipment") state.equipmentBag.push(listing.item as unknown as EquipmentItem);
-      else { const gem = state.gemBag.find((entry) => entry.gemId === Number(listing.item.gemId)); if (gem) gem.count += listing.itemCount; else state.gemBag.push({ gemId: Number(listing.item.gemId), count: listing.itemCount }); }
+      } else if (listing.itemKind === "equipment") {
+        if (state.equipmentBag.length >= state.equipmentCapacity) throw new AppError("EQUIPMENT_FULL", 400, "装备背包空间不足");
+        state.equipmentBag.push(listing.item as unknown as EquipmentItem);
+      } else {
+        const gemId = Number(listing.item.gemId);
+        const level = Number(listing.item.level ?? 1);
+        const gem = state.gemBag.find((entry) => entry.gemId === gemId && (entry.level ?? 1) === level && !entry.bound);
+        if (gem) gem.count += listing.itemCount; else state.gemBag.push({ gemId, level, count: listing.itemCount });
+      }
       this.database.prepare(`UPDATE characters SET gold = gold + ?, revision = revision + 1 WHERE id = ?`).run(gold, characterId);
       this.database.prepare(`UPDATE character_states SET state_json = ?, updated_at = ? WHERE character_id = ?`).run(serializeGameState(state), Date.now(), characterId);
       this.database.prepare(`UPDATE auction_listings SET status = 'claimed' WHERE id = ?`).run(listingId);

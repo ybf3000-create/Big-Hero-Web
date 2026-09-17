@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { buildApp } from "../src/app.js";
+import { BOSS_NAMES } from "../src/game-catalog.js";
 import { applyGameCommand, createInitialGameState } from "../src/game-engine.js";
 import { addItem, serializeGameState } from "../src/game-state.js";
 import { applyMigrations } from "../src/migrations.js";
@@ -119,16 +120,18 @@ test("auction purchase transfers an item once and charges the buyer once", async
   const buyer = await repository.registerAccount({ requestId: "auction_register_2", username: "buyer_hero", passwordHash: "x", inviteCodeHash: secondInvite });
   const sellerCharacter = await repository.createCharacter({ id: "seller-character", requestId: "auction_character_1", accountId: seller.id, displayName: "卖家勇者", normalizedName: "卖家勇者" });
   const buyerCharacter = await repository.createCharacter({ id: "buyer-character", requestId: "auction_character_2", accountId: buyer.id, displayName: "买家勇者", normalizedName: "买家勇者" });
-  grantItem(repository, sellerCharacter.id, 1, 1);
+  grantItem(repository, sellerCharacter.id, 6, 1);
   repository.database.prepare("UPDATE characters SET gold = 1000 WHERE id = ?").run(buyerCharacter.id);
-  const listing = await repository.createAuctionListing({ characterId: sellerCharacter.id, requestId: "auction_list_1", itemKind: "item", itemId: 1, itemCount: 1, buyoutPrice: 100, durationHours: 24 });
+  const listing = await repository.createAuctionListing({ characterId: sellerCharacter.id, requestId: "auction_list_1", itemKind: "item", itemId: 6, itemCount: 1, buyoutPrice: 100, durationHours: 24 });
   await assert.rejects(repository.buyAuctionListing(sellerCharacter.id, "auction_self_1", listing.id), /不能购买自己的订单/);
   const purchased = await repository.buyAuctionListing(buyerCharacter.id, "auction_buy_1", listing.id);
   const repeated = await repository.buyAuctionListing(buyerCharacter.id, "auction_buy_1", listing.id);
   assert.equal(purchased.gold, 900);
   assert.equal(repeated.gold, 900);
   assert.equal(purchased.listing.status, "sold");
-  assert.equal((await repository.getGameState(buyerCharacter.id)).inventory.find((item) => item.itemId === 1)?.count, 1);
+  const boughtTool = (await repository.getGameState(buyerCharacter.id)).inventory.find((item) => item.itemId === 6);
+  assert.equal(boughtTool?.count, 1);
+  assert.equal(boughtTool?.bound, true);
   const claimed = await repository.claimAuctionListing(sellerCharacter.id, listing.id);
   assert.equal(claimed.gold, 95);
 });
@@ -140,12 +143,35 @@ test("auction price and active listing boundaries are enforced", async (context)
   repository.insertInviteCode("auction-limits", inviteHash);
   const account = await repository.registerAccount({ requestId: "limits_register_1", username: "limit_hero", passwordHash: "x", inviteCodeHash: inviteHash });
   const character = await repository.createCharacter({ id: "limit-character", requestId: "limits_character_1", accountId: account.id, displayName: "边界勇者", normalizedName: "边界勇者" });
-  grantItem(repository, character.id, 1, 4);
-  await assert.rejects(repository.createAuctionListing({ characterId: character.id, requestId: "limits_price_0", itemKind: "item", itemId: 1, itemCount: 1, buyoutPrice: 0, durationHours: 24 }), /价格需为正整数/);
+  grantItem(repository, character.id, 6, 4);
+  await assert.rejects(repository.createAuctionListing({ characterId: character.id, requestId: "limits_price_0", itemKind: "item", itemId: 6, itemCount: 1, buyoutPrice: 0, durationHours: 24 }), /价格需为正整数/);
   for (let index = 0; index < 3; index += 1) {
-    await repository.createAuctionListing({ characterId: character.id, requestId: `limits_list_${index}`, itemKind: "item", itemId: 1, itemCount: 1, buyoutPrice: index + 1, durationHours: 24 });
+    await repository.createAuctionListing({ characterId: character.id, requestId: `limits_list_${index}`, itemKind: "item", itemId: 6, itemCount: 1, buyoutPrice: index + 1, durationHours: 24 });
   }
-  await assert.rejects(repository.createAuctionListing({ characterId: character.id, requestId: "limits_list_4", itemKind: "item", itemId: 1, itemCount: 1, buyoutPrice: 4, durationHours: 24 }), /最多同时上架3件/);
+  await assert.rejects(repository.createAuctionListing({ characterId: character.id, requestId: "limits_list_4", itemKind: "item", itemId: 6, itemCount: 1, buyoutPrice: 4, durationHours: 24 }), /最多同时上架3件/);
+});
+
+test("auction enforces the confirmed trade scope and permanent binding", async (context) => {
+  const { directory, repository } = await setup();
+  context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
+  const firstInvite = hashSecret("TRADE-SCOPE-1");
+  const secondInvite = hashSecret("TRADE-SCOPE-2");
+  repository.insertInviteCode("trade-scope-1", firstInvite);
+  repository.insertInviteCode("trade-scope-2", secondInvite);
+  const seller = await repository.registerAccount({ requestId: "scope_register_1", username: "scope_seller", passwordHash: "x", inviteCodeHash: firstInvite });
+  const buyer = await repository.registerAccount({ requestId: "scope_register_2", username: "scope_buyer", passwordHash: "x", inviteCodeHash: secondInvite });
+  const sellerCharacter = await repository.createCharacter({ id: "scope-seller", requestId: "scope_character_1", accountId: seller.id, displayName: "范围卖家", normalizedName: "范围卖家" });
+  const buyerCharacter = await repository.createCharacter({ id: "scope-buyer", requestId: "scope_character_2", accountId: buyer.id, displayName: "范围买家", normalizedName: "范围买家" });
+  grantItem(repository, sellerCharacter.id, 1, 1);
+  await assert.rejects(repository.createAuctionListing({ characterId: sellerCharacter.id, requestId: "scope_bad_item", itemKind: "item", itemId: 1, itemCount: 1, buyoutPrice: 1, durationHours: 8 }), /只有打孔器/);
+  const state = await repository.getGameState(sellerCharacter.id);
+  state.gemBag.push({ gemId: 8, level: 3, count: 2 });
+  repository.database.prepare("UPDATE character_states SET state_json = ? WHERE character_id = ?").run(serializeGameState(state), sellerCharacter.id);
+  repository.database.prepare("UPDATE characters SET gold = 100 WHERE id = ?").run(buyerCharacter.id);
+  const listing = await repository.createAuctionListing({ characterId: sellerCharacter.id, requestId: "scope_gem", itemKind: "gem", itemId: 8, itemLevel: 3, itemCount: 2, buyoutPrice: 10, durationHours: 8 });
+  await repository.buyAuctionListing(buyerCharacter.id, "scope_buy", listing.id);
+  const purchased = (await repository.getGameState(buyerCharacter.id)).gemBag[0]!;
+  assert.deepEqual(purchased, { gemId: 8, level: 3, count: 2, bound: true });
 });
 
 test("game HTTP endpoints expose state and roll result", async (context) => {
@@ -185,4 +211,220 @@ test("battle grids return a browser-playable combat timeline", () => {
   const encounter = result.event.encounter as { units: Array<{ asset: string }> };
   assert.ok(encounter.units.length >= 1);
   assert.match(encounter.units[0]?.asset ?? "", /\.png$/);
+});
+
+test("boss progression and formulas use the confirmed 200-tier rules", () => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.5;
+  try {
+    const state = createInitialGameState();
+    state.mapGrids = state.mapGrids.map(() => 11);
+    state.bossTier = 199;
+    state.bossIndex = 200;
+    state.mapTotalGrids = 128;
+    state.mapGrids = Array.from({ length: 128 }, () => 11);
+    state.equipmentBag.push({ id: "boss-weapon", slot: "weapon", name: "测试武器", quality: 4, enhance: 0, mainStat: "攻击力", mainValue: 1_000_000_000, locked: true, bound: true });
+    state.equipped.weapon = "boss-weapon";
+    const result = applyGameCommand(state, { level: 100, experience: 0, gold: 0 }, "roll", {});
+    const encounter = result.event.encounter as { units: Array<Record<string, unknown>> };
+    const boss = encounter.units[0]!;
+    assert.equal(boss.bossIndex, 200);
+    assert.equal(boss.maxHp, Math.round((500 + 101 * 80) * (8 + 200 * 0.15)));
+    assert.equal(boss.attack, Math.round((25 + 101 * 2) * (1.5 + 200 * 0.003)));
+    assert.equal(boss.defense, Math.round((15 + 101) * (1.5 + 200 * 0.005)));
+    assert.equal(boss.speed, 35);
+    assert.equal(result.state.bossTier, 200);
+    assert.equal(result.state.bossIndex, 200);
+    assert.equal(result.state.mapTotalGrids, 128);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test("boss 20 finishes map expansion and boss 21 only advances difficulty", () => {
+  let state = createInitialGameState();
+  state.bossTier = 19;
+  state.bossIndex = 20;
+  state.mapTotalGrids = 123;
+  state.mapGrids = Array.from({ length: 123 }, () => 11);
+  state.equipmentBag.push({ id: "map-weapon", slot: "weapon", name: "测试武器", quality: 4, enhance: 0, mainStat: "攻击力", mainValue: 1_000_000_000, locked: true, bound: true });
+  state.equipped.weapon = "map-weapon";
+  const boss20 = applyGameCommand(state, { level: 100, experience: 0, gold: 0 }, "roll", {});
+  assert.equal(boss20.state.bossTier, 20);
+  assert.equal(boss20.state.bossIndex, 21);
+  assert.equal(boss20.state.mapTotalGrids, 128);
+  boss20.state.mapGrids = boss20.state.mapGrids.map(() => 11);
+  const boss21 = applyGameCommand(boss20.state, boss20.character, "roll", {});
+  assert.equal(boss21.state.bossTier, 21);
+  assert.equal(boss21.state.bossIndex, 22);
+  assert.equal(boss21.state.mapTotalGrids, 128);
+  assert.equal((boss21.event.enemy as string[])[0], BOSS_NAMES[19]);
+});
+
+test("the silver gem participates in the ordinary treasure pool", () => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.99;
+  try {
+    const state = createInitialGameState();
+    state.mapGrids = state.mapGrids.map(() => 5);
+    const result = applyGameCommand(state, { level: 1, experience: 0, gold: 0 }, "roll", {});
+    assert.equal(result.event.gemId, 8);
+    assert.equal(result.state.gemBag.find((gem) => gem.gemId === 8)?.count, 1);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test("server-generated equipment preserves original build fields", () => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.7;
+  try {
+    const state = createInitialGameState();
+    state.mapGrids = state.mapGrids.map(() => 5);
+    const result = applyGameCommand(state, { level: 20, experience: 0, gold: 0 }, "roll", {});
+    const equipment = result.event.equipment as Record<string, unknown>;
+    assert.equal(equipment.quality, 1);
+    assert.ok((equipment.affixes as unknown[]).length >= 1);
+    assert.ok((equipment.affixes as unknown[]).length <= 2);
+    assert.ok(typeof equipment.slotTypeId === "number");
+    assert.ok(Array.isArray(equipment.gems));
+    assert.ok(typeof equipment.suitName === "string");
+    assert.equal(result.state.equipmentBag.length, 1);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test("server owns gem, socket, dismantle and reroll state transitions", () => {
+  const state = createInitialGameState();
+  const character = { level: 20, experience: 0, gold: 1_000_000 };
+  const equipment = {
+    id: "server-equip", slot: "weapon", name: "史诗武器", quality: 3, enhance: 0,
+    mainStat: "攻击力", mainValue: 100, locked: false, bound: false, gemSlots: 1, initialGemSlots: 1,
+    gems: [], affixes: [{ name: "攻击%", type: "attack", value: 5, display: "+5%" }], setAffixes: [],
+  };
+  state.equipmentBag.push(equipment);
+  state.gemBag.push({ gemId: 8, level: 2, count: 3 });
+  const synthesized = applyGameCommand(state, character, "gem_synthesize", { gem_id: 8, level: 2 });
+  assert.equal(synthesized.state.gemBag.find((gem) => gem.gemId === 8 && gem.level === 3)?.count, 1);
+  const socketed = applyGameCommand(synthesized.state, synthesized.character, "equipment_gem_socket", { equipment_id: equipment.id, socket_index: 0, gem_id: 8, level: 3 });
+  assert.deepEqual(socketed.state.equipmentBag[0]?.gems, [{ id: 8, level: 3 }]);
+  const unsocketed = applyGameCommand(socketed.state, socketed.character, "equipment_gem_unsocket", { equipment_id: equipment.id, socket_index: 0 });
+  assert.equal(unsocketed.state.gemBag.find((gem) => gem.gemId === 8 && gem.level === 3)?.count, 1);
+  unsocketed.state.dismantleEssence = 100;
+  const rerolled = applyGameCommand(unsocketed.state, unsocketed.character, "equipment_reroll", { equipment_id: equipment.id, locked_indices: [] });
+  assert.equal(rerolled.state.dismantleEssence, 85);
+  const dismantled = applyGameCommand(rerolled.state, rerolled.character, "equipment_dismantle", { equipment_id: equipment.id });
+  assert.equal(dismantled.state.equipmentBag.length, 0);
+  assert.equal(dismantled.state.dismantleEssence, 105);
+});
+
+test("server poker reward consumes exactly three records and auto dismantle is authoritative", () => {
+  const state = createInitialGameState();
+  state.mapGrids = Array.from({ length: 28 }, () => 12);
+  state.pokerRecords = [{ value: 1, suit: 0 }, { value: 2, suit: 0 }];
+  state.autoDismantleEnabled = true;
+  state.autoDismantleRules = { qualities: [4], affix_min: 0, affix_max: 8 };
+  const first = applyGameCommand(state, { level: 1, experience: 0, gold: 0 }, "roll", {});
+  assert.deepEqual(first.state.pokerRecords, []);
+  assert.equal(typeof (first.event.poker as Record<string, unknown>).matched, "boolean");
+});
+
+test("empty slots enhance atomically and skill priorities persist", async (context) => {
+  const { directory, repository } = await setup();
+  context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
+  const inviteHash = hashSecret("SLOT-TEST");
+  repository.insertInviteCode("slot-invite", inviteHash);
+  const account = await repository.registerAccount({ requestId: "slot_register", username: "slot_hero", passwordHash: "x", inviteCodeHash: inviteHash });
+  const hero = await repository.createCharacter({ id: "slot-character", requestId: "slot_create", accountId: account.id, displayName: "槽位勇者", normalizedName: "槽位勇者" });
+  repository.database.prepare("UPDATE characters SET level = 45, gold = 50_000 WHERE id = ?").run(hero.id);
+  const batch = await repository.executeGameCommand({ characterId: hero.id, requestId: "slot_batch", command: "equipment_enhance", payload: { slots: ["weapon", "armor"], levels: 5 } });
+  assert.equal(batch.event.price, 10_000);
+  assert.equal(batch.state.slotEnhance.weapon, 5);
+  assert.equal(batch.state.slotEnhance.armor, 5);
+  assert.equal(batch.character.gold, 40_000);
+  const repeated = await repository.executeGameCommand({ characterId: hero.id, requestId: "slot_batch", command: "equipment_enhance", payload: { slots: ["weapon", "armor"], levels: 5 } });
+  assert.equal(repeated.state.slotEnhance.weapon, 5);
+  await assert.rejects(repository.executeGameCommand({ characterId: hero.id, requestId: "slot_bad", command: "equipment_enhance", payload: { slots: ["weapon", "invalid"], levels: 5 } }), /装备槽位不存在/);
+  const slotted = await repository.executeGameCommand({ characterId: hero.id, requestId: "slot_priority", command: "skill_slot", payload: { slots: [{ skill_id: 22, priority: 3 }, { skill_id: 1, priority: 1 }] } });
+  assert.deepEqual(slotted.state.skillSlots, [22, 1]);
+  assert.deepEqual((await repository.getGameState(hero.id)).skillPriorities, { "1": 1, "22": 3 });
+});
+
+test("fate card resolves on the server and empty auto-dismantle rules dismantle drops", () => {
+  const random = Math.random;
+  try {
+    Math.random = () => 0;
+    const state = createInitialGameState();
+    addItem(state, 5, 1);
+    const used = applyGameCommand(state, { level: 1, experience: 0, gold: 0 }, "item_use", { item_id: 5 });
+    assert.equal(used.state.inventory.find((item) => item.itemId === 5), undefined);
+    assert.equal((used.event.fate as Record<string, unknown>).name, "股市大涨");
+    assert.equal(used.character.gold, 100);
+    const chest = createInitialGameState();
+    chest.autoDismantleEnabled = true;
+    chest.autoDismantleRules = { qualities: [], slots: [], affix_types: [], initial_sockets: [], suits: [], affix_min: 0, affix_max: 8 };
+    chest.mapGrids = chest.mapGrids.map(() => 5);
+    Math.random = () => .7;
+    const rolled = applyGameCommand(chest, { level: 1, experience: 0, gold: 0 }, "roll", {});
+    assert.deepEqual(rolled.state.equipmentBag, []);
+    assert.ok(rolled.state.dismantleEssence > 0);
+  } finally {
+    Math.random = random;
+  }
+});
+
+test("offline progress is atomic, capped at 12 hours and cannot be claimed twice", async (context) => {
+  const { directory, repository } = await setup();
+  context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
+  const inviteHash = hashSecret("OFFLINE-TEST");
+  repository.insertInviteCode("offline-invite", inviteHash);
+  const account = await repository.registerAccount({ requestId: "offline_register", username: "offline_hero", passwordHash: "x", inviteCodeHash: inviteHash });
+  const hero = await repository.createCharacter({ id: "offline-character", requestId: "offline_create", accountId: account.id, displayName: "离线勇者", normalizedName: "离线勇者" });
+  const now = Date.now();
+  const state = createInitialGameState();
+  state.lastOnline = now - 36 * 60 * 60_000;
+  state.lastGoldPerHour = 1_000;
+  state.lastExpPerHour = 2_000;
+  repository.database.prepare("UPDATE character_states SET state_json = ? WHERE character_id = ?").run(serializeGameState(state), hero.id);
+  const claimed = await repository.claimOfflineProgress(hero.id, new Date(now));
+  assert.deepEqual(claimed.reward, { seconds: 43_200, gold: 1_200, experience: 2_400 });
+  assert.equal(claimed.character.gold, "1200");
+  assert.equal(claimed.state.freeAttributePoints, (claimed.character.level - 1) * 2);
+  const repeated = await repository.claimOfflineProgress(hero.id, new Date(now + 1_000));
+  assert.equal(repeated.reward, null);
+  assert.equal(repeated.character.gold, "1200");
+  assert.equal((await repository.getGameState(hero.id)).lastOnline, now + 1_000);
+});
+
+test("HTTP login claims offline progress once; state reads and password changes do not reissue it", async (context) => {
+  const { directory, repository } = await setup();
+  context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
+  const inviteHash = hashSecret("HTTP-OFFLINE");
+  repository.insertInviteCode("http-offline-invite", inviteHash);
+  const account = await repository.registerAccount({ requestId: "http_offline_register", username: "http_offline", passwordHash: "test:Good-password-2026", inviteCodeHash: inviteHash });
+  const hero = await repository.createCharacter({ id: "http-offline-character", requestId: "http_offline_create", accountId: account.id, displayName: "网页离线勇者", normalizedName: "网页离线勇者" });
+  const now = Date.now();
+  const initial = await repository.getGameState(hero.id);
+  initial.lastOnline = now - 3_600_000;
+  initial.lastGoldPerHour = 1_000;
+  initial.lastExpPerHour = 2_000;
+  repository.database.prepare("UPDATE character_states SET state_json = ? WHERE character_id = ?").run(serializeGameState(initial), hero.id);
+  const app = await buildApp({ repository, passwordHasher: new TestHasher(), now: () => now });
+  const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { rules_version: "network-1", username: "http_offline", password: "Good-password-2026" } });
+  assert.equal(login.statusCode, 200);
+  assert.deepEqual(login.json().offline_reward, { seconds: 3_600, gold: 100, experience: 200 });
+  const headers = { authorization: `Bearer ${login.json().session.token as string}` };
+  const first = await app.inject({ method: "GET", url: "/api/v1/game/state", headers });
+  const second = await app.inject({ method: "GET", url: "/api/v1/game/state", headers });
+  assert.equal(first.statusCode, 200);
+  assert.deepEqual(first.json(), second.json());
+  assert.equal(first.json().character.gold, "100");
+  assert.equal(first.json().offline_reward, undefined);
+  const changed = await app.inject({ method: "POST", url: "/api/v1/auth/change-password", headers, payload: { rules_version: "network-1", password: "Different-password-2026", password_confirm: "Different-password-2026" } });
+  assert.equal(changed.statusCode, 200);
+  assert.equal((await repository.findAccountForLogin(account.username))?.passwordHash, "test:Different-password-2026");
+  const again = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { rules_version: "network-1", username: "http_offline", password: "Different-password-2026" } });
+  assert.equal(again.json().offline_reward, null);
+  await app.close();
 });

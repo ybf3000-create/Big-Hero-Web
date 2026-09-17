@@ -27,6 +27,8 @@ import {
 
 const IDLE_SESSION_MS = 30 * 60_000;
 const MAX_SESSION_MS = 7 * 24 * 60 * 60_000;
+const REMEMBER_MS = 30 * 24 * 60 * 60_000;
+const REMEMBER_COOKIE = "big_hero_remember";
 
 interface BuildAppOptions {
   repository: GameRepository;
@@ -72,6 +74,18 @@ function bearerToken(request: FastifyRequest): string {
     throw new AppError("SESSION_INVALID", 401, "登录已失效，请重新登录");
   }
   return token;
+}
+
+function rememberedToken(request: FastifyRequest): string | null {
+  const cookie = request.headers.cookie?.split(";").map((part) => part.trim())
+    .find((part) => part.startsWith(`${REMEMBER_COOKIE}=`));
+  const token = cookie?.slice(REMEMBER_COOKIE.length + 1);
+  return token && /^[A-Za-z0-9_-]{40,64}$/.test(token) ? token : null;
+}
+
+function rememberCookie(request: FastifyRequest, token: string | null): string {
+  const secure = request.protocol === "https" ? "; Secure" : "";
+  return `${REMEMBER_COOKIE}=${token ?? ""}; Path=/api/v1/auth; HttpOnly; SameSite=Strict${secure}; Max-Age=${token ? Math.floor(REMEMBER_MS / 1000) : 0}`;
 }
 
 function wait(milliseconds: number): Promise<void> {
@@ -191,6 +205,62 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return sessionManager.resolveToken(hashSecret(token));
   };
 
+  const startSessionUnlocked = async (account: { id: string }) => {
+    if (!sessionManager.canAdmit(account.id)) {
+      throw new AppError("SERVER_FULL", 503, "服务器人数已满，请稍后登录");
+    }
+    const createdAt = new Date(now());
+    const sessionId = randomUUID();
+    const token = generateSessionToken();
+    const tokenHash = hashSecret(token);
+    await options.repository.createSession({
+      id: sessionId,
+      accountId: account.id,
+      tokenHash,
+      createdAt,
+      idleExpiresAt: new Date(createdAt.getTime() + IDLE_SESSION_MS),
+      expiresAt: new Date(createdAt.getTime() + MAX_SESSION_MS),
+    });
+    try {
+      sessionManager.admit(sessionId, account.id, tokenHash, createdAt.getTime() + MAX_SESSION_MS);
+    } catch (error) {
+      await options.repository.revokeSession(sessionId, new Date(now()), "capacity_race");
+      throw error;
+    }
+    let character = await options.repository.getCharacter(account.id);
+    let offlineReward = null;
+    if (character && options.repository.claimOfflineProgress) {
+      const claimed = await options.repository.claimOfflineProgress(character.id, createdAt);
+      character = claimed.character;
+      offlineReward = claimed.reward;
+    }
+    return { sessionId, token, character, offlineReward };
+  };
+
+  const startSession = async (account: { id: string }) =>
+    loginMutex.runExclusive(() => startSessionUnlocked(account));
+
+  const loginPayload = (
+    account: { id: string; username: string; mustChangePassword: boolean },
+    result: Awaited<ReturnType<typeof startSession>>,
+  ) => ({
+    ok: true,
+    session: {
+      id: result.sessionId,
+      token: result.token,
+      heartbeat_interval_seconds: 10,
+      reconnect_grace_seconds: 30,
+    },
+    account: {
+      id: account.id,
+      username: account.username,
+      must_change_password: account.mustChangePassword,
+    },
+    character: result.character,
+    offline_reward: result.offlineReward,
+    rules_version: rulesVersion,
+  });
+
   app.get("/healthz", async () => {
     await options.repository.ping();
     return {
@@ -229,7 +299,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     });
   });
 
-  app.post("/api/v1/auth/login", async (request) => {
+  app.post("/api/v1/auth/login", async (request, reply) => {
     const body = bodyObject(request.body);
     validateRulesVersion(body.rules_version, rulesVersion);
     const username = typeof body.username === "string"
@@ -276,65 +346,86 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       );
     }
 
-    const loginResult = await loginMutex.runExclusive(async () => {
-      if (!sessionManager.canAdmit(account.id)) {
+    let loginResult: Awaited<ReturnType<typeof startSession>>;
+    try {
+      loginResult = await startSession(account);
+    } catch (error) {
+      if (error instanceof AppError && error.code === "SERVER_FULL") {
         await recordLoginAttempt(username, request.ip, "server_full");
-        throw new AppError("SERVER_FULL", 503, "服务器人数已满，请稍后登录");
       }
+      throw error;
+    }
 
-      const createdAt = new Date(now());
-      const sessionId = randomUUID();
+    if (body.remember_login === true) {
       const token = generateSessionToken();
-      const tokenHash = hashSecret(token);
-      await options.repository.createSession({
-        id: sessionId,
-        accountId: account.id,
-        tokenHash,
-        createdAt,
-        idleExpiresAt: new Date(createdAt.getTime() + IDLE_SESSION_MS),
-        expiresAt: new Date(createdAt.getTime() + MAX_SESSION_MS),
-      });
       try {
-        sessionManager.admit(
-          sessionId,
-          account.id,
-          tokenHash,
-          createdAt.getTime() + MAX_SESSION_MS,
-        );
+        const previous = rememberedToken(request);
+        if (previous) await options.repository.revokeRememberedLogin(hashSecret(previous), new Date(now()), "replaced_by_login");
+        await options.repository.createRememberedLogin({
+          id: randomUUID(), accountId: account.id, tokenHash: hashSecret(token),
+          createdAt: new Date(now()), expiresAt: new Date(now() + REMEMBER_MS),
+        });
       } catch (error) {
-        await options.repository.revokeSession(
-          sessionId,
-          new Date(now()),
-          "capacity_race",
-        );
+        await options.repository.revokeSession(loginResult.sessionId, new Date(now()), "remember_failed");
+        sessionManager.revoke(loginResult.sessionId);
         throw error;
       }
-      const character = await options.repository.getCharacter(account.id);
-      return { sessionId, token, character };
-    });
+      reply.header("Set-Cookie", rememberCookie(request, token));
+    } else {
+      const previous = rememberedToken(request);
+      if (previous) await options.repository.revokeRememberedLogin(hashSecret(previous), new Date(now()), "not_remembered");
+      reply.header("Set-Cookie", rememberCookie(request, null));
+    }
 
     loginLimiter.recordSuccess(request.ip, username);
     await recordLoginAttempt(username, request.ip, "success");
-    return {
-      ok: true,
-      session: {
-        id: loginResult.sessionId,
-        token: loginResult.token,
-        heartbeat_interval_seconds: 10,
-        reconnect_grace_seconds: 30,
-      },
-      account: {
-        id: account.id,
-        username: account.username,
-        must_change_password: account.mustChangePassword,
-      },
-      character: loginResult.character,
-      rules_version: rulesVersion,
-    };
+    return loginPayload(account, loginResult);
   });
 
-  app.post("/api/v1/auth/logout", async (request) => {
-    const identity = authenticateRequest(request);
+  app.post("/api/v1/auth/restore", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const previous = rememberedToken(request);
+    if (!previous) {
+      return { ok: false, error: { code: "NO_REMEMBERED_LOGIN", message: "没有可恢复的登录状态" } };
+    }
+    const restored = await loginMutex.runExclusive(async () => {
+      const account = await options.repository.findAccountForRememberedLogin(hashSecret(previous), new Date(now()));
+      if (!account || account.mustChangePassword || (account.status === "banned" && (!account.bannedUntil || account.bannedUntil.getTime() > now()))) {
+        throw new AppError("SESSION_INVALID", 401, "请重新登录");
+      }
+      if (!sessionManager.canAdmit(account.id)) {
+        throw new AppError("SERVER_FULL", 503, "服务器人数已满，请稍后登录");
+      }
+      const next = generateSessionToken();
+      const rotated = await options.repository.rotateRememberedLogin({
+        id: randomUUID(), accountId: account.id, previousTokenHash: hashSecret(previous),
+        tokenHash: hashSecret(next), createdAt: new Date(now()),
+        expiresAt: new Date(now() + REMEMBER_MS),
+      });
+      if (!rotated) throw new AppError("SESSION_INVALID", 401, "请重新登录");
+      try {
+        return { account, next, result: await startSessionUnlocked(account) };
+      } catch (error) {
+        await options.repository.revokeRememberedLogin(hashSecret(next), new Date(now()), "session_create_failed");
+        throw error;
+      }
+    });
+    const { account, next, result } = restored;
+    reply.header("Set-Cookie", rememberCookie(request, next));
+    return loginPayload(account, result);
+  });
+
+  app.post("/api/v1/auth/logout", async (request, reply) => {
+    const remembered = rememberedToken(request);
+    if (remembered) await options.repository.revokeRememberedLogin(hashSecret(remembered), new Date(now()), "logout");
+    reply.header("Set-Cookie", rememberCookie(request, null));
+    let identity: SessionIdentity;
+    try {
+      identity = authenticateRequest(request);
+    } catch (error) {
+      if (error instanceof AppError && error.code === "SESSION_INVALID") return { ok: true };
+      throw error;
+    }
     await options.repository.revokeSession(
       identity.sessionId,
       new Date(now()),
@@ -342,6 +433,19 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     );
     sessionManager.revoke(identity.sessionId, "logout");
     return { ok: true };
+  });
+
+  app.post("/api/v1/auth/change-password", async (request, reply) => {
+    const identity = authenticateRequest(request);
+    if (!options.repository.updateAccountPassword) throw new AppError("SERVICE_UNAVAILABLE", 503, "改密服务暂时不可用");
+    const body = bodyObject(request.body);
+    validateRulesVersion(body.rules_version, rulesVersion);
+    const password = validatePassword(body.password);
+    if (body.password_confirm !== password) throw badRequest("两次输入的密码不一致");
+    const passwordHash = await passwordWork.run(() => options.passwordHasher.hash(password));
+    await options.repository.updateAccountPassword(identity.accountId, passwordHash);
+    reply.header("Set-Cookie", rememberCookie(request, null));
+    return { ok: true, message: "密码修改成功" };
   });
 
   app.get("/api/v1/characters/me", async (request) => {
@@ -426,8 +530,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.post("/api/v1/game/equipment/equip", async (request) => gameCommand(request, "equipment_equip"));
   app.post("/api/v1/game/equipment/unequip", async (request) => gameCommand(request, "equipment_unequip"));
   app.post("/api/v1/game/equipment/dismantle", async (request) => gameCommand(request, "equipment_dismantle"));
+  app.post("/api/v1/game/equipment/dismantle-many", async (request) => gameCommand(request, "equipment_dismantle_many"));
   app.post("/api/v1/game/equipment/lock", async (request) => gameCommand(request, "equipment_lock"));
   app.post("/api/v1/game/equipment/enhance", async (request) => gameCommand(request, "equipment_enhance"));
+  app.post("/api/v1/game/equipment/gem-socket", async (request) => gameCommand(request, "equipment_gem_socket"));
+  app.post("/api/v1/game/equipment/gem-unsocket", async (request) => gameCommand(request, "equipment_gem_unsocket"));
+  app.post("/api/v1/game/equipment/reroll", async (request) => gameCommand(request, "equipment_reroll"));
+  app.post("/api/v1/game/equipment/auto-dismantle", async (request) => gameCommand(request, "auto_dismantle"));
+  app.post("/api/v1/game/gem/synthesize", async (request) => gameCommand(request, "gem_synthesize"));
   app.post("/api/v1/game/inventory/expand", async (request) => gameCommand(request, "inventory_expand"));
   app.post("/api/v1/game/equipment/expand", async (request) => gameCommand(request, "equipment_expand"));
   app.post("/api/v1/game/skill/unlock", async (request) => gameCommand(request, "skill_unlock"));
@@ -464,9 +574,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (itemKind !== "item" && itemKind !== "equipment" && itemKind !== "gem") throw badRequest("物品类型不正确");
     const itemId = typeof body.item_id === "string" || typeof body.item_id === "number" ? body.item_id : "";
     const itemCount = Number(body.item_count ?? 1);
+    const itemLevel = body.item_level === undefined ? undefined : Number(body.item_level);
     const buyoutPrice = Number(body.buyout_price);
     const durationHours = Number(body.duration_hours ?? 24);
-    const listing = await options.repository.createAuctionListing({ characterId: character.id, requestId, itemKind, itemId, itemCount, buyoutPrice, durationHours });
+    const listing = await options.repository.createAuctionListing({ characterId: character.id, requestId, itemKind, itemId, itemCount, buyoutPrice, durationHours, ...(itemLevel === undefined ? {} : { itemLevel }) });
     return { ok: true, listing, character: await options.repository.getCharacter(identity.accountId) };
   });
 

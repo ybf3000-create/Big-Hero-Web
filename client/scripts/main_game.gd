@@ -74,6 +74,7 @@ const EquipData = preload("res://scripts/equip_data.gd")
 const EquipmentRulesCls = preload("res://scripts/equipment_rules.gd")
 const SkillDataRef = preload("res://scripts/skill_data.gd")
 const SkillCls = preload("res://scripts/skill_system.gd")
+const LoginScriptRef = preload("res://scripts/login.gd")
 const UIUtilsRef = preload("res://scripts/ui/ui_utils.gd")
 const TopBarCls = preload("res://scripts/ui/top_bar.gd")
 const ShrineBackdropCls = preload("res://scripts/ui/shrine_backdrop.gd")
@@ -113,11 +114,15 @@ var weather_sunny_buffer: int = 10
 var last_gold_per_hour: float = 0.0
 var last_exp_per_hour: float = 0.0
 var _pending_offline_reward: Dictionary = {}
+var NetworkClient: Variant
 var next_roll_modifier: int = 0
 var hibernate_laps: int = 0
 
 # 移动动画
 var _moving: bool = false
+var _network_roll_in_flight: bool = false
+var _network_action_in_flight: bool = false
+var _pending_network_response: Dictionary = {}
 var _move_step: int = 0
 var _move_total: int = 0
 var _move_timer: float = 0.0
@@ -143,6 +148,7 @@ const EXPANSION_RESHUFFLE_ATTEMPTS: int = 80
 
 ## ============ _ready ============
 func _ready() -> void:
+	NetworkClient = get_node_or_null("/root/NetworkClient")
 	anchor_right  = 1.0
 	anchor_bottom = 1.0
 	var app_theme := Theme.new()
@@ -180,6 +186,11 @@ func _ready() -> void:
 	$BottomBar/LogBtn.pressed.connect(_on_log_pressed)
 	$BottomBar/SettingsBtn.pressed.connect(_on_settings_pressed)
 	$MapArea/AutoPlayCheck.toggled.connect(_on_auto_play_toggled)
+	if _is_network_game():
+		if not NetworkClient.chat_message_received.is_connected(_on_world_chat_message):
+			NetworkClient.chat_message_received.connect(_on_world_chat_message)
+		if not NetworkClient.chat_error.is_connected(_on_world_chat_error):
+			NetworkClient.chat_error.connect(_on_world_chat_error)
 	if not _pending_offline_reward.is_empty():
 		_show_offline_reward(_pending_offline_reward)
 
@@ -259,7 +270,7 @@ func _build_map_area() -> void:
 
 	var pos_lbl := Label.new()
 	pos_lbl.name = "GridPosLabel"
-	pos_lbl.text = "格子 1 / " + str(map_total_grids) + "  ·  Boss 0 / 100"
+	pos_lbl.text = "格子 1 / " + str(map_total_grids) + "  ·  Boss 0 / 200"
 	pos_lbl.add_theme_font_size_override("font_size", 13)
 	pos_lbl.add_theme_color_override("font_color", Color("352e38"))
 	pos_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -493,7 +504,7 @@ func _build_bottom_bar() -> void:
 	var btn_defs := [
 		{ "name": "BagBtn",       "text": "🎒 背包",  "x": GAP },
 		{ "name": "SkillBtn",     "text": "⚡ 技能",  "x": GAP + SMALL_W + GAP },
-		{ "name": "LogBtn",       "text": "📋 日志",  "x": dice_x + DICE_W + GAP },
+		{ "name": "LogBtn",       "text": "💬 聊天",  "x": dice_x + DICE_W + GAP },
 		{ "name": "SettingsBtn",  "text": "🏠 主界面",  "x": dice_x + DICE_W + GAP + SMALL_W + GAP },
 	]
 	for b in btn_defs:
@@ -621,9 +632,18 @@ func _load_from_save_data(data: Dictionary) -> void:
 	weather_sunny_buffer = maxi(0, int(data.get("weather_sunny_buffer", 10)))
 	last_gold_per_hour = float(data.get("last_gold_per_hour", 0.0))
 	last_exp_per_hour = float(data.get("last_exp_per_hour", 0.0))
+	var server_offline_reward: Variant = data.get("offline_reward", null)
+	if server_offline_reward is Dictionary and not (server_offline_reward as Dictionary).is_empty():
+		var reward: Dictionary = server_offline_reward as Dictionary
+		_pending_offline_reward = {
+			"seconds": int(reward.get("seconds", 0)),
+			"gold": int(reward.get("gold", 0)),
+			"exp": int(reward.get("experience", 0)),
+		}
 	next_roll_modifier = int(data.get("next_roll_modifier", 0))
 	hibernate_laps = int(data.get("hibernate_laps", 0))
-	_prepare_offline_reward(int(data.get("last_online", data.get("last_saved", Time.get_unix_time_from_system()))))
+	if not _is_network_game():
+		_prepare_offline_reward(int(data.get("last_online", data.get("last_saved", Time.get_unix_time_from_system()))))
 	# refresh_poker_slots() 延迟到 top_bar.build() 之后
 
 
@@ -682,6 +702,9 @@ func _build_save_data() -> Dictionary:
 func _on_dice_roll() -> void:
 	if _moving:
 		return  # 移动中不能再次掷骰
+	if _is_network_game():
+		_on_network_dice_roll()
+		return
 
 	last_dice_roll = dice.roll()
 	if next_roll_modifier != 0:
@@ -709,6 +732,32 @@ func _on_dice_roll() -> void:
 		hist_lbl.text = hist_text
 
 	# 启动步进移动
+	_move_step = 0
+	_move_total = last_dice_roll
+	_move_timer = 0.0
+	_scroll_offset = 0.0
+	_bounce_offset = 0.0
+	_moving = true
+
+
+func _on_network_dice_roll() -> void:
+	if _network_roll_in_flight:
+		return
+	_network_roll_in_flight = true
+	var response: Dictionary = await NetworkClient.execute_game_command("roll")
+	_network_roll_in_flight = false
+	if not response.get("ok", false):
+		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
+		if auto_play_enabled:
+			_start_auto_timer()
+		return
+	var event: Dictionary = response.get("event", {}) as Dictionary
+	last_dice_roll = clampi(int(event.get("dice", 1)), 1, 6)
+	var suit_index := clampi(int((response.get("state", {}) as Dictionary).get("lastDiceSuit", 0)), 0, SUITS.size() - 1)
+	last_dice_suit = SUITS[suit_index]
+	_pending_network_response = response.duplicate(true)
+	top_bar.refresh_dice_display()
+	_show_dice_popup(last_dice_roll, last_dice_suit)
 	_move_step = 0
 	_move_total = last_dice_roll
 	_move_timer = 0.0
@@ -746,7 +795,7 @@ func _process(delta: float) -> void:
 
 		player_grid_index = (player_grid_index + 1) % map_total_grids
 		var prev_idx := (player_grid_index - 1 + map_total_grids) % map_total_grids
-		if prev_idx > player_grid_index:
+		if prev_idx > player_grid_index and not _is_network_game():
 			player_gold += 50
 			completed_laps += 1
 			_tick_lap_effects()
@@ -792,6 +841,10 @@ func _slide_grids() -> void:
 
 
 func _on_move_complete() -> void:
+	if _is_network_game() and not _pending_network_response.is_empty():
+		_apply_network_roll_response(_pending_network_response)
+		_pending_network_response.clear()
+		return
 	var gtype: int = map_grids[player_grid_index % map_total_grids]
 	var ctx := {
 		"player_level": player_level,
@@ -880,6 +933,37 @@ func _on_move_complete() -> void:
 	top_bar.refresh_compact_stats()
 	_auto_save()
 	if auto_play_enabled:
+		_start_auto_timer()
+
+
+func _apply_network_roll_response(response: Dictionary) -> void:
+	var server_character: Dictionary = response.get("character", {}) as Dictionary
+	var server_state: Dictionary = response.get("state", {}) as Dictionary
+	var event: Dictionary = response.get("event", {}) as Dictionary
+	var previous_laps := completed_laps
+	var data: Dictionary = LoginScriptRef.server_state_to_save_data(server_character, server_state)
+	_load_from_save_data(data)
+	if completed_laps > previous_laps:
+		var reward_label: Label = $TopBar/DiceRewardLabel as Label
+		if reward_label: reward_label.text = "🎲 过起点 +50金!"
+	_refresh_grid_display()
+	top_bar.refresh()
+	top_bar.refresh_compact_stats()
+	top_bar.refresh_poker_slots()
+	var battle_result: Dictionary = event.get("battle_result", {}) as Dictionary
+	var history: Array = battle_result.get("events", []) as Array
+	if not history.is_empty():
+		_show_battle_view({
+			"battle_kind": str(event.get("battleKind", "battle")),
+			"battle_result": battle_result,
+			"encounter": event.get("encounter", {}),
+			"message": str(event.get("message", "")),
+		})
+	else:
+		var message := str(event.get("message", ""))
+		if not message.is_empty():
+			_show_float_text(message, Color(1.0, 0.85, 0.3))
+	if auto_play_enabled and history.is_empty():
 		_start_auto_timer()
 
 
@@ -1048,7 +1132,7 @@ func _random_drop_slot() -> String:
 
 func _handle_boss_clear() -> void:
 	player_boss_tier += 1
-	player_boss_index = mini(player_boss_tier + 1, 100)
+	player_boss_index = mini(player_boss_tier + 1, 200)
 	var old_total: int = map_total_grids
 	if player_boss_tier <= 20:
 		var new_total: int = mini(128, 28 + player_boss_tier * 5)
@@ -1499,6 +1583,50 @@ func _network_error_message(response: Dictionary) -> String:
 	return str(error.get("message", "操作失败，请稍后重试"))
 
 
+func _run_network_game_command(path: String, payload: Dictionary = {}, success_message: String = "操作完成") -> bool:
+	if _network_action_in_flight:
+		return false
+	_network_action_in_flight = true
+	var response: Dictionary = await NetworkClient.execute_game_command(path, payload)
+	_network_action_in_flight = false
+	if not response.get("ok", false):
+		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
+		return false
+	var server_character: Dictionary = response.get("character", {}) as Dictionary
+	var server_state: Dictionary = response.get("state", {}) as Dictionary
+	_load_from_save_data(LoginScriptRef.server_state_to_save_data(server_character, server_state))
+	_refresh_grid_display()
+	top_bar.refresh()
+	top_bar.refresh_poker_slots()
+	top_bar.refresh_compact_stats()
+	_refresh_all_stats_panels()
+	var event: Dictionary = response.get("event", {}) as Dictionary
+	var display_message := success_message if not success_message.is_empty() else str(event.get("message", "操作完成"))
+	_show_float_text(display_message, Color(0.45, 1.0, 0.65))
+	return true
+
+
+func _skill_slots_payload(priority_override_slot: int = -1, remove_slot: int = -1, add_skill_id: int = 0) -> Array:
+	var payload: Array = []
+	for i in range(skill_system.get_unlocked_slots()):
+		if i == remove_slot:
+			continue
+		var skill_id = skill_system.get_slot_skill_id(i)
+		if skill_id == null:
+			continue
+		var priority: int = int(skill_system.get_slot_priority(i))
+		if i == priority_override_slot:
+			priority = priority % 3 + 1
+		payload.append({"skill_id": int(skill_id), "priority": priority})
+	if add_skill_id > 0:
+		payload.append({"skill_id": add_skill_id, "priority": 2})
+	return payload
+
+
+func _sync_network_skill_slots(priority_override_slot: int = -1, remove_slot: int = -1, add_skill_id: int = 0) -> void:
+	await _run_network_game_command("skill/slot", {"slots": _skill_slots_payload(priority_override_slot, remove_slot, add_skill_id)}, "技能设置已保存")
+
+
 func _apply_network_attribute_response(response: Dictionary) -> void:
 	var state: Dictionary = response.get("state", {}) as Dictionary
 	var attributes: Dictionary = state.get("attributes", {}) as Dictionary
@@ -1829,7 +1957,7 @@ func _refresh_grid_display() -> void:
 
 	var pos_lbl: Label = area.get_node("MapStatusPanel/GridPosLabel") as Label
 	if pos_lbl:
-		pos_lbl.text = "格子 " + str(idx + 1) + " / " + str(map_total_grids) + "  ·  Boss " + str(player_boss_index - 1) + " / 100"
+		pos_lbl.text = "格子 " + str(idx + 1) + " / " + str(map_total_grids) + "  ·  Boss " + str(player_boss_index - 1) + " / 200"
 
 
 func _get_grid_info(index: int) -> Dictionary:
@@ -2043,6 +2171,9 @@ func _add_gem(gid: int, lv: int, cnt: int) -> void:
 
 ## 宝石合成：使用宝石卡片上的“3合1”按钮
 func _synthesize_gem(gid: int, lv: int) -> void:
+	if _is_network_game():
+		_run_network_game_command("gem/synthesize", {"gem_id": gid, "level": lv}, "宝石合成完成")
+		return
 	if lv >= 10:
 		_show_float_text("宝石已达到最高等级", Color(0.65, 0.45, 0.35))
 		return
@@ -2205,11 +2336,448 @@ func _on_bag_pressed() -> void:
 func _on_skill_pressed() -> void:
 	_stats_tab = "skill"
 	_show_stats_panel()
-func _on_log_pressed()     -> void: print("[主界面] 打开日志")
+func _on_log_pressed() -> void:
+	if not _is_network_game():
+		_show_float_text("聊天仅在联网角色中开放", Color("8b7a7d"))
+		return
+	var existing := get_node_or_null("WorldChatPanel")
+	if existing:
+		existing.queue_free()
+		return
+	_build_world_chat_panel()
+
+
+func _build_world_chat_panel() -> void:
+	var panel := Panel.new()
+	panel.name = "WorldChatPanel"
+	panel.position = Vector2(820, 118)
+	panel.size = Vector2(440, 490)
+	panel.z_index = 80
+	UIUtils.shrine_panel_style(panel, Color("fff9f5"), Color("b88d89"), 2)
+	add_child(panel)
+
+	var title := Label.new()
+	title.text = "世界聊天"
+	title.position = Vector2(18, 12)
+	title.add_theme_font_size_override("font_size", 19)
+	title.add_theme_color_override("font_color", Color("96353e"))
+	panel.add_child(title)
+
+	var auction := Button.new()
+	auction.text = "拍卖行"
+	auction.position = Vector2(282, 8)
+	auction.size = Vector2(100, 30)
+	UIUtils.shrine_button_style(auction, false)
+	auction.pressed.connect(func():
+		panel.queue_free()
+		_build_auction_panel("market")
+	)
+	panel.add_child(auction)
+
+	var close := Button.new()
+	close.text = "✕"
+	close.position = Vector2(394, 8)
+	close.size = Vector2(32, 30)
+	UIUtils.shrine_button_style(close, false)
+	close.pressed.connect(panel.queue_free)
+	panel.add_child(close)
+
+	var history := RichTextLabel.new()
+	history.name = "History"
+	history.bbcode_enabled = false
+	history.scroll_active = true
+	history.scroll_following = true
+	history.position = Vector2(16, 50)
+	history.size = Vector2(408, 350)
+	history.add_theme_font_size_override("normal_font_size", 14)
+	history.add_theme_color_override("default_color", Color("4f454d"))
+	panel.add_child(history)
+
+	var status := Label.new()
+	status.name = "Status"
+	status.position = Vector2(18, 402)
+	status.size = Vector2(400, 22)
+	status.add_theme_font_size_override("font_size", 12)
+	status.add_theme_color_override("font_color", Color("8b7a7d"))
+	panel.add_child(status)
+
+	var input := LineEdit.new()
+	input.name = "Input"
+	input.placeholder_text = "输入1～120个字符"
+	input.max_length = 120
+	input.position = Vector2(16, 430)
+	input.size = Vector2(326, 42)
+	panel.add_child(input)
+
+	var send := Button.new()
+	send.text = "发送"
+	send.position = Vector2(350, 430)
+	send.size = Vector2(74, 42)
+	UIUtils.shrine_button_style(send, true)
+	panel.add_child(send)
+	var submit := func(_ignored: String = ""):
+		var body := input.text.strip_edges()
+		if body.is_empty():
+			return
+		if not NetworkClient.send_world_chat(body):
+			status.text = "聊天连接尚未就绪"
+			return
+		input.clear()
+		status.text = ""
+	send.pressed.connect(func(): submit.call())
+	input.text_submitted.connect(func(value: String): submit.call(value))
+	input.grab_focus()
+	_load_world_chat_history(panel)
+
+
+func _build_auction_panel(initial_tab: String = "market") -> void:
+	if not _is_network_game():
+		_show_float_text("拍卖行仅在联网角色中开放", Color("8b7a7d"))
+		return
+	var old := get_node_or_null("AuctionPanel")
+	if old:
+		old.queue_free()
+	var panel := Panel.new()
+	panel.name = "AuctionPanel"
+	panel.position = Vector2(145, 92)
+	panel.size = Vector2(990, 550)
+	panel.z_index = 90
+	UIUtils.shrine_panel_style(panel, Color("fff9f5"), Color("b88d89"), 2)
+	add_child(panel)
+
+	var title := Label.new()
+	title.text = "拍卖行"
+	title.position = Vector2(22, 14)
+	title.add_theme_font_size_override("font_size", 21)
+	title.add_theme_color_override("font_color", Color("96353e"))
+	panel.add_child(title)
+
+	var close := Button.new()
+	close.text = "✕"
+	close.position = Vector2(940, 10)
+	close.size = Vector2(34, 32)
+	UIUtils.shrine_button_style(close, false)
+	close.pressed.connect(panel.queue_free)
+	panel.add_child(close)
+
+	var content := VBoxContainer.new()
+	content.name = "Content"
+	content.add_theme_constant_override("separation", 8)
+	var scroll := ScrollContainer.new()
+	scroll.name = "Scroll"
+	scroll.position = Vector2(20, 96)
+	scroll.size = Vector2(950, 410)
+	scroll.add_child(content)
+	panel.add_child(scroll)
+
+	var status := Label.new()
+	status.name = "Status"
+	status.position = Vector2(22, 512)
+	status.size = Vector2(930, 25)
+	status.add_theme_color_override("font_color", Color("8b7a7d"))
+	panel.add_child(status)
+
+	var tabs := {"market": "市场", "mine": "我的订单", "sell": "上架物品"}
+	var tab_x := 150.0
+	for key in tabs:
+		var button := Button.new()
+		button.text = tabs[key]
+		button.position = Vector2(tab_x, 48)
+		button.size = Vector2(150, 36)
+		UIUtils.shrine_button_style(button, key == initial_tab)
+		button.pressed.connect(func():
+			panel.queue_free()
+			_build_auction_panel(key)
+		)
+		panel.add_child(button)
+		tab_x += 164
+	_load_auction_tab(panel, initial_tab)
+
+
+func _clear_container(container: Node) -> void:
+	for child in container.get_children():
+		child.queue_free()
+
+
+func _load_auction_tab(panel: Panel, tab: String) -> void:
+	var status := panel.get_node("Status") as Label
+	var content := panel.get_node("Scroll/Content") as VBoxContainer
+	status.text = "正在读取拍卖数据…"
+	if tab == "sell":
+		status.text = "每个角色最多同时上架3件，订单仓库最多30件"
+		_build_auction_sell_candidates(panel, content)
+		return
+	var response: Dictionary
+	if tab == "mine":
+		response = await NetworkClient.get_my_auction_listings()
+	else:
+		response = await NetworkClient.get_auction_listings(100)
+	if not is_instance_valid(panel):
+		return
+	if not response.get("ok", false):
+		status.text = _network_error_message(response)
+		status.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+		return
+	var listings: Array = response.get("listings", []) as Array
+	status.text = "共 %d 条订单" % listings.size()
+	if listings.is_empty():
+		_add_auction_empty(content, "当前没有可显示的订单")
+		return
+	for raw in listings:
+		_add_auction_listing_card(panel, content, raw as Dictionary, tab)
+
+
+func _add_auction_empty(content: VBoxContainer, message: String) -> void:
+	var label := Label.new()
+	label.text = message
+	label.custom_minimum_size = Vector2(920, 60)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_color_override("font_color", Color("8b7a7d"))
+	content.add_child(label)
+
+
+func _auction_item_name(listing: Dictionary) -> String:
+	var item: Dictionary = listing.get("item", {}) as Dictionary
+	match str(listing.get("itemKind", "")):
+		"equipment": return str(item.get("name", item.get("baseName", "装备")))
+		"item": return "打孔器"
+		"gem":
+			var defn: Dictionary = EquipData.GEM_DEFS.get(int(item.get("gemId", 0)), {})
+			return "%s Lv.%d" % [defn.get("name", "宝石"), int(item.get("level", 1))]
+	return "未知物品"
+
+
+func _add_auction_listing_card(panel: Panel, content: VBoxContainer, listing: Dictionary, tab: String) -> void:
+	var card := Panel.new()
+	card.custom_minimum_size = Vector2(930, 74)
+	card.size = Vector2(930, 74)
+	UIUtils.shrine_panel_style(card, Color("fffdfb"), Color("d6b8b3"), 1)
+	content.add_child(card)
+	var row := HBoxContainer.new()
+	row.position = Vector2(10, 5)
+	row.size = Vector2(910, 64)
+	row.add_theme_constant_override("separation", 14)
+	card.add_child(row)
+	var description := Label.new()
+	description.custom_minimum_size = Vector2(570, 64)
+	description.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	description.text = "%s  ×%d\n卖家：%s  ·  一口价：%d 金币" % [
+		_auction_item_name(listing), int(listing.get("itemCount", 1)),
+		str(listing.get("sellerName", "勇者")), int(listing.get("buyoutPrice", 0)),
+	]
+	description.add_theme_color_override("font_color", Color("4f454d"))
+	row.add_child(description)
+	var state_label := Label.new()
+	state_label.custom_minimum_size = Vector2(120, 64)
+	state_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	state_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var status_names := {"active": "出售中", "sold": "已售出", "cancelled": "已取消", "expired": "已过期", "claimed": "已领取"}
+	state_label.text = status_names.get(str(listing.get("status", "active")), "未知")
+	state_label.add_theme_color_override("font_color", Color("4f454d"))
+	row.add_child(state_label)
+	var action := Button.new()
+	action.custom_minimum_size = Vector2(150, 42)
+	var listing_id := str(listing.get("id", ""))
+	if tab == "market":
+		action.text = "一口价购买"
+		action.pressed.connect(func(): _auction_buy(panel, listing_id))
+	else:
+		var listing_status := str(listing.get("status", ""))
+		if listing_status == "active":
+			action.text = "取消并取回"
+			action.pressed.connect(func(): _auction_cancel(panel, listing_id))
+		elif listing_status in ["sold", "cancelled", "expired"]:
+			action.text = "领取"
+			action.pressed.connect(func(): _auction_claim(panel, listing_id))
+		else:
+			action.text = "已完成"
+			action.disabled = true
+	UIUtils.shrine_button_style(action, tab == "market")
+	row.add_child(action)
+
+
+func _auction_buy(panel: Panel, listing_id: String) -> void:
+	var status := panel.get_node("Status") as Label
+	status.text = "正在购买…"
+	var response: Dictionary = await NetworkClient.buy_auction_listing(listing_id)
+	if not is_instance_valid(panel): return
+	if not response.get("ok", false):
+		status.text = _network_error_message(response)
+		return
+	await _refresh_network_character_state()
+	_show_float_text("购买成功，物品已收入背包", Color(0.3, 1.0, 0.6))
+	panel.queue_free()
+	_build_auction_panel("market")
+
+
+func _auction_cancel(panel: Panel, listing_id: String) -> void:
+	var status := panel.get_node("Status") as Label
+	status.text = "正在取消订单…"
+	var response: Dictionary = await NetworkClient.cancel_auction_listing(listing_id)
+	if not is_instance_valid(panel): return
+	if not response.get("ok", false):
+		status.text = _network_error_message(response)
+		return
+	panel.queue_free()
+	_build_auction_panel("mine")
+
+
+func _auction_claim(panel: Panel, listing_id: String) -> void:
+	var status := panel.get_node("Status") as Label
+	status.text = "正在领取…"
+	var response: Dictionary = await NetworkClient.claim_auction_listing(listing_id)
+	if not is_instance_valid(panel): return
+	if not response.get("ok", false):
+		status.text = _network_error_message(response)
+		return
+	await _refresh_network_character_state()
+	_show_float_text("领取成功", Color(0.3, 1.0, 0.6))
+	panel.queue_free()
+	_build_auction_panel("mine")
+
+
+func _build_auction_sell_candidates(panel: Panel, content: VBoxContainer) -> void:
+	var candidates := 0
+	for equipment_item in equip_instances:
+		var equipment_data: Dictionary = equipment_item as Dictionary
+		var has_socketed_gem := false
+		for gem in equipment_data.get("gems", []):
+			if _gem_entry_id(gem) != 0: has_socketed_gem = true
+		var eligible := (int(equipment_data.get("quality", 0)) == 4 or not str(equipment_data.get("suit_name", "")).is_empty()) \
+			and not bool(equipment_data.get("locked", false)) and not bool(equipment_data.get("bound", false)) \
+			and not bool(equipment_data.get("equipped", false)) and not has_socketed_gem
+		if eligible and not str(equipment_data.get("server_id", "")).is_empty():
+			candidates += 1
+			_add_auction_sell_card(panel, content, "equipment", str(equipment_data.get("server_id", "")), 1, 1, EquipGenCls.full_name(equipment_data))
+	for stack in inventory.items:
+		if int(stack.get("item_id", 0)) == 6 and not bool(stack.get("bound", false)):
+			candidates += 1
+			_add_auction_sell_card(panel, content, "item", 6, int(stack.get("count", 0)), 1, "打孔器")
+	for gem in gem_bag:
+		if bool(gem.get("bound", false)) or int(gem.get("count", 0)) <= 0: continue
+		candidates += 1
+		var defn: Dictionary = EquipData.GEM_DEFS.get(int(gem.get("id", 0)), {})
+		_add_auction_sell_card(panel, content, "gem", int(gem.get("id", 0)), int(gem.get("count", 0)), int(gem.get("level", 1)), "%s Lv.%d" % [defn.get("name", "宝石"), int(gem.get("level", 1))])
+	if candidates == 0:
+		_add_auction_empty(content, "没有符合条件的物品\n仅未绑定、未锁定、未镶嵌的传说/套装装备，1～10级宝石和打孔器可以上架")
+
+
+func _add_auction_sell_card(panel: Panel, content: VBoxContainer, kind: String, item_id: Variant, available: int, level: int, display_name: String) -> void:
+	var card := Panel.new()
+	card.custom_minimum_size = Vector2(930, 72)
+	card.size = Vector2(930, 72)
+	UIUtils.shrine_panel_style(card, Color("fffdfb"), Color("d6b8b3"), 1)
+	content.add_child(card)
+	var row := HBoxContainer.new()
+	row.position = Vector2(10, 5)
+	row.size = Vector2(910, 62)
+	row.add_theme_constant_override("separation", 12)
+	card.add_child(row)
+	var name_label := Label.new()
+	name_label.text = "%s\n可上架：%d" % [display_name, available]
+	name_label.custom_minimum_size = Vector2(380, 60)
+	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	name_label.add_theme_color_override("font_color", Color("4f454d"))
+	row.add_child(name_label)
+	var count := SpinBox.new()
+	count.min_value = 1
+	count.max_value = available
+	count.value = 1
+	count.custom_minimum_size = Vector2(90, 38)
+	count.tooltip_text = "上架数量"
+	row.add_child(count)
+	var price := SpinBox.new()
+	price.min_value = 1
+	price.max_value = 9000000000000000.0
+	price.value = 100
+	price.step = 1
+	price.custom_minimum_size = Vector2(210, 38)
+	price.tooltip_text = "一口价（金币）"
+	row.add_child(price)
+	var duration := OptionButton.new()
+	duration.add_item("8小时", 8)
+	duration.add_item("12小时", 12)
+	duration.add_item("24小时", 24)
+	duration.select(2)
+	duration.custom_minimum_size = Vector2(105, 38)
+	row.add_child(duration)
+	var submit := Button.new()
+	submit.text = "上架"
+	submit.custom_minimum_size = Vector2(90, 40)
+	UIUtils.shrine_button_style(submit, true)
+	submit.pressed.connect(func(): _auction_create(panel, kind, item_id, int(count.value), int(price.value), duration.get_selected_id(), level))
+	row.add_child(submit)
+
+
+func _auction_create(panel: Panel, kind: String, item_id: Variant, count: int, price: int, duration: int, level: int) -> void:
+	var status := panel.get_node("Status") as Label
+	status.text = "正在上架…"
+	var response: Dictionary = await NetworkClient.create_auction_listing(kind, item_id, count, price, duration, level)
+	if not is_instance_valid(panel): return
+	if not response.get("ok", false):
+		status.text = _network_error_message(response)
+		return
+	await _refresh_network_character_state()
+	_show_float_text("上架成功", Color(0.3, 1.0, 0.6))
+	panel.queue_free()
+	_build_auction_panel("mine")
+
+
+func _refresh_network_character_state() -> bool:
+	var response: Dictionary = await NetworkClient.get_game_state()
+	if not response.get("ok", false):
+		return false
+	var data: Dictionary = LoginScriptRef.server_state_to_save_data(response.get("character", {}) as Dictionary, response.get("state", {}) as Dictionary)
+	_load_from_save_data(data)
+	top_bar.refresh()
+	top_bar.refresh_compact_stats()
+	_refresh_grid_display()
+	return true
+
+
+func _load_world_chat_history(panel: Panel) -> void:
+	var response: Dictionary = await NetworkClient.get_world_chat(50)
+	if not is_instance_valid(panel):
+		return
+	if not response.get("ok", false):
+		var status := panel.get_node_or_null("Status") as Label
+		if status:
+			status.text = _network_error_message(response)
+		return
+	var history := panel.get_node_or_null("History") as RichTextLabel
+	if not history:
+		return
+	history.clear()
+	for raw in response.get("messages", []):
+		_append_world_chat_message(history, raw as Dictionary)
+
+
+func _append_world_chat_message(history: RichTextLabel, message: Dictionary) -> void:
+	var sender_value: Variant = message.get("senderName")
+	var sender := "系统" if sender_value == null or str(sender_value).is_empty() else str(sender_value)
+	history.add_text("[%s] %s\n" % [sender, str(message.get("body", ""))])
+	history.scroll_to_line(maxi(0, history.get_line_count() - 1))
+
+
+func _on_world_chat_message(message: Dictionary) -> void:
+	var history := get_node_or_null("WorldChatPanel/History") as RichTextLabel
+	if history:
+		_append_world_chat_message(history, message)
+
+
+func _on_world_chat_error(message: String) -> void:
+	var status := get_node_or_null("WorldChatPanel/Status") as Label
+	if status:
+		status.text = message
+	else:
+		_show_float_text(message, Color(1.0, 0.4, 0.35))
+
+
 func _on_settings_pressed()-> void:
 	_auto_save()
 	if get_tree():
-		get_tree().change_scene_to_file("res://scenes/select_slot.tscn")
+		get_tree().change_scene_to_file("res://scenes/login.tscn" if _is_network_game() else "res://scenes/select_slot.tscn")
 
 
 ## ============ 背包 UI 面板 (重制版) ============
@@ -2625,6 +3193,8 @@ func _slot_enhance_cost(slot_names: Array[String], levels: int) -> int:
 
 
 func _apply_slot_enhancement(slot_names: Array[String], levels: int) -> bool:
+	if _is_network_game():
+		return await _run_network_slot_enhancement(slot_names, levels)
 	var available_levels: int = 0
 	for slot_name in slot_names:
 		available_levels += mini(levels, EquipmentCls.MAX_SLOT_ENHANCE - int(equipment.get_slot_enhance(slot_name)))
@@ -2646,6 +3216,10 @@ func _apply_slot_enhancement(slot_names: Array[String], levels: int) -> bool:
 	_auto_save()
 	_show_float_text("槽位强化完成  -%d金" % cost, Color(0.75, 0.25, 0.3))
 	return true
+
+
+func _run_network_slot_enhancement(slot_names: Array[String], levels: int) -> bool:
+	return await _run_network_game_command("equipment/enhance", {"slots": slot_names, "levels": levels}, "槽位强化完成")
 
 
 func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
@@ -2719,7 +3293,9 @@ func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
 	refresh_text.call()
 
 	var execute := func(target_slots: Array[String], levels: int):
-		if not _apply_slot_enhancement(target_slots, levels):
+		if not await _apply_slot_enhancement(target_slots, levels):
+			return
+		if not is_instance_valid(dialog):
 			return
 		for i in range(slot_defs.size()):
 			var slot_id: String = str(slot_defs[i]["id"])
@@ -2841,7 +3417,10 @@ func _show_auto_dismantle_panel() -> void:
 			next_rules[defn["key"]] = selected
 		auto_dismantle_rules = next_rules
 		auto_dismantle_enabled = enabled.button_pressed
-		_auto_save()
+		if _is_network_game():
+			_run_network_game_command("equipment/auto-dismantle", {"enabled": auto_dismantle_enabled, "rules": auto_dismantle_rules}, "自动分解设置已保存")
+		else:
+			_auto_save()
 		_close_all_tooltips()
 		_show_float_text("自动分解设置已保存", Color(0.45, 1.0, 0.65))
 	)
@@ -3016,6 +3595,11 @@ func _show_expansion_confirm(main_panel: Panel) -> void:
 	UIUtils.btn_style_mini(confirm_btn, Color(0.1, 0.3, 0.15))
 	confirm_btn.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5))
 	confirm_btn.pressed.connect(func():
+		if _is_network_game():
+			_close_all_tooltips()
+			if is_instance_valid(main_panel): main_panel.queue_free()
+			_run_network_game_command("equipment/expand" if is_equip else "inventory/expand", {}, "背包扩容成功")
+			return
 		# 点击确认时才检查金币
 		var cost2: int = inventory.get_next_expansion_cost()
 		if cost2 < 0:
@@ -3104,6 +3688,7 @@ func _build_consume_tab(area: Panel, main_panel: Panel) -> void:
 			var icon: Label = Label.new()
 			icon.text = defn.get("icon", "?")
 			icon.add_theme_font_size_override("font_size", 24)
+			icon.add_theme_color_override("font_color", Color("4f454d"))
 			icon.position = Vector2(x + 4, y + 4)
 			area.add_child(icon)
 
@@ -3115,10 +3700,11 @@ func _build_consume_tab(area: Panel, main_panel: Panel) -> void:
 			area.add_child(cnt_lbl)
 
 			# 点击使用
-			var btn: Button = Button.new()
+			var btn: Button = HoverHintButton.new()
 			btn.flat = true
 			btn.position = Vector2(x, y)
 			btn.size = Vector2(icon_s, icon_s)
+			btn.tooltip_text = "%s\n%s" % [str(defn.get("name", "物品")), str(defn.get("desc", ""))]
 			UIUtils.btn_transparent2(btn)
 			var si: int = i
 			btn.pressed.connect(func():
@@ -3428,7 +4014,11 @@ func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_pane
 		lock_btn.size = Vector2(60, 26)
 		UIUtils.btn_style_mini(lock_btn, Color(0.3, 0.23, 0.1))
 		lock_btn.pressed.connect(func():
-			eqp["locked"] = not bool(eqp.get("locked", false))
+			var next_locked := not bool(eqp.get("locked", false))
+			if _is_network_game():
+				_run_network_game_command("equipment/lock", {"equipment_id": str(eqp.get("server_id", "")), "locked": next_locked}, "装备已锁定" if next_locked else "装备已解锁")
+			else:
+				eqp["locked"] = next_locked
 			_close_all_tooltips()
 			main_panel.queue_free()
 			_show_inventory_panel()
@@ -3468,9 +4058,12 @@ func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_pane
 		UIUtils.btn_style_mini(worn_lock_btn, Color(0.3, 0.23, 0.1))
 		worn_lock_btn.pressed.connect(func():
 			var next_locked := not bool(eqp.get("locked", false))
-			eqp["locked"] = next_locked
-			var original_idx := _find_instance_idx(eqp)
-			if original_idx >= 0: equip_instances[original_idx]["locked"] = next_locked
+			if _is_network_game():
+				_run_network_game_command("equipment/lock", {"equipment_id": str(eqp.get("server_id", "")), "locked": next_locked}, "装备已锁定" if next_locked else "装备已解锁")
+			else:
+				eqp["locked"] = next_locked
+				var original_idx := _find_instance_idx(eqp)
+				if original_idx >= 0: equip_instances[original_idx]["locked"] = next_locked
 			_close_all_tooltips()
 			main_panel.queue_free()
 			_show_inventory_panel()
@@ -3614,6 +4207,11 @@ func _show_gem_socket_panel(eqp: Dictionary, socket_index: int, main_panel: Pane
 
 
 func _socket_gem(eqp: Dictionary, socket_index: int, gid: int, level: int, main_panel: Panel) -> void:
+	if _is_network_game():
+		_close_all_tooltips()
+		if is_instance_valid(main_panel): main_panel.queue_free()
+		_run_network_game_command("equipment/gem-socket", {"equipment_id": str(eqp.get("server_id", "")), "socket_index": socket_index, "gem_id": gid, "level": level}, "宝石已镶嵌")
+		return
 	var bag_index := -1
 	for i in range(gem_bag.size()):
 		if int(gem_bag[i].get("id", 0)) == gid and int(gem_bag[i].get("level", 1)) == level and int(gem_bag[i].get("count", 0)) > 0:
@@ -3638,6 +4236,11 @@ func _socket_gem(eqp: Dictionary, socket_index: int, gid: int, level: int, main_
 
 
 func _remove_socketed_gem(eqp: Dictionary, socket_index: int, main_panel: Panel) -> void:
+	if _is_network_game():
+		_close_all_tooltips()
+		if is_instance_valid(main_panel): main_panel.queue_free()
+		_run_network_game_command("equipment/gem-unsocket", {"equipment_id": str(eqp.get("server_id", "")), "socket_index": socket_index}, "宝石已拆卸")
+		return
 	var gems: Array = eqp.get("gems", []).duplicate(true)
 	if socket_index < 0 or socket_index >= gems.size():
 		return
@@ -3676,6 +4279,9 @@ func _find_instance_idx(eqp: Dictionary) -> int:
 
 ## 卸下装备
 func _on_unequip_instance(slot_name: String) -> void:
+	if _is_network_game():
+		_run_network_game_command("equipment/unequip", {"slot": slot_name}, "装备已卸下")
+		return
 	print("[DEBUG] _on_unequip_instance called, slot=", slot_name)
 	var eqp: Dictionary = equipment.unequip(slot_name)
 	if eqp.is_empty():
@@ -3703,6 +4309,9 @@ func _on_equip_instance(idx: int) -> void:
 		print("[DEBUG] _on_equip_instance OUT OF BOUNDS")
 		return
 	var eqp: Dictionary = equip_instances[idx]
+	if _is_network_game():
+		_run_network_game_command("equipment/equip", {"equipment_id": str(eqp.get("server_id", ""))}, "装备已穿戴")
+		return
 	print("[DEBUG] eqp keys: ", eqp.keys(), " slot: ", eqp.get("slot","?"))
 	var slot_name: String = eqp.get("slot", "")
 	if slot_name.is_empty():
@@ -3899,6 +4508,15 @@ func _show_dismantle_panel(main_panel: Panel) -> void:
 	confirm_btn.pressed.connect(func():
 		if dismantle_targets.is_empty():
 			return
+		if _is_network_game():
+			var server_ids: Array[String] = []
+			for target_index in dismantle_targets:
+				if target_index >= 0 and target_index < equip_instances.size():
+					server_ids.append(str(equip_instances[target_index].get("server_id", "")))
+			dp.queue_free()
+			if is_instance_valid(main_panel): main_panel.queue_free()
+			_run_network_game_command("equipment/dismantle-many", {"equipment_ids": server_ids}, "装备分解完成")
+			return
 		var total_essence: int = 0
 		var removed: Array[int] = []
 		for ei in dismantle_targets:
@@ -3961,6 +4579,10 @@ func _show_socket_select_panel(item_slot_idx: int) -> void:
 		var target: Dictionary = equip_instances[targets[selected]]
 		if not EquipmentRulesCls.can_socket(target):
 			_show_float_text("该装备已无法继续打孔", Color(1.0, 0.5, 0.4))
+			return
+		if _is_network_game():
+			_close_all_tooltips()
+			_run_network_game_command("item/use", {"item_id": 6, "equipment_id": str(target.get("server_id", ""))}, "装备打孔成功")
 			return
 		target["gem_slots"] = int(target.get("gem_slots", 0)) + 1
 		inventory.remove_item(item_slot_idx, 1)
@@ -4041,6 +4663,11 @@ func _show_reroll_panel(equip_idx: int, main_panel: Panel) -> void:
 		for i in range(checks.size()):
 			if checks[i].button_pressed: locked.append(i)
 		var cost: Dictionary = EquipmentRulesCls.REROLL_COSTS[locked.size()]
+		if _is_network_game():
+			_close_all_tooltips()
+			if is_instance_valid(main_panel): main_panel.queue_free()
+			_run_network_game_command("equipment/reroll", {"equipment_id": str(eqp.get("server_id", "")), "locked_indices": locked}, "词缀重铸完成")
+			return
 		if dismantle_essence < int(cost["essence"]) or player_gold < int(cost["gold"]):
 			_show_float_text("金币或分解精华不足", Color(1.0, 0.45, 0.35))
 			return
@@ -4101,6 +4728,15 @@ func _on_item_action(slot_idx: int) -> void:
 	else:
 		# 消耗品
 		var stats: Dictionary = defn.get("stats", {})
+		if _is_network_game():
+			if int(stats.get("socket_tool", 0)) > 0:
+				if not _has_socket_target():
+					_show_float_text("没有可继续打孔的史诗或传说装备", Color(1.0, 0.55, 0.45))
+					return
+				_show_socket_select_panel(slot_idx)
+				return
+			_run_network_game_command("item/use", {"item_id": int(slot.get("item_id", 0))}, "")
+			return
 		if int(stats.get("fate_event", 0)) > 0:
 			inventory.remove_item(slot_idx, 1)
 			_apply_fate_card({})
@@ -4419,9 +5055,12 @@ func _build_skill_tab(panel: Panel) -> void:
 			prio_btn.add_theme_color_override("font_color", prio_clr)
 			var si: int = i
 			prio_btn.pressed.connect(func():
-				skill_system.toggle_priority(si)
-				_stats_tab = "skill"
-				_refresh_stats_panel()
+				if _is_network_game():
+					_sync_network_skill_slots(si)
+				else:
+					skill_system.toggle_priority(si)
+					_stats_tab = "skill"
+					_refresh_stats_panel()
 			)
 			panel.add_child(prio_btn)
 
@@ -4438,8 +5077,11 @@ func _build_skill_tab(panel: Panel) -> void:
 					detail_btn.accept_event()
 					if ev.double_click:
 						_cancel_pending_detail_click()
-						skill_system.unequip_skill(si)
-						_refresh_stats_panel()
+						if _is_network_game():
+							_sync_network_skill_slots(-1, si)
+						else:
+							skill_system.unequip_skill(si)
+							_refresh_stats_panel()
 					else:
 						_queue_detail_click(func():
 							if is_instance_valid(panel):
@@ -4750,9 +5392,12 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 			if player_gold < price:
 				_show_float_text("金币不足，需要 " + str(price) + " 金币", Color(1.0, 0.4, 0.3))
 				return
-			player_gold -= price
-			skill_system.unlock_skill(sid_buy)
-			_auto_save()
+			if _is_network_game():
+				_run_network_game_command("skill/unlock", {"skill_id": sid_buy}, "技能已解锁")
+			else:
+				player_gold -= price
+				skill_system.unlock_skill(sid_buy)
+				_auto_save()
 			_close_all_tooltips()
 			_refresh_stats_panel()
 		)
@@ -4767,7 +5412,10 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 		unequip_btn.add_theme_color_override("font_color", Color(1.0, 0.6, 0.6))
 		var slot_idx: int = equipped_slot
 		unequip_btn.pressed.connect(func():
-			skill_system.unequip_skill(slot_idx)
+			if _is_network_game():
+				_sync_network_skill_slots(-1, slot_idx)
+			else:
+				skill_system.unequip_skill(slot_idx)
 			_close_all_tooltips()
 			_refresh_stats_panel()
 		)
@@ -4782,7 +5430,11 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 		equip_btn.add_theme_color_override("font_color", Color(0.3, 1.0, 0.6))
 		var sid_v: int = skill_id
 		equip_btn.pressed.connect(func():
-			var ok: bool = skill_system.equip_skill(sid_v)
+			var ok: bool = skill_system.get_slot_skill_id(skill_system.get_unlocked_slots() - 1) == null
+			if _is_network_game() and ok:
+				_sync_network_skill_slots(-1, -1, sid_v)
+			elif ok:
+				ok = skill_system.equip_skill(sid_v)
 			if ok:
 				_close_all_tooltips()
 				_refresh_stats_panel()

@@ -1,6 +1,7 @@
 extends Control
 
 const UI_FONT: Font = preload("res://assets/fonts/NotoSansHans-Regular.otf")
+const CREDENTIALS_PATH := "user://login_credentials.cfg"
 
 var _mode := "login"
 var _panel: PanelContainer
@@ -11,22 +12,31 @@ var _username: LineEdit
 var _password: LineEdit
 var _password_confirm: LineEdit
 var _invite_code: LineEdit
+var _remember_credentials: CheckBox
 var _status: Label
 var _submit: Button
 var _character_area: VBoxContainer
 var _character_name: LineEdit
 var _character_summary: Label
 var _enter_game: Button
+var _logout_account: Button
+var NetworkClient: Variant
 
 
 func _ready() -> void:
+	NetworkClient = get_node_or_null("/root/NetworkClient")
 	var app_theme := Theme.new()
 	app_theme.default_font = ThemeDB.fallback_font
 	theme = app_theme
 	_build_ui()
+	_remove_old_plaintext_credentials()
 	_show_mode("login")
 	NetworkClient.kicked.connect(_on_kicked)
 	NetworkClient.realtime_disconnected.connect(_on_realtime_disconnected)
+	if not NetworkClient.session_token.is_empty():
+		_show_character_entry()
+	elif OS.has_feature("web"):
+		_restore_saved_login()
 
 
 func _build_ui() -> void:
@@ -95,6 +105,11 @@ func _build_ui() -> void:
 	_form.add_child(_password)
 	_form.add_child(_password_confirm)
 	_form.add_child(_invite_code)
+	_remember_credentials = CheckBox.new()
+	_remember_credentials.text = "记住登录状态（仅限当前浏览器）"
+	_remember_credentials.add_theme_font_size_override("font_size", 13)
+	_remember_credentials.add_theme_color_override("font_color", Color("b9c1cf"))
+	_form.add_child(_remember_credentials)
 
 	_status = Label.new()
 	_status.custom_minimum_size = Vector2(0, 42)
@@ -129,6 +144,11 @@ func _build_ui() -> void:
 	_enter_game.pressed.connect(_on_character_action)
 	_style_primary_button(_enter_game)
 	_character_area.add_child(_enter_game)
+	_logout_account = Button.new()
+	_logout_account.text = "退出账号"
+	_logout_account.custom_minimum_size = Vector2(0, 38)
+	_logout_account.pressed.connect(_on_logout_account)
+	_character_area.add_child(_logout_account)
 
 
 func _show_mode(mode: String) -> void:
@@ -137,13 +157,27 @@ func _show_mode(mode: String) -> void:
 	_character_area.visible = false
 	_form.visible = true
 	_submit.visible = true
-	_password_confirm.visible = mode == "register"
+	_username.visible = mode != "change_password"
+	_password_confirm.visible = mode == "register" or mode == "change_password"
 	_invite_code.visible = mode == "register"
+	_remember_credentials.visible = mode == "login"
+	_tabs_visible(mode != "change_password")
 	_panel.custom_minimum_size.y = 600 if mode == "register" else 480
-	_submit.text = "创建账号" if mode == "register" else "登录"
+	_submit.text = "创建账号" if mode == "register" else "修改密码" if mode == "change_password" else "登录"
 	_login_tab.button_pressed = mode == "login"
 	_register_tab.button_pressed = mode == "register"
-	_username.grab_focus()
+	_password.placeholder_text = "新密码" if mode == "change_password" else "密码"
+	if mode == "change_password":
+		_password.clear()
+		_password_confirm.clear()
+		_password.grab_focus()
+	else:
+		_username.grab_focus()
+
+
+func _tabs_visible(visible: bool) -> void:
+	_login_tab.visible = visible
+	_register_tab.visible = visible
 
 
 func _on_submit() -> void:
@@ -163,8 +197,17 @@ func _on_submit() -> void:
 			_show_status("账号创建成功，请登录", false)
 		else:
 			_show_response_error(registered)
+	elif _mode == "change_password":
+		var changed: Dictionary = await NetworkClient.change_password(_password.text, _password_confirm.text)
+		if changed.get("ok", false):
+			_password.clear()
+			_password_confirm.clear()
+			_show_character_entry()
+			_show_status("密码修改成功；下次请用新密码登录", false)
+		else:
+			_show_response_error(changed)
 	else:
-		var response: Dictionary = await NetworkClient.login(_username.text, _password.text)
+		var response: Dictionary = await NetworkClient.login(_username.text, _password.text, _remember_credentials.button_pressed)
 		if response.get("ok", false):
 			_password.clear()
 			_show_character_entry()
@@ -173,7 +216,35 @@ func _on_submit() -> void:
 	_set_busy(false)
 
 
+func _remove_old_plaintext_credentials() -> void:
+	if FileAccess.file_exists(CREDENTIALS_PATH):
+		var error := DirAccess.remove_absolute(ProjectSettings.globalize_path(CREDENTIALS_PATH))
+		if error != OK:
+			push_warning("无法删除旧版明文登录信息，请清除该站点的浏览器数据")
+
+
+func _restore_saved_login() -> void:
+	_set_busy(true)
+	_show_status("正在恢复登录状态…", false)
+	var restored: Dictionary = await NetworkClient.restore_login()
+	_set_busy(false)
+	if restored.get("ok", false):
+		_remember_credentials.button_pressed = true
+		_show_character_entry()
+	else:
+		var error: Dictionary = restored.get("error", {}) as Dictionary
+		if str(error.get("code", "")) == "NO_REMEMBERED_LOGIN" or str(error.get("code", "")) == "SESSION_INVALID":
+			_show_status("", false)
+		else:
+			_show_response_error(restored)
+
+
 func _show_character_entry() -> void:
+	if bool(NetworkClient.account.get("must_change_password", false)):
+		_show_mode("change_password")
+		_show_status("管理员已重置密码，请先设置新密码", false)
+		return
+	_tabs_visible(true)
 	_panel.custom_minimum_size.y = 480
 	_form.visible = false
 	_submit.visible = false
@@ -208,6 +279,17 @@ func _on_character_action() -> void:
 	await _start_game(NetworkClient.character as Dictionary)
 
 
+func _on_logout_account() -> void:
+	_set_busy(true)
+	await NetworkClient.logout()
+	_set_busy(false)
+	_username.clear()
+	_password.clear()
+	_remember_credentials.button_pressed = false
+	_show_mode("login")
+	_show_status("已退出登录", false)
+
+
 func _start_game(server_character: Dictionary) -> void:
 	_set_busy(true)
 	var game_response: Dictionary = await NetworkClient.get_game_state()
@@ -217,19 +299,9 @@ func _start_game(server_character: Dictionary) -> void:
 		return
 	server_character = game_response.get("character", server_character) as Dictionary
 	var server_state: Dictionary = game_response.get("state", {}) as Dictionary
-	var attributes: Dictionary = server_state.get("attributes", {}) as Dictionary
-	var data := {
-		"character_name": str(server_character.get("name", "勇者")),
-		"level": int(server_character.get("level", 1)),
-		"exp": int(server_character.get("experience", 0)),
-		"gold": int(str(server_character.get("gold", "0"))),
-		"free_points": int(server_state.get("freeAttributePoints", 0)),
-		"stat_atk": int(attributes.get("attack", 0)),
-		"stat_def": int(attributes.get("defense", 0)),
-		"stat_spd": int(attributes.get("speed", 0)),
-		"stat_luk": int(attributes.get("luck", 0)),
-		"last_online": int(Time.get_unix_time_from_system()),
-	}
+	var data := server_state_to_save_data(server_character, server_state)
+	data["offline_reward"] = NetworkClient.offline_reward
+	NetworkClient.offline_reward = null
 	var main_scene := load("res://scenes/main_game.tscn") as PackedScene
 	if not main_scene:
 		_show_status("游戏场景加载失败", true)
@@ -240,6 +312,98 @@ func _start_game(server_character: Dictionary) -> void:
 	main.set_meta("network_character_id", str(server_character.get("id", "")))
 	get_tree().root.add_child(main)
 	queue_free()
+
+
+static func server_state_to_save_data(server_character: Dictionary, state: Dictionary) -> Dictionary:
+	var attributes: Dictionary = state.get("attributes", {}) as Dictionary
+	var inventory_items: Array = []
+	for raw in state.get("inventory", []):
+		inventory_items.append({"item_id": int(raw.get("itemId", 0)), "count": int(raw.get("count", 0)), "bound": bool(raw.get("bound", false))})
+	var equip_instances: Array = []
+	var equipped_ids: Dictionary = state.get("equipped", {}) as Dictionary
+	var equipped_by_slot: Dictionary = {}
+	for raw in state.get("equipmentBag", []):
+		var item := _server_equipment_to_client(raw as Dictionary, equipped_ids)
+		equip_instances.append(item)
+		if bool(item.get("equipped", false)):
+			equipped_by_slot[str(item.get("slot", ""))] = item.duplicate(true)
+	var equipment_slots := {}
+	for slot in ["weapon", "armor", "shoes", "ring", "necklace", "cape", "helmet", "charm"]:
+		equipment_slots[slot] = equipped_by_slot.get(slot, {})
+	var skill_slots: Array = []
+	var skill_priorities: Dictionary = state.get("skillPriorities", {}) as Dictionary
+	for raw_id in state.get("skillSlots", []):
+		var skill_id := int(raw_id)
+		skill_slots.append({"skill_id": skill_id, "priority": clampi(int(skill_priorities.get(str(skill_id), 2)), 1, 3)})
+	while skill_slots.size() < 6:
+		skill_slots.append(null)
+	var gems: Array = []
+	for raw in state.get("gemBag", []):
+		gems.append({"id": int(raw.get("gemId", 0)), "level": int(raw.get("level", 1)), "count": int(raw.get("count", 0)), "bound": bool(raw.get("bound", false))})
+	var map_values: Array[int] = []
+	for raw in state.get("mapGrids", []):
+		map_values.append(int(raw))
+	return {
+		"character_name": str(server_character.get("name", "勇者")),
+		"level": int(server_character.get("level", 1)),
+		"exp": int(server_character.get("experience", 0)),
+		"exp_max": int(100.0 * pow(1.12, int(server_character.get("level", 1)) - 1)),
+		"gold": int(str(server_character.get("gold", "0"))),
+		"revive_coins": int(state.get("reviveCoins", 3)),
+		"boss_tier": int(state.get("bossTier", 0)),
+		"boss_index": int(state.get("bossIndex", 1)),
+		"free_points": int(state.get("freeAttributePoints", 0)),
+		"stat_atk": int(attributes.get("attack", 0)),
+		"stat_def": int(attributes.get("defense", 0)),
+		"stat_spd": int(attributes.get("speed", 0)),
+		"stat_luk": int(attributes.get("luck", 0)),
+		"grid_index": int(state.get("gridIndex", 0)),
+		"map_total_grids": int(state.get("mapTotalGrids", map_values.size())),
+		"map_grids": map_values,
+		"dice_history": state.get("diceHistory", []),
+		"poker_records": state.get("pokerRecords", []),
+		"inventory": {"items": inventory_items, "capacity": int(state.get("inventoryCapacity", 100)), "expansion_count": int(state.get("inventoryExpansionCount", 0))},
+		"equipment": {"equipped": equipment_slots, "slot_enhance": state.get("slotEnhance", {})},
+		"equip_instances": equip_instances,
+		"equip_capacity": int(state.get("equipmentCapacity", 100)),
+		"equip_expansion_count": int(state.get("equipmentExpansionCount", 0)),
+		"dismantle_essence": int(state.get("dismantleEssence", 0)),
+		"auto_dismantle_enabled": bool(state.get("autoDismantleEnabled", false)),
+		"auto_dismantle_rules": state.get("autoDismantleRules", {}),
+		"skill_system": {"slots": skill_slots, "unlocked_skills": state.get("skills", [1, 22])},
+		"gem_bag": gems,
+		"lottery_tickets": state.get("lotteryTicketNumbers", []),
+		"completed_laps": int(state.get("completedLaps", 0)),
+		"lottery_last_draw_lap": int(state.get("lotteryLastDrawLap", 0)),
+		"deity_buffs": state.get("deityBuffs", []),
+		"current_weather": str(state.get("weather", "sunny")),
+		"weather_roll_count": int(state.get("weatherRollCount", 0)),
+		"weather_roll_target": int(state.get("weatherRollTarget", 8)),
+		"weather_sunny_buffer": int(state.get("weatherSunnyBuffer", 10)),
+		"last_gold_per_hour": float(state.get("lastGoldPerHour", 0.0)),
+		"last_exp_per_hour": float(state.get("lastExpPerHour", 0.0)),
+		"next_roll_modifier": int(state.get("nextRollModifier", 0)),
+		"hibernate_laps": int(state.get("hibernateLaps", 0)),
+		"last_online": int(state.get("lastOnline", Time.get_unix_time_from_system())),
+	}
+
+
+static func _server_equipment_to_client(raw: Dictionary, equipped_ids: Dictionary) -> Dictionary:
+	var id := str(raw.get("id", ""))
+	var slot := str(raw.get("slot", ""))
+	var quality := int(raw.get("quality", 0))
+	return {
+		"uid": id.hash(), "server_id": id, "slot": slot,
+		"slot_type_id": ["weapon", "armor", "shoes", "ring", "necklace", "cape", "helmet", "charm"].find(slot) + 1,
+		"quality": quality, "quality_name": ["普通", "精良", "稀有", "史诗", "传说"][clampi(quality, 0, 4)],
+		"base_name": str(raw.get("baseName", raw.get("name", "装备"))), "icon": str(raw.get("icon", "")), "icon_path": str(raw.get("iconPath", "")),
+		"main_stat": str(raw.get("mainStat", "主属性")), "main_value": float(raw.get("mainValue", 0.0)),
+		"affixes": raw.get("affixes", []), "gems": raw.get("gems", []), "gem_slots": int(raw.get("gemSlots", 0)),
+		"initial_gem_slots": int(raw.get("initialGemSlots", raw.get("gemSlots", 0))), "enhance": 0,
+		"locked": bool(raw.get("locked", false)), "bound": bool(raw.get("bound", false)), "acquired_at": int(raw.get("acquiredAt", 0)),
+		"suit_name": str(raw.get("suitName", "")), "extra_suit_name": str(raw.get("extraSuitName", "")), "set_affixes": raw.get("setAffixes", []),
+		"equipped": str(equipped_ids.get(slot, "")) == id,
+	}
 
 
 func _on_kicked(message: String) -> void:
@@ -268,6 +432,7 @@ func _show_status(message: String, is_error: bool) -> void:
 func _set_busy(busy: bool) -> void:
 	_submit.disabled = busy
 	_enter_game.disabled = busy
+	_logout_account.disabled = busy
 	_login_tab.disabled = busy
 	_register_tab.disabled = busy
 

@@ -45,6 +45,12 @@ export interface GameCommandInput {
   payload: Record<string, unknown>;
 }
 
+export interface OfflineProgressResult {
+  state: GameState;
+  character: CharacterSummary;
+  reward: { seconds: number; gold: number; experience: number } | null;
+}
+
 export interface AuctionListing {
   id: string;
   sellerCharacterId: string;
@@ -65,6 +71,7 @@ export interface CreateAuctionInput {
   requestId: string;
   itemKind: "equipment" | "item" | "gem";
   itemId: string | number;
+  itemLevel?: number;
   itemCount: number;
   buyoutPrice: number;
   durationHours: number;
@@ -86,6 +93,18 @@ export interface CreateSessionInput {
   expiresAt: Date;
 }
 
+export interface CreateRememberedLoginInput {
+  id: string;
+  accountId: string;
+  tokenHash: string;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+export interface RotateRememberedLoginInput extends CreateRememberedLoginInput {
+  previousTokenHash: string;
+}
+
 export interface CreateCharacterInput {
   id: string;
   requestId: string;
@@ -100,9 +119,15 @@ export interface GameRepository {
   registerAccount(input: RegisterAccountInput): Promise<AccountSummary>;
   findAccountForLogin(username: string): Promise<AccountForLogin | null>;
   createSession(input: CreateSessionInput): Promise<void>;
+  createRememberedLogin(input: CreateRememberedLoginInput): Promise<void>;
+  findAccountForRememberedLogin(tokenHash: string, at: Date): Promise<AccountForLogin | null>;
+  rotateRememberedLogin(input: RotateRememberedLoginInput): Promise<boolean>;
+  revokeRememberedLogin(tokenHash: string, at: Date, reason: string): Promise<void>;
+  revokeAccountRememberedLogins(accountId: string, at: Date, reason: string): Promise<void>;
   touchSession(sessionId: string, at: Date, idleExpiresAt: Date): Promise<void>;
   revokeSession(sessionId: string, at: Date, reason: string): Promise<void>;
   revokeAccountSessions(accountId: string, at: Date, reason: string): Promise<void>;
+  updateAccountPassword?(accountId: string, passwordHash: string): Promise<void>;
   recordLoginAttempt(
     loginKeyHash: string,
     ipHash: string,
@@ -114,6 +139,7 @@ export interface GameRepository {
   listChatMessages?(channel: "world" | "system", limit: number): Promise<ChatMessage[]>;
   createChatMessage?(input: CreateChatMessageInput): Promise<ChatMessage>;
   getGameState?(characterId: string): Promise<GameState>;
+  claimOfflineProgress?(characterId: string, at: Date): Promise<OfflineProgressResult>;
   executeGameCommand?(input: GameCommandInput): Promise<GameCommandResult>;
   listAuctionListings?(limit: number): Promise<AuctionListing[]>;
   listMyAuctionListings?(characterId: string, limit: number): Promise<AuctionListing[]>;

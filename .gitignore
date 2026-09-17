@@ -1,4 +1,4 @@
-# This repository intentionally contains only the web client and server.
+# Keep the web client, server, and game design documents in this repository.
 /*
 !/.gitignore
 !/.github/
@@ -7,3 +7,6 @@
 !/client/
 !/SERVER/
 !/web-client/
+!/策划案/
+!/数值设计总表/
+/策划案/*.py
