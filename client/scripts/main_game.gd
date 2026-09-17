@@ -145,7 +145,7 @@ func _ready() -> void:
 	anchor_right  = 1.0
 	anchor_bottom = 1.0
 	var app_theme := Theme.new()
-	app_theme.default_font = load("res://assets/fonts/NotoSansHans-Regular.otf") as Font
+	app_theme.default_font = ThemeDB.fallback_font
 	theme = app_theme
 
 	# 初始化子系统
@@ -2391,7 +2391,7 @@ func _build_inventory_panel() -> void:
 					equip_panel.add_child(gt)
 
 				# 悬停查看摘要；单击打开详情；双击快速卸下。
-				var slot_btn: Button = Button.new()
+				var slot_btn: Button = HoverHintButton.new()
 				slot_btn.flat = true
 				slot_btn.position = Vector2(rx, ry + 16)
 				slot_btn.size = Vector2(50, 50)
@@ -3131,7 +3131,7 @@ func _build_equip_tab(area: Panel, main_panel: Panel) -> void:
 			area.add_child(ename)
 
 			# 悬停查看摘要；单击打开详情；双击快速装备。
-			var btn: Button = Button.new()
+			var btn: Button = HoverHintButton.new()
 			btn.flat = true
 			btn.position = Vector2(x, y)
 			btn.size = Vector2(icon_s, icon_s + 16)
@@ -4355,7 +4355,7 @@ func _build_skill_tab(panel: Panel) -> void:
 			panel.add_child(prio_btn)
 
 			# 点击查看详情
-			var detail_btn: Button = Button.new()
+			var detail_btn: Button = HoverHintButton.new()
 			detail_btn.flat = true
 			detail_btn.position = Vector2(sx, sy)
 			detail_btn.size = Vector2(slot_w - 50, slot_h)
@@ -4543,7 +4543,7 @@ func _build_skill_tab(panel: Panel) -> void:
 		content.add_child(pool_info)
 
 		# 点击查看详情 + 装备/卸下（tooltip内操作）
-		var click_btn: Button = Button.new()
+		var click_btn: Button = HoverHintButton.new()
 		click_btn.flat = true
 		click_btn.position = Vector2(cx, cy)
 		click_btn.size = Vector2(icon_s, 48)

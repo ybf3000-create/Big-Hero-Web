@@ -21,7 +21,7 @@ var _enter_game: Button
 
 func _ready() -> void:
 	var app_theme := Theme.new()
-	app_theme.default_font = UI_FONT
+	app_theme.default_font = ThemeDB.fallback_font
 	theme = app_theme
 	_build_ui()
 	_show_mode("login")

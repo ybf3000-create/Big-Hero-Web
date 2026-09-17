@@ -190,7 +190,7 @@ func _build_header() -> void:
 	_event_label.add_theme_stylebox_override("normal", _box(Color(0.27, 0.15, 0.18, 0.86), Color("f1d895"), 2, 0))
 	add_child(_event_label)
 
-	var speed_btn := Button.new()
+	var speed_btn := HoverHintButton.new()
 	speed_btn.text = "×0.75"
 	speed_btn.position = Vector2(1154, 18)
 	speed_btn.size = Vector2(54, 34)
@@ -208,7 +208,7 @@ func _build_header() -> void:
 			speed_btn.text = "×0.75"
 	)
 	add_child(speed_btn)
-	var skip_btn := Button.new()
+	var skip_btn := HoverHintButton.new()
 	skip_btn.text = "≫"
 	skip_btn.position = Vector2(1214, 18)
 	skip_btn.size = Vector2(44, 34)
@@ -600,7 +600,7 @@ func _add_status(target: Control, status_name: String, duration: float, kind: St
 		return
 	if row.get_child_count() >= 5:
 		row.get_child(0).queue_free()
-	var button := Button.new()
+	var button := HoverHintButton.new()
 	button.name = node_name
 	button.custom_minimum_size = Vector2(28, 24)
 	button.text = _status_icon(status_name) + (" %ds" % int(ceil(duration)) if duration > 0 else "")
