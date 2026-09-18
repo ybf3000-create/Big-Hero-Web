@@ -6,7 +6,7 @@ import test from "node:test";
 import { buildApp } from "../src/app.js";
 import { BOSS_NAMES } from "../src/game-catalog.js";
 import { applyGameCommand, createInitialGameState } from "../src/game-engine.js";
-import { addItem, recalculateStats, serializeGameState } from "../src/game-state.js";
+import { addItem, parseGameState, recalculateStats, serializeGameState } from "../src/game-state.js";
 import { applyMigrations } from "../src/migrations.js";
 import { hashSecret } from "../src/security.js";
 import { SqliteRepository } from "../src/sqlite-repository.js";
@@ -473,12 +473,25 @@ test("server-generated equipment preserves original build fields", () => {
     assert.ok((equipment.affixes as unknown[]).length >= 1);
     assert.ok((equipment.affixes as unknown[]).length <= 3);
     assert.ok(typeof equipment.slotTypeId === "number");
+    assert.match(String(equipment.iconPath), /^res:\/\/assets\/equipment_icons\//);
     assert.ok(Array.isArray(equipment.gems));
     assert.ok(typeof equipment.suitName === "string");
     assert.equal(result.state.equipmentBag.length, 1);
   } finally {
     Math.random = originalRandom;
   }
+});
+
+test("legacy server equipment receives a stable image path when loaded", () => {
+  const state = createInitialGameState();
+  state.equipmentBag.push({
+    id: "legacy-weapon", slot: "weapon", name: "旧武器", quality: 1, enhance: 0,
+    mainStat: "攻击力", mainValue: 40, locked: false, bound: true, iconPath: "",
+  });
+  const first = parseGameState(serializeGameState(state));
+  const second = parseGameState(serializeGameState(state));
+  assert.match(first.equipmentBag[0]?.iconPath ?? "", /^res:\/\/assets\/equipment_icons\/weapon\/icon_\d+\.png$/);
+  assert.equal(first.equipmentBag[0]?.iconPath, second.equipmentBag[0]?.iconPath);
 });
 
 test("server owns gem, socket, dismantle and reroll state transitions", () => {

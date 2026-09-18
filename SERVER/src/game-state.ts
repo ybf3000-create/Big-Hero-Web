@@ -1,4 +1,4 @@
-import { EQUIPMENT_SLOTS, MAP_BASE, itemById } from "./game-catalog.js";
+import { EQUIPMENT_SLOTS, MAP_BASE, equipmentIconPath, itemById } from "./game-catalog.js";
 
 export interface InventoryStack {
   itemId: number;
@@ -249,6 +249,9 @@ export function parseGameState(value: string | null | undefined): GameState {
     state.stormRolls = Math.max(0, Math.min(15, Math.floor(Number(state.stormRolls) || 0)));
     state.gemSynthesisRefunds = Math.max(0, Math.min(10, Math.floor(Number(state.gemSynthesisRefunds) || 0)));
     state.rerollDiscounts = Math.max(0, Math.min(10, Math.floor(Number(state.rerollDiscounts) || 0)));
+    for (const equipment of state.equipmentBag) {
+      if (!equipment.iconPath) equipment.iconPath = equipmentIconPath(equipment.slot, equipment.id);
+    }
     return state;
   } catch {
     if (value) throw new InvalidGameStateError();

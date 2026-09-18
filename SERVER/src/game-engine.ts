@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { BattleOutcome, runBattle, type BattlePlayerState } from "./battle-engine.js";
-import { BOSS_NAMES, ELITE_TEMPLATES, EQUIPMENT_SLOTS, GRID_ICONS, GRID_NAMES, MONSTER_DEFS, NORMAL_TEMPLATES, QUALITY_NAMES, QUALITY_WEIGHTS, SET_AFFIXES, SET_NAMES, itemById, skillById } from "./game-catalog.js";
+import { BOSS_NAMES, ELITE_TEMPLATES, EQUIPMENT_SLOTS, GRID_ICONS, GRID_NAMES, MONSTER_DEFS, NORMAL_TEMPLATES, QUALITY_NAMES, QUALITY_WEIGHTS, SET_AFFIXES, SET_NAMES, equipmentIconPath, itemById, skillById } from "./game-catalog.js";
 import { addItem, defaultGameState, recalculateStats, reconcileAttributePoints, removeItem, type ConstructionDirection, type EquipmentItem, type FreeAttributes, type GameState } from "./game-state.js";
 import { generateEncounter } from "./monster-generator.js";
 
@@ -216,13 +216,14 @@ function generateEquipment(level: number, bossTier = 0, minimumQuality = 0, maxi
     const extraName = extraPool[Math.floor(Math.random() * extraPool.length)];
     if (extraName) extraSetAffix = { name: extraName, type: "set" };
   }
+  const id = randomUUID();
   return {
-    id: randomUUID(),
+    id,
     slot: slot.key,
     name: `${QUALITY_NAMES[quality]}${slot.name}`,
     baseName: slot.name,
     icon: slot.icon,
-    iconPath: "",
+    iconPath: equipmentIconPath(slot.key, id),
     slotTypeId: slot.typeId,
     quality,
     enhance: 0,

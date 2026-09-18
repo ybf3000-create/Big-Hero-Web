@@ -1,3 +1,6 @@
+import { readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 export interface ItemDefinition {
   id: number;
   name: string;
@@ -41,6 +44,56 @@ export const EQUIPMENT_SLOTS = [
   { key: "helmet", name: "头盔", typeId: 7, icon: "⛑️", mainStat: "格挡率", base: 2 },
   { key: "charm", name: "护符", typeId: 8, icon: "🍀", mainStat: "生命值", base: 100 },
 ] as const;
+
+const EQUIPMENT_ICON_FOLDERS: Record<string, string> = {
+  weapon: "weapon",
+  armor: "armor",
+  cape: "armor",
+  shoes: "shoes",
+  ring: "ring",
+  necklace: "charm",
+  charm: "charm",
+  helmet: "helmet",
+};
+
+const EQUIPMENT_ICON_FALLBACKS: Record<string, string> = {
+  weapon: "icon_0033.png",
+  armor: "icon_0422.png",
+  shoes: "icon_0436.png",
+  ring: "icon_0462.png",
+  charm: "icon_0036.png",
+  helmet: "icon_0439.png",
+};
+
+const equipmentIconFiles = new Map<string, string[]>();
+
+function stableStringHash(value: string): number {
+  let hash = 2166136261;
+  for (const character of value) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+export function equipmentIconPath(slot: string, identity = ""): string {
+  const folder = EQUIPMENT_ICON_FOLDERS[slot];
+  if (!folder) return "";
+  let files = equipmentIconFiles.get(folder);
+  if (!files) {
+    try {
+      const directory = fileURLToPath(new URL(`../../client/assets/equipment_icons/${folder}/`, import.meta.url));
+      files = readdirSync(directory).filter((file) => /\.(?:png|jpe?g|webp|svg)$/i.test(file)).sort();
+    } catch {
+      files = [];
+    }
+    if (files.length === 0 && EQUIPMENT_ICON_FALLBACKS[folder]) files = [EQUIPMENT_ICON_FALLBACKS[folder]];
+    equipmentIconFiles.set(folder, files);
+  }
+  if (files.length === 0) return "";
+  const index = identity ? stableStringHash(identity) % files.length : Math.floor(Math.random() * files.length);
+  return `res://assets/equipment_icons/${folder}/${files[index]}`;
+}
 
 export const QUALITY_NAMES = ["普通", "精良", "稀有", "史诗", "传说"] as const;
 export const QUALITY_COLORS = ["#999999", "#33cc33", "#3366ff", "#b333ff", "#ff9911"] as const;
