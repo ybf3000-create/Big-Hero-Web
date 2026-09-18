@@ -25,6 +25,7 @@ export interface BattlePlayerState {
   freeDefensePct: number;
   goldBonus: number;
   experienceBonus: number;
+  luck: number;
   skillSlots: Array<{ skillId: number; priority: number } | null>;
   battleDamageMultiplier: number;
   incomingDamageMultiplier: number;
@@ -102,6 +103,7 @@ function actorFromEncounter(unit: EncounterUnit): Data {
     bossIndex: unit.boss_index ?? 0, bossMechanic: structuredClone(unit.boss_mechanic ?? {}), cooldowns, shield: 0, shieldTime: 0,
     buffs: {}, controls: {}, dots: [], hots: [], alive: true, undyingUsed: false, battleDamageMultiplier: 1,
     actionCooldown: actionCooldown(unit.speed_points), timeToAct: actionCooldown(unit.speed_points), regenTimer: REGEN_INTERVAL,
+    baseActionCooldown: actionCooldown(unit.speed_points),
     mechanicTimer: n(unit.boss_mechanic?.interval), mechanicTriggers: 0, summonCount: 0, trackedAllyDeaths: 0,
     ritualTriggered: false, revivesLeft: n(unit.boss_mechanic?.revives), setCounts: {}, setAffixes: [], setActionCount: 0,
   };
@@ -118,23 +120,17 @@ function buildInitialState(playerState: BattlePlayerState, encounter: BattleEnco
     speedPoints: playerState.speedPoints, crit: playerState.crit, critDamage: playerState.critDamage, hit: playerState.hit,
     dodge: playerState.dodge, block: playerState.block, skillDamage: playerState.skillDamage, cooldownReduction: playerState.cooldownReduction,
     lifesteal: playerState.lifesteal, freeAttackPct: playerState.freeAttackPct, freeDefensePct: playerState.freeDefensePct,
-    goldBonus: playerState.goldBonus, experienceBonus: playerState.experienceBonus, skillSlots: structuredClone(playerState.skillSlots),
+    goldBonus: playerState.goldBonus, experienceBonus: playerState.experienceBonus, luck: playerState.luck, skillSlots: structuredClone(playerState.skillSlots),
     cooldowns, shield: 0, shieldTime: 0, buffs: {}, controls: {}, dots: [], hots: [], alive: true,
     actionCooldown: actionCooldown(playerState.speedPoints), timeToAct: actionCooldown(playerState.speedPoints), undyingUsed: false,
+    baseActionCooldown: actionCooldown(playerState.speedPoints),
     battleDamageMultiplier: playerState.battleDamageMultiplier, incomingDamageMultiplier: playerState.incomingDamageMultiplier,
+    healingMultiplier: n(playerState.setCounts?.["自然"]) >= 3 ? 1.2 : 1,
     passives: [...playerState.passives], regenTimer: REGEN_INTERVAL, setCounts: { ...playerState.setCounts },
-    setAffixes: [...playerState.setAffixes], battleGold: playerState.battleGold, setActionCount: 0, thunderTimer: 8,
+    setAffixes: [...playerState.setAffixes], battleGold: playerState.battleGold, luxuryGoldSpent: 0, luxuryTimer: 10, setActionCount: 0, thunderTimer: 8,
   };
   if (setCount(player, "暗影") >= 3) player.buffs.shadow_stealth = 5 + (hasSetAffix(player, "【暗影】潜伏") ? 2 : 0);
-  if (setCount(player, "奢侈") >= 3 && player.battleGold >= 1_000) {
-    let multiplier = setCount(player, "奢侈") >= 4 ? 1.6 : 1.3;
-    if (hasSetAffix(player, "【奢侈】镀金")) multiplier += .1;
-    if (player.battleGold < 5_000 && hasSetAffix(player, "【奢侈】挥霍")) multiplier += .2;
-    if (player.battleGold > 10_000 && hasSetAffix(player, "【奢侈】豪赌")) multiplier += .15;
-    if (player.battleGold < 500 && hasSetAffix(player, "【奢侈】破产")) multiplier += .4;
-    player.attack *= multiplier;
-    player.baseAttack = player.attack;
-  }
+  applyLuxuryAttack(player);
   const enemies = encounter.units.map(actorFromEncounter);
   applyBossStartEffects(player, enemies);
   applyWeatherStart([player, ...enemies], encounter.weather);
@@ -165,6 +161,9 @@ function pickNextActor(state: Data): string {
 }
 
 function tickActorTimers(state: Data, actor: Data, delta: number): void {
+  if (actor.buffs.chaos_attack && actor.buffs.chaos_attack <= delta) actor.attack = actor.baseAttack;
+  if (actor.buffs.chaos_defense && actor.buffs.chaos_defense <= delta) actor.defense = actor.baseDefense;
+  if (actor.buffs.chaos_speed && actor.buffs.chaos_speed <= delta) actor.actionCooldown = actor.baseActionCooldown;
   if (setCount(actor, "雷霆") >= 4) {
     actor.thunderTimer = n(actor.thunderTimer, 8) - delta;
     if (actor.thunderTimer <= 0) {
@@ -175,6 +174,14 @@ function tickActorTimers(state: Data, actor: Data, delta: number): void {
   if (actor.shieldTime > 0) {
     actor.shieldTime = Math.max(0, actor.shieldTime - delta);
     if (actor.shieldTime <= 0) actor.shield = 0;
+  }
+  if (actor.setBurnSpreadTimer !== undefined) {
+    actor.setBurnSpreadTimer = Math.max(0, n(actor.setBurnSpreadTimer) - delta);
+    if (actor.setBurnSpreadTimer <= 0 && actor.setBurnSpreadSource && actor.alive) {
+      const source = actor.setBurnSpreadSource;
+      actor.setBurnSpreadTimer = 3;
+      if (source?.alive) spreadSetBurn(state, actor, source);
+    }
   }
   for (const [key, value] of Object.entries(actor.buffs as Record<string, number>)) {
     actor.buffs[key] = Math.max(0, value - delta);
@@ -227,8 +234,32 @@ function advanceTime(state: Data, delta: number): void {
     actor.timeToAct = Math.max(0, actor.timeToAct - delta);
     tickActorTimers(state, actor, delta);
   }
+  const player = state.actors.player;
+  if (setCount(player, "奢侈") >= 3) {
+    player.luxuryTimer = n(player.luxuryTimer, 10) - delta;
+    while (player.luxuryTimer <= 0) {
+      player.luxuryTimer += 10;
+      const configuredCost = player.level * (setCount(player, "奢侈") >= 4 ? 100 : 50);
+      const cost = Math.min(Math.max(0, n(player.battleGold)), Math.max(0, configuredCost));
+      player.battleGold = Math.max(0, n(player.battleGold) - cost);
+      player.luxuryGoldSpent = n(player.luxuryGoldSpent) + cost;
+      applyLuxuryAttack(player);
+    }
+  }
   tickBossMechanics(state, delta);
   tickWeather(state, delta);
+}
+
+function applyLuxuryAttack(actor: Data): void {
+  if (setCount(actor, "奢侈") < 3) return;
+  actor.attack = n(actor.baseAttack);
+  if (actor.battleGold < 1_000) return;
+  let multiplier = setCount(actor, "奢侈") >= 4 ? 1.6 : 1.3;
+  if (hasSetAffix(actor, "【奢侈】镀金")) multiplier += .1;
+  if (actor.battleGold < 5_000 && hasSetAffix(actor, "【奢侈】挥霍")) multiplier += .2;
+  if (actor.battleGold > 10_000 && hasSetAffix(actor, "【奢侈】豪赌")) multiplier += .15;
+  if (actor.battleGold < 500 && hasSetAffix(actor, "【奢侈】破产")) multiplier += .4;
+  actor.attack = n(actor.baseAttack) * multiplier;
 }
 
 function chooseAction(actor: Data): Data {
@@ -239,7 +270,8 @@ function chooseAction(actor: Data): Data {
       for (const slot of actor.skillSlots) if (slot?.skillId === 26 && n(actor.cooldowns[26]) <= 0) available.push({ priority: 99, slot: -1, skillId: 26 });
     }
     for (const [index, slot] of actor.skillSlots.entries()) {
-      if (slot && slot.skillId > 0 && n(actor.cooldowns[slot.skillId]) <= 0) available.push({ priority: slot.priority, slot: index, skillId: slot.skillId });
+      // 不屈意志 is an automatic emergency trigger, never a normal rotation skill.
+      if (slot && slot.skillId > 0 && slot.skillId !== 26 && n(actor.cooldowns[slot.skillId]) <= 0) available.push({ priority: slot.priority, slot: index, skillId: slot.skillId });
     }
   } else {
     for (const skillId of actor.skillIds) if (skillId > 0 && n(actor.cooldowns[skillId]) <= 0) available.push({ priority: 1, slot: 0, skillId });
@@ -318,22 +350,24 @@ function skillVisual(skill: BattleSkill): string {
 }
 
 function resolveHit(actor: Data, target: Data, random: RandomSource): Data {
-  let dodge = Math.max(0, target.dodge - actor.hit);
-  if (target.buffs.phantom_step) dodge *= 2;
+  let dodgeMultiplier = target.buffs.phantom_step ? 2 : 1;
   let crit = actor.crit;
-  if (actor.buffs.shadow_stealth) crit += 30;
+  let hit = actor.hit;
+  if (actor.buffs.shadow_stealth) { crit += 30; hit += 20; }
   if (actor.buffs.thunder_frenzy || actor.buffs.shadow_strike) crit = 100;
-  return { hit: random() * 100 >= dodge, crit: random() * 100 < crit, block: random() * 100 < target.block };
+  return { hit: random() * 100 >= Math.max(0, target.dodge - hit) * dodgeMultiplier, crit: random() * 100 < crit, block: random() * 100 < target.block };
 }
 
-function defenseDamage(target: Data, damage: number, ignoreDefensePct: number): number {
+function defenseDamage(attacker: Data, target: Data, damage: number, ignoreDefensePct: number): number {
   const safeDamage = Math.max(0, n(damage));
   const safeIgnoreDefense = Math.max(0, Math.min(100, n(ignoreDefensePct)));
   let defense = Math.max(0, n(target.defense)) * (target.buffs.def_x2 ? 2 : 1) * (1 - safeIgnoreDefense / 100);
-  let result = safeDamage * (1 - defense / (defense + 400));
+  const attackerLevel = Math.max(1, n(attacker.level, 1));
+  let result = safeDamage * Math.max(.05, 1 - defense / (defense + 85 * attackerLevel + 400));
   if (target.side === "player") result *= (1 - Math.min(n(target.freeDefensePct), .5)) * n(target.incomingDamageMultiplier, 1);
   if (target.buffs.tenacity) result *= .6;
   if (target.buffs.dragon_guard) result *= .7;
+  if (target.controls.paralysis) result *= 1.2;
   if (target.bossMechanic?.id === "rock") result *= 1 - n(target.bossMechanic.damageReduction, .3);
   return Math.max(result, 1);
 }
@@ -344,6 +378,7 @@ function applyFinalDamage(state: Data, target: Data, damage: number, meta: Data)
   if (!meta.ignoreShield && target.shield > 0) {
     absorbed = Math.min(target.shield, remaining);
     target.shield -= absorbed;
+    if (target.frostShieldAmount > 0) target.frostShieldAmount = Math.max(0, target.frostShieldAmount - Math.min(target.frostShieldAmount, absorbed));
     remaining -= absorbed;
   }
   const before = target.currentHp;
@@ -369,15 +404,18 @@ function applyFinalDamage(state: Data, target: Data, damage: number, meta: Data)
       }
     }
   }
-  if (meta.owner && meta.owner.lifesteal > 0 && dealtHp > 0) applyHeal(state, meta.owner, dealtHp * meta.owner.lifesteal / 100, "吸血");
-  handleBossHpTriggers(state, target);
+  // Lifesteal is based on final damage before the target's shield absorbs it.
+  // A shield should protect HP, but must not make an otherwise valid hit
+  // produce zero healing.
   const total = dealtHp + absorbed;
+  if (meta.owner && meta.owner.lifesteal > 0 && total > 0) applyHeal(state, meta.owner, total * meta.owner.lifesteal / 100, "吸血");
+  handleBossHpTriggers(state, target);
   if (meta.owner?.side === "player") state.damageTotal += Math.max(0, total);
   return total;
 }
 
 function applyHeal(state: Data, actor: Data, amount: number, label: string): void {
-  const actual = Math.max(0, n(amount)) * n(actor.weatherHealMultiplier, 1) * (actor.controls.anti_heal ? .5 : 1);
+  const actual = Math.max(0, n(amount)) * n(actor.weatherHealMultiplier, 1) * n(actor.healingMultiplier, 1) * (actor.controls.anti_heal ? .5 : 1);
   const before = actor.currentHp;
   actor.currentHp = Math.min(actor.maxHp, before + actual);
   const healed = actor.currentHp - before;
@@ -441,9 +479,15 @@ function applySetBurn(state: Data, target: Data, actor: Data): void {
   if (burns < 3) target.setBurnDetonated = false;
   if (burns >= (hasSetAffix(actor, "【烈焰】核心") ? 4 : 3)) return;
   const entry: Data = { sourceName: "烈焰套·灼烧", damage: actor.attack * (hasSetAffix(actor, "【烈焰】灼烧") ? .3 : .2), ticksRemaining: 3, tickInterval: 1, tickTimer: 1, dotType: "set_burn", sourceSide: actor.side };
+  target.setBurnDamageTaken = true;
   target.dots.push(entry);
   tickDot(state, target, entry);
   entry.ticksRemaining -= 1;
+}
+
+function spreadSetBurn(state: Data, sourceTarget: Data, actor: Data): void {
+  const spreadTargets = opponents(state, actor).filter((candidate) => candidate !== sourceTarget && candidate.alive).slice(0, 2);
+  for (const spread of spreadTargets) applySetBurn(state, spread, actor);
 }
 
 function triggerChainLightning(state: Data, actor: Data, primary: Data): void {
@@ -466,12 +510,11 @@ function handleSetKill(state: Data, actor: Data): void {
 
 function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, skill: BattleSkill | undefined, label: string, isBasic: boolean, random: RandomSource): void {
   let rawDamage = n(actor.attack) * Math.max(0, n(damagePct)) / 100;
+  if (isBasic && actor.controls.silence) rawDamage *= 1.2;
   if (actor.buffs.phantom_step) rawDamage *= hasSetAffix(actor, "【幻影】残影") ? 1.45 : 1.3;
   if (label.includes("暗影突袭") && hasSetAffix(actor, "【暗影】之刃")) rawDamage *= 1.3;
   if (actor.side === "player") rawDamage *= 1 + n(actor.freeAttackPct);
-  rawDamage *= n(actor.battleDamageMultiplier, 1);
   if (hasPassive(actor, "狂暴") && n(actor.currentHp) / Math.max(1, n(actor.maxHp, 1)) < .5) rawDamage *= 1.5;
-  if (skill) rawDamage *= 1 + n(actor.skillDamage) / 100;
   for (let hit = 0; hit < (skill?.hits ?? 1); hit += 1) {
     const result = resolveHit(actor, target, random);
     if (!result.hit) {
@@ -484,10 +527,11 @@ function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, 
       continue;
     }
     let damage = rawDamage;
-    if (actor.buffs.phantom_next) { damage *= hasSetAffix(actor, "【幻影】步法") ? 1.7 : 1.5; delete actor.buffs.phantom_next; }
+    const phantomBonus = Boolean(actor.buffs.phantom_next);
+    if (actor.buffs.phantom_next) delete actor.buffs.phantom_next;
     if (actor.buffs.wind_second) { if (hasSetAffix(actor, "【疾风】连击")) damage *= 1.3; delete actor.buffs.wind_second; }
-    if (actor.buffs.shadow_strike) damage *= 2.5;
-    damage = defenseDamage(target, damage, n(skill?.bonus?.ignoreDefPct));
+    const shadowStrikeBonus = Boolean(actor.buffs.shadow_strike && skill);
+    damage = defenseDamage(actor, target, damage, n(skill?.bonus?.ignoreDefPct));
     if (result.crit) {
       let criticalDamage = n(actor.critDamage, 150);
       if (label.includes("暗影突袭") && hasSetAffix(actor, "【暗影】杀意")) criticalDamage += 50;
@@ -499,9 +543,16 @@ function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, 
       if (hasSetAffix(target, "【铁壁】堡垒")) multiplier = Math.max(0, multiplier - .1);
       damage *= multiplier;
     }
+    // Final-damage modifiers are applied after defense, crit and block.
+    if (phantomBonus) damage *= hasSetAffix(actor, "【幻影】步法") ? 1.7 : 1.5;
+    if (shadowStrikeBonus) damage *= 2.5;
+    damage *= n(actor.battleDamageMultiplier, 1);
+    // Skill-damage bonuses apply to skills and DoT skills, never to the
+    // fallback basic attack.
+    if (skill) damage *= 1 + n(actor.skillDamage) / 100;
     if (target.controls.freeze) { damage *= hasSetAffix(actor, "【冰霜】寒甲") ? 1.7 : 1.5; delete target.controls.freeze; }
     const burnCount = target.dots.filter((dot: Data) => dot.dotType === "set_burn").length;
-    if (setCount(actor, "烈焰") >= 4 && burnCount > 0) damage *= 1 + Math.min(burnCount, 4) * .12;
+    if (target.setBurnDamageTaken && burnCount > 0) damage *= 1 + Math.min(burnCount, 4) * .12;
     if (n(skill?.bonus?.executeThreshold) > 0 && target.currentHp / target.maxHp < n(skill?.bonus?.executeThreshold)) damage *= n(skill?.bonus?.executeMultiplier, 1);
     if (n(skill?.bonus?.missingHpScale) > 0) damage *= 1 + (1 - target.currentHp / target.maxHp) * n(skill?.bonus?.missingHpScale);
     const dealt = applyFinalDamage(state, target, damage, { owner: actor });
@@ -513,9 +564,12 @@ function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, 
         target.setBurnDetonated = true;
         for (const burnTarget of opponents(state, actor)) if (burnTarget.alive) applyFinalDamage(state, burnTarget, actor.attack * .8, { owner: actor });
       }
-      if (hasSetAffix(actor, "【烈焰】燎原")) {
-        const spread = opponents(state, actor).find((candidate) => candidate !== target && candidate.alive);
-        if (spread) applySetBurn(state, spread, actor);
+      if (hasSetAffix(actor, "【烈焰】燎原") && burnCount + 1 >= 3) {
+        target.setBurnSpreadSource = actor;
+        if (n(target.setBurnSpreadTimer, 0) <= 0) {
+          target.setBurnSpreadTimer = 3;
+          spreadSetBurn(state, target, actor);
+        }
       }
     }
     if (dealt > 0 && setCount(actor, "冰霜") >= 3 && target.alive && random() < (target.isBoss ? .075 : .15)) {
@@ -526,14 +580,31 @@ function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, 
         const spread = opponents(state, actor).find((candidate) => candidate !== target && candidate.alive);
         if (spread) { spread.controls.freeze = duration; state.events.push({ type: "status", target: actorRef(spread), status: "冻结", duration }); }
       }
-      if (setCount(actor, "冰霜") >= 4) actor.shield += actor.maxHp * (hasSetAffix(actor, "【冰霜】护盾") ? .16 : .08);
+      if (setCount(actor, "冰霜") >= 4) {
+        const stacks = Math.min(5, n(actor.frostShieldStacks) + 1);
+        actor.frostShieldStacks = stacks;
+        const perStack = actor.maxHp * (hasSetAffix(actor, "【冰霜】护盾") ? .16 : .08);
+        const previousFrostShield = n(actor.frostShieldAmount);
+        const nextFrostShield = Math.min(actor.maxHp * stacks * (hasSetAffix(actor, "【冰霜】护盾") ? .16 : .08), previousFrostShield + perStack);
+        actor.frostShieldAmount = nextFrostShield;
+        actor.shield += nextFrostShield - previousFrostShield;
+      }
     }
-    if (result.crit && setCount(actor, "雷霆") >= 3) triggerChainLightning(state, actor, target);
-    if (result.block && hasSetAffix(target, "【铁壁】反击") && actor.alive) applyFinalDamage(state, actor, target.attack * .5, { owner: target });
+    if (result.crit && setCount(actor, "雷霆") >= 3) {
+      triggerChainLightning(state, actor, target);
+      if (setCount(actor, "雷霆") >= 4 && actor.buffs.thunder_frenzy) triggerChainLightning(state, actor, target);
+    }
+    if (result.block && hasSetAffix(target, "【铁壁】反击") && actor.alive) {
+      const counter = applyFinalDamage(state, actor, target.attack * .3, { owner: target });
+      state.events.push({ type: "damage", source: actorRef(target), target: actorRef(actor), amount: Math.round(counter), hp: Math.round(actor.currentHp), max_hp: actor.maxHp, shield: Math.round(actor.shield), crit: false, block: false, dot: false, label: "铁壁反击" });
+    }
     if (result.block && setCount(target, "铁壁") >= 4) {
       target.setBlockCount = n(target.setBlockCount) + 1;
       if (target.setBlockCount % 3 === 0) {
-        applyFinalDamage(state, actor, target.currentHp * (hasSetAffix(target, "【铁壁】坚壁") ? .6 : .5), { owner: target });
+        const reflectRaw = target.currentHp * (hasSetAffix(target, "【铁壁】坚壁") ? .6 : .5);
+        const reflect = defenseDamage(target, actor, reflectRaw, 0);
+        const reflected = applyFinalDamage(state, actor, reflect, { owner: target });
+        state.events.push({ type: "damage", source: actorRef(target), target: actorRef(actor), amount: Math.round(reflected), hp: Math.round(actor.currentHp), max_hp: actor.maxHp, shield: Math.round(actor.shield), crit: false, block: false, dot: false, label: "铁壁·生命反伤" });
         target.shield += target.maxHp * .15;
       }
     }
@@ -562,6 +633,7 @@ function executeSkill(state: Data, actor: Data, skillId: number, random: RandomS
   const original = battleSkillById(skillId);
   if (!original) { executeBasic(state, actor, random); return; }
   const skill = structuredClone(original);
+  const hadShadowStrike = Boolean(actor.buffs.shadow_strike);
   if (skillId === 12) {
     const count = Math.min(n(actor.endlessStrikeCount) + 1, n(skill.bonus?.maxStacks, 10));
     skill.damagePct = n(skill.damagePct) + (count - 1) * n(skill.bonus?.stackStepPct, 10);
@@ -581,11 +653,12 @@ function executeSkill(state: Data, actor: Data, skillId: number, random: RandomS
     applyAttack(state, actor, targets[0]!, n(skill.damagePct), skill, skill.name, false, random);
     if (targets[1]?.alive) {
       const back = structuredClone(skill);
-      back.damagePct = n(skill.bonus?.pierceBackDamage);
+      const execute = skill.bonus?.pierceBackExecute as Data | undefined;
+      back.damagePct = execute && targets[1].currentHp / targets[1].maxHp < n(execute.threshold)
+        ? n(execute.multiplier, n(skill.bonus?.pierceBackDamage))
+        : n(skill.bonus?.pierceBackDamage);
       if (n(skill.bonus?.pierceBackSlow) > 0) { back.control = ControlType.SLOW; back.controlDuration = n(skill.bonus?.pierceBackSlow); }
       applyAttack(state, actor, targets[1], n(back.damagePct), back, `${skill.name}(贯穿)`, false, random);
-      const execute = skill.bonus?.pierceBackExecute as Data | undefined;
-      if (execute && targets[1].currentHp / targets[1].maxHp < n(execute.threshold)) applyFinalDamage(state, targets[1], actor.attack * n(execute.multiplier, 1), { owner: actor });
     }
     if (skill.control !== undefined) applyControl(state, targets[0]!, skill);
   } else {
@@ -601,11 +674,12 @@ function executeSkill(state: Data, actor: Data, skillId: number, random: RandomS
     if (skillId === 31) {
       const total = target.dots.reduce((sum: number, dot: Data) => sum + dot.damage * dot.ticksRemaining, 0);
       const dealt = applyFinalDamage(state, target, total * n(skill.bonus?.detonateDot, 1.5), { owner: actor });
+      if (dealt > 0) state.events.push({ type: "damage", source: actorRef(actor), target: actorRef(target), amount: Math.round(dealt), hp: Math.round(target.currentHp), max_hp: target.maxHp, shield: Math.round(target.shield), crit: false, block: false, dot: false, label: "剧毒爆发" });
     }
     if (skillId === 32) for (const enemy of state.actors.enemies) if (enemy !== target && enemy.alive) enemy.dots.push(...target.dots.map((dot: Data) => structuredClone(dot)).slice(0, Math.max(0, 10 - enemy.dots.length)));
   }
   const reduction = Math.min(Math.max(0, n(actor.cooldownReduction)) / 100, .5);
-  actor.cooldowns[skillId] = skill.actionCd * (1 - reduction) * (actor.controls.paralysis ? 1.3 : 1);
+  actor.cooldowns[skillId] = Math.max(1, skill.actionCd * (1 - reduction) * (actor.controls.paralysis ? 1.3 : 1));
   const resetChance = .25 + (hasSetAffix(actor, "【星辰】专注") ? .1 : 0);
   if (setCount(actor, "星辰") >= 3 && random() < resetChance) {
     actor.cooldowns[skillId] = 0;
@@ -620,13 +694,18 @@ function executeSkill(state: Data, actor: Data, skillId: number, random: RandomS
       for (const id of Object.keys(actor.cooldowns)) actor.cooldowns[id] = 0;
     }
   }
-  delete actor.buffs.shadow_strike;
+  if (hadShadowStrike) delete actor.buffs.shadow_strike;
 }
 
 function processTurn(state: Data, key: string, random: RandomSource): void {
   const actor = resolveActor(state, key);
   if (!actor?.alive) return;
-  if (actor.controls.freeze || actor.controls.stun) { resetAfterTurn(actor, random); return; }
+  if (actor.controls.freeze || actor.controls.stun) {
+    // A controlled turn is skipped, but it is not a real action: cooldowns,
+    // set action counters and extra-action effects must not advance.
+    actor.timeToAct = Math.max(n(actor.controls.freeze), n(actor.controls.stun), .01);
+    return;
+  }
   for (const skillId of Object.keys(actor.cooldowns)) actor.cooldowns[skillId] = Math.max(0, n(actor.cooldowns[skillId]) - 1);
   const action = chooseAction(actor);
   if (action.type === "skill") executeSkill(state, actor, action.skillId, random); else executeBasic(state, actor, random);
@@ -673,7 +752,9 @@ function summon(state: Data, boss: Data, name: string, hpMultiplier: number, max
 
 function mechanicDamage(state: Data, source: Data, target: Data, amount: number, label: string, absolute = false): void {
   if (!target.alive) return;
-  const dealt = applyFinalDamage(state, target, absolute ? amount : defenseDamage(target, amount, 0), { owner: source, ignoreShield: absolute });
+  // “绝对伤害” bypasses defense, but it is still final damage and therefore
+  // must be absorbed by an active shield before HP, just like Dot and skills.
+  const dealt = applyFinalDamage(state, target, absolute ? amount : defenseDamage(source, target, amount, 0), { owner: source });
   state.events.push({ type: "damage", source: actorRef(source), target: actorRef(target), amount: Math.round(dealt), hp: Math.round(target.currentHp), max_hp: target.maxHp, shield: Math.round(target.shield), crit: false, block: false, dot: false, label });
 }
 
@@ -691,7 +772,10 @@ function tickBossMechanics(state: Data, delta: number): void {
     boss.mechanicTimer -= delta;
     while (boss.mechanicTimer <= 0 && boss.alive) {
       boss.mechanicTimer += mechanic.interval;
-      if (["web", "charm"].includes(mechanic.id)) { player.controls.stun = n(mechanic.stun, 3); emitMechanic(state, boss, String(mechanic.name)); }
+      if (["web", "charm"].includes(mechanic.id)) {
+        if (!player.buffs.tenacity) player.controls.stun = n(mechanic.stun, 3);
+        emitMechanic(state, boss, String(mechanic.name));
+      }
       else if (mechanic.id === "nature_guard") for (const ally of state.actors.enemies) if (ally.alive) applyHeal(state, ally, ally.maxHp * n(mechanic.healPct, 15) / 100, "自然守护");
       else if (mechanic.id === "death_summon" && boss.currentHp / boss.maxHp < n(mechanic.threshold, .5)) summon(state, boss, "骷髅·战士", 1, n(mechanic.maxSummons, 3));
       else if (mechanic.id === "shadow_clone") summon(state, boss, "暗影分身", n(mechanic.hpMultiplier, .5), n(mechanic.maxSummons, 2));
@@ -700,9 +784,15 @@ function tickBossMechanics(state: Data, delta: number): void {
       else if (mechanic.id === "wolf_summon") summon(state, boss, "狼·盗贼", .35, n(mechanic.maxSummons, 4));
       else if (mechanic.id === "chaos_field") {
         const choice = randomInt(0, 2, state.random);
-        if (choice === 0) boss.attack = boss.baseAttack * n(mechanic.buffMultiplier, 1.5);
-        else if (choice === 1) boss.defense = boss.baseDefense * n(mechanic.buffMultiplier, 1.5);
-        else boss.timeToAct = Math.min(boss.timeToAct, boss.actionCooldown / n(mechanic.buffMultiplier, 1.5));
+        delete boss.buffs.chaos_attack;
+        delete boss.buffs.chaos_defense;
+        delete boss.buffs.chaos_speed;
+        boss.attack = boss.baseAttack;
+        boss.defense = boss.baseDefense;
+        boss.actionCooldown = boss.baseActionCooldown;
+        if (choice === 0) { boss.attack = boss.baseAttack * n(mechanic.buffMultiplier, 1.5); boss.buffs.chaos_attack = 10; }
+        else if (choice === 1) { boss.defense = boss.baseDefense * n(mechanic.buffMultiplier, 1.5); boss.buffs.chaos_defense = 10; }
+        else { boss.actionCooldown = boss.baseActionCooldown / n(mechanic.buffMultiplier, 1.5); boss.timeToAct = Math.min(boss.timeToAct, boss.actionCooldown); boss.buffs.chaos_speed = 10; }
         emitMechanic(state, boss, "混沌领域");
       }
     }
@@ -735,7 +825,11 @@ function applyWeatherStart(actors: Data[], weather: string): void {
     if (weather === "fog") { actor.hit *= .8; actor.dodge *= 1.2; }
     if (weather === "scorching_sun") { actor.weatherHealMultiplier = .6; actor.weatherShieldMultiplier = .6; }
     if (weather === "sandstorm") actor.block *= .5;
-    if (weather === "aurora") { actor.crit *= 2; actor.dodge *= 2; }
+    if (weather === "aurora") {
+      actor.crit *= 2;
+      actor.dodge *= 2;
+      actor.luck = Math.max(0, n(actor.luck)) * 1.5;
+    }
   }
 }
 
@@ -760,7 +854,7 @@ function tickWeather(state: Data, delta: number): void {
       const weights = living.map((actor: Data) => 1 / Math.max(actor.actionCooldown, .01));
       let roll = state.random() * weights.reduce((sum: number, value: number) => sum + value, 0);
       const target = living[weights.findIndex((weight: number) => (roll -= weight) <= 0)] ?? living[0];
-      if (!target.bossMechanic?.controlImmune) { target.controls.freeze = target.isBoss ? 1 : 2; state.events.push({ type: "status", target: actorRef(target), status: "天气·冻结", duration: target.controls.freeze }); }
+      if (!target.bossMechanic?.controlImmune && !target.buffs.tenacity) { target.controls.freeze = target.isBoss ? 1 : 2; state.events.push({ type: "status", target: actorRef(target), status: "天气·冻结", duration: target.controls.freeze }); }
     }
     if (state.weather === "scorching_sun") for (const target of living) mechanicDamage(state, source, target, target.maxHp * .03, "天气·灼烧", true);
     if (state.weather === "sandstorm") for (const target of living) mechanicDamage(state, source, target, target.maxHp * .015, "天气·沙暴", true);
@@ -777,13 +871,16 @@ function victoryRewards(encounter: BattleEncounter, player: Data, random: Random
   const level = encounter.monster_level;
   const goldMultiplier = 1 + player.goldBonus / 100;
   const experienceMultiplier = 1 + player.experienceBonus / 100;
-  if (encounter.battle_kind === "battle") return { gold_gain: Math.round(level * (8 + random() * 7) * goldMultiplier), exp_gain: Math.round(level * (10 + random() * 8) * experienceMultiplier), drops: [{ kind: "equip" }] };
+  if (encounter.battle_kind === "battle") {
+    const dropChance = Math.min(1, .15 + Math.max(0, n(player.luck)) * .005);
+    return { gold_gain: Math.round(level * (8 + random() * 7) * goldMultiplier), exp_gain: Math.round(level * (10 + random() * 8) * experienceMultiplier), drops: random() < dropChance ? [{ kind: "equip" }] : [] };
+  }
   if (encounter.battle_kind === "elite") return { gold_gain: Math.round(level * (20 + random() * 15) * goldMultiplier), exp_gain: Math.round(level * (25 + random() * 15) * experienceMultiplier), drops: [{ kind: "equip", quality_floor: 1 }] };
   if (encounter.battle_kind === "boss") return { gold_gain: Math.round(level * 40 * goldMultiplier), exp_gain: Math.round(level * 50 * experienceMultiplier), drops: [{ kind: "boss" }] };
   return { gold_gain: 0, exp_gain: 0, drops: [] };
 }
 
-function challengeRewards(damage: number, level: number): Data {
+function challengeRewards(damage: number, level: number, player: Data): Data {
   let gold = 0;
   const drops: Data[] = [];
   if (damage >= 5_000) gold += level * 50;
@@ -791,6 +888,7 @@ function challengeRewards(damage: number, level: number): Data {
   if (damage >= 30_000) { gold += level * 200; drops.push({ kind: "equip", quality_floor: 1 }); }
   if (damage >= 60_000) { gold += level * 400; drops.push({ kind: "equip", quality_floor: 2 }); }
   if (damage >= 100_000) { gold += level * 800; drops.push({ kind: "equip", quality_floor: 3 }); }
+  gold = Math.round(gold * (1 + n(player.goldBonus) / 100));
   return { gold_gain: gold, drops };
 }
 
@@ -802,8 +900,8 @@ function buildResult(state: Data, encounter: BattleEncounter, random: RandomSour
     battle_kind: encounter.battle_kind, monster_level: encounter.monster_level, template_id: encounter.template_id, template_name: encounter.template_name,
     gold_gain: 0, exp_gain: 0, drops: [], revive_used: false, force_home: false, gold_penalty: 0, boss_cleared: false, luxury_gold_spent: 0,
   };
-  if (setCount(player, "奢侈") >= 3) result.luxury_gold_spent = Math.min(player.battleGold, Math.floor(result.elapsed / 10) * player.level * (setCount(player, "奢侈") >= 4 ? 100 : 50));
-  if (encounter.battle_kind === "challenge" && result.outcome === BattleOutcome.CHALLENGE_DONE) Object.assign(result, challengeRewards(result.damage_total, player.level));
+  result.luxury_gold_spent = Math.floor(n(state.actors.player.luxuryGoldSpent));
+  if (encounter.battle_kind === "challenge" && result.outcome === BattleOutcome.CHALLENGE_DONE) Object.assign(result, challengeRewards(result.damage_total, player.level, player));
   else if (result.outcome === BattleOutcome.VICTORY) { Object.assign(result, victoryRewards(encounter, player, random)); result.boss_cleared = encounter.battle_kind === "boss"; }
   return result;
 }

@@ -11,6 +11,8 @@ var name_text: String = ""
 var _icon_label: Label
 var _name_label: Label
 
+signal clicked
+
 const SHEAR: float = 45.0       # 水平偏移
 const BORDER_W: float = 2.0
 
@@ -30,6 +32,12 @@ func _ready() -> void:
 	add_child(_name_label)
 
 	_resize_labels()
+	mouse_filter = Control.MOUSE_FILTER_STOP
+
+
+func _gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		clicked.emit()
 
 
 func setup(icon: String, gname: String, fill: Color, border: Color) -> void:

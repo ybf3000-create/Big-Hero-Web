@@ -54,7 +54,7 @@ func _test_reroll() -> void:
 	var kept: Dictionary = eqp["affixes"][0].duplicate(true)
 	_expect(Rules.reroll_affixes(eqp, [0], EquipGenCls.AFFIX_POOL), "史诗装备应可重铸")
 	_expect(eqp["affixes"][0] == kept, "锁定词缀必须原样保留")
-	_expect(Rules.REROLL_COSTS[0]["essence"] == 15 and Rules.REROLL_COSTS[2]["gold"] == 50000, "重铸费用表不正确")
+	_expect(Rules.REROLL_COSTS[0]["essence"] == 15 and Rules.REROLL_COSTS[2]["legendary_gold"] == 60000, "重铸费用表不正确")
 
 func _test_slot_enhance_and_capacity() -> void:
 	var equipment := EquipmentCls.new()

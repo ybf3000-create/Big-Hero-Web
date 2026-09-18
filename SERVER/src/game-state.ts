@@ -55,6 +55,14 @@ export interface FreeAttributes {
   luck: number;
 }
 
+export type ConstructionDirection = "shop" | "chest" | "battle";
+
+export interface ConstructionBuilding {
+  type: ConstructionDirection;
+  level: number;
+  lastCollectTurn?: number;
+}
+
 export interface GameState {
   version: 1;
   hp: number;
@@ -66,6 +74,8 @@ export interface GameState {
   gridIndex: number;
   mapTotalGrids: number;
   mapGrids: number[];
+  constructionBuildings: Record<string, ConstructionBuilding>;
+  pendingConstruction: null | { gridIndex: number; expiresAt: number };
   lastDiceRoll: number | null;
   lastDiceSuit: number | null;
   diceHistory: number[];
@@ -93,6 +103,9 @@ export interface GameState {
   weatherRollTarget: number;
   weatherSunnyBuffer: number;
   nextRollModifier: number;
+  stormRolls: number;
+  gemSynthesisRefunds: number;
+  rerollDiscounts: number;
   hibernateLaps: number;
   deityBuffs: Array<Record<string, unknown>>;
   dismantleEssence: number;
@@ -131,6 +144,8 @@ export function defaultGameState(): GameState {
     gridIndex: 0,
     mapTotalGrids: MAP_BASE.length,
     mapGrids: [...MAP_BASE],
+    constructionBuildings: {},
+    pendingConstruction: null,
     lastDiceRoll: null,
     lastDiceSuit: null,
     diceHistory: [],
@@ -158,6 +173,9 @@ export function defaultGameState(): GameState {
     weatherRollTarget: 8,
     weatherSunnyBuffer: 10,
     nextRollModifier: 0,
+    stormRolls: 0,
+    gemSynthesisRefunds: 0,
+    rerollDiscounts: 0,
     hibernateLaps: 0,
     deityBuffs: [],
     dismantleEssence: 0,
@@ -185,6 +203,12 @@ export function parseGameState(value: string | null | undefined): GameState {
       equipped: { ...fallback.equipped, ...(parsed.equipped ?? {}) },
       slotEnhance: { ...fallback.slotEnhance, ...(parsed.slotEnhance ?? {}) },
       mapGrids: Array.isArray(parsed.mapGrids) && parsed.mapGrids.length > 0 ? parsed.mapGrids : fallback.mapGrids,
+      constructionBuildings: parsed.constructionBuildings && typeof parsed.constructionBuildings === "object" && !Array.isArray(parsed.constructionBuildings)
+        ? parsed.constructionBuildings
+        : fallback.constructionBuildings,
+      pendingConstruction: parsed.pendingConstruction && typeof parsed.pendingConstruction === "object" && !Array.isArray(parsed.pendingConstruction)
+        ? parsed.pendingConstruction
+        : fallback.pendingConstruction,
       pokerRecords: Array.isArray(parsed.pokerRecords) ? parsed.pokerRecords : fallback.pokerRecords,
       lotteryTicketNumbers: Array.isArray(parsed.lotteryTicketNumbers) ? parsed.lotteryTicketNumbers : fallback.lotteryTicketNumbers,
       deityBuffs: Array.isArray(parsed.deityBuffs) ? parsed.deityBuffs : fallback.deityBuffs,
@@ -198,8 +222,33 @@ export function parseGameState(value: string | null | undefined): GameState {
     state.mapTotalGrids = Math.max(1, Math.min(128, Math.floor(Number(state.mapTotalGrids) || fallback.mapTotalGrids)));
     state.mapGrids = state.mapGrids.map((entry) => Number.isInteger(entry) ? entry : 1).slice(0, state.mapTotalGrids);
     while (state.mapGrids.length < state.mapTotalGrids) state.mapGrids.push(1);
+    // Older Web builds used grid type 13 as the temporary construction slot.
+    // Migrate those saved maps to the dedicated type without touching initial
+    // empty-land slots on a pre-Boss2 character.
+    if (state.bossTier >= 2) state.mapGrids = state.mapGrids.map((entry) => entry === 13 ? 15 : entry);
+    const buildings: Record<string, ConstructionBuilding> = {};
+    for (const [rawIndex, rawBuilding] of Object.entries(state.constructionBuildings ?? {})) {
+      const index = Number(rawIndex);
+      if (!Number.isInteger(index) || index < 0 || index >= state.mapTotalGrids || !rawBuilding || typeof rawBuilding !== "object") continue;
+      const type = rawBuilding.type;
+      if (type !== "shop" && type !== "chest" && type !== "battle") continue;
+      const level = Math.max(1, Math.min(10, Math.floor(Number(rawBuilding.level) || 1)));
+      const last = Number(rawBuilding.lastCollectTurn);
+      buildings[String(index)] = Number.isFinite(last) ? { type, level, lastCollectTurn: Math.max(0, Math.floor(last)) } : { type, level };
+    }
+    state.constructionBuildings = buildings;
+    if (state.pendingConstruction) {
+      const pendingIndex = Number(state.pendingConstruction.gridIndex);
+      const expiresAt = Number(state.pendingConstruction.expiresAt);
+      state.pendingConstruction = Number.isInteger(pendingIndex) && pendingIndex >= 0 && pendingIndex < state.mapTotalGrids && Number.isFinite(expiresAt)
+        ? { gridIndex: pendingIndex, expiresAt: Math.max(0, Math.floor(expiresAt)) }
+        : null;
+    }
     state.bossTier = Math.max(0, Math.min(200, Math.floor(Number(state.bossTier) || 0)));
     state.bossIndex = Math.max(1, Math.min(200, Math.floor(Number(state.bossIndex) || state.bossTier + 1)));
+    state.stormRolls = Math.max(0, Math.min(15, Math.floor(Number(state.stormRolls) || 0)));
+    state.gemSynthesisRefunds = Math.max(0, Math.min(10, Math.floor(Number(state.gemSynthesisRefunds) || 0)));
+    state.rerollDiscounts = Math.max(0, Math.min(10, Math.floor(Number(state.rerollDiscounts) || 0)));
     return state;
   } catch {
     if (value) throw new InvalidGameStateError();
@@ -314,6 +363,9 @@ export function recalculateStats(state: GameState, level = 1): void {
     goldBonus: 0,
     experienceBonus: 0,
   };
+  let attackPercent = 0;
+  let defensePercent = 0;
+  let hpPercent = 0;
   for (const itemId of Object.values(state.equipped)) {
     if (!itemId) continue;
     const item = state.equipmentBag.find((entry) => entry.id === itemId);
@@ -328,11 +380,11 @@ export function recalculateStats(state: GameState, level = 1): void {
     if (item.mainStat === "格挡率") base.block += value;
     if (item.mainStat === "技能伤害") base.skillDamage += value;
     for (const affix of item.affixes ?? []) {
-      if (affix.name === "攻击%") base.attack += Math.floor(rawAttack * affix.value / 100);
+      if (affix.name === "攻击%") attackPercent += affix.value;
       if (affix.name === "攻击(数值)") base.attack += Math.floor(affix.value);
-      if (affix.name === "防御%") base.defense += Math.floor(rawDefense * affix.value / 100);
+      if (affix.name === "防御%") defensePercent += affix.value;
       if (affix.name === "防御(数值)") base.defense += Math.floor(affix.value);
-      if (affix.name === "生命%") base.maxHp += Math.floor(rawMaxHp * affix.value / 100);
+      if (affix.name === "生命%") hpPercent += affix.value;
       if (affix.name === "速度") base.speed += affix.value;
       if (affix.name === "幸运") base.luck += affix.value;
       if (affix.name === "暴击率") base.crit += affix.value;
@@ -383,8 +435,11 @@ export function recalculateStats(state: GameState, level = 1): void {
   if (setAffixes.has("【引力】吸引")) base.goldBonus += 10;
   if (setAffixes.has("【引力】万有")) base.luck += 5;
   if (setAffixes.has("【幻影】灵动")) base.dodge += 3;
-  if ((setCounts["龙鳞"] ?? 0) >= 2) base.defense += Math.floor(base.defense * .15);
-  if ((setCounts["烈焰"] ?? 0) >= 2) base.attack += Math.floor(base.attack * .10);
+  // Free attack points, equipment attack%, and the flame 2-piece attack%
+  // share the documented additive attack multiplier.
+  attackPercent += state.attributes.attack * 1.8;
+  if ((setCounts["龙鳞"] ?? 0) >= 2) defensePercent += 15;
+  if ((setCounts["烈焰"] ?? 0) >= 2) attackPercent += 10;
   if ((setCounts["冰霜"] ?? 0) >= 2) base.speed += 10;
   if ((setCounts["雷霆"] ?? 0) >= 2) base.crit += 8;
   if ((setCounts["疾风"] ?? 0) >= 2) base.speed += 20;
@@ -397,6 +452,14 @@ export function recalculateStats(state: GameState, level = 1): void {
   if ((setCounts["幻影"] ?? 0) >= 2) base.dodge += 8;
   if ((setCounts["口才"] ?? 0) >= 2) base.luck += 10;
   if ((setCounts["奢侈"] ?? 0) >= 2) base.goldBonus -= 50;
+  // Percentage affixes multiply the accumulated base, main-stat and flat
+  // equipment values. Applying them to the level-only white value would make
+  // their effect disappear as soon as a stronger weapon or armor is equipped.
+  base.attack = Math.floor(base.attack * (1 + attackPercent / 100));
+  base.defense = Math.floor(base.defense * (1 + defensePercent / 100));
+  base.maxHp = Math.floor(base.maxHp * (1 + hpPercent / 100));
+  // 幸运属性本身没有硬上限；各个使用场景在换算成概率时分别封顶。
+  base.luck = Math.max(0, base.luck);
   state.stats = base;
   state.maxHp = base.maxHp;
   state.hp = Math.min(state.hp, state.maxHp);

@@ -124,8 +124,8 @@ export const SKILLS: SkillDefinition[] = [
 ];
 
 export const MAP_BASE = [0, 1, 5, 1, 7, 2, 1, 4, 1, 6, 5, 1, 7, 2, 1, 12, 1, 5, 1, 4, 2, 1, 7, 6, 1, 12, 1, 11];
-export const GRID_NAMES = ["勇者之家", "战斗格", "精英战斗", "挑战格", "休息格", "宝箱格", "锻造格", "命运格", "神祇格", "合成格", "闪电格", "Boss格", "空地", "空地2", "彩票格"];
-export const GRID_ICONS = ["🏠", "⚔️", "🗡️", "🏆", "🛌", "🎁", "🔨", "🎲", "🏛", "🔮", "⚡", "💀", "🟩", "💰", "🎰"];
+export const GRID_NAMES = ["勇者之家", "战斗格", "精英战斗", "挑战格", "休息格", "宝箱格", "锻造格", "命运格", "神祇格", "合成格", "闪电格", "Boss格", "空地", "空地2", "彩票格", "建设格"];
+export const GRID_ICONS = ["🏠", "⚔️", "🗡️", "🏆", "🛌", "🎁", "🔨", "🎲", "🏛", "🔮", "⚡", "💀", "🟩", "💰", "🎰", "🔧"];
 
 export const MONSTER_DEFS: Record<string, { hp: number; atk: number; def: number; speed: number }> = {
   "史莱姆·战士": { hp: 1.5, atk: .7, def: 1.2, speed: 5 }, "史莱姆·射手": { hp: .8, atk: 1.4, def: .6, speed: 25 }, "史莱姆·法师": { hp: .7, atk: 1.6, def: .5, speed: 8 },

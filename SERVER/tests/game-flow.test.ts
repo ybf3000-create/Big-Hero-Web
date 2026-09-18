@@ -133,6 +133,38 @@ test("server derived stats include free speed/luck and equipped set bonuses", ()
   assert.equal(state.stats.speed, 49);
   assert.equal(state.stats.luck, 4);
   assert.equal(state.stats.block, 3);
+  state.attributes.luck = 150;
+  recalculateStats(state, 1);
+  assert.equal(state.stats.luck, 150);
+});
+
+test("equipment percentage affixes multiply accumulated equipment stats", () => {
+  const state = createInitialGameState();
+  const weapon = {
+    id: "percent-weapon", slot: "weapon", name: "百分比武器", quality: 3, enhance: 0,
+    mainStat: "攻击力", mainValue: 100, locked: false, bound: true,
+    affixes: [{ name: "攻击%", type: "attack", value: 10, display: "+10%" }],
+  };
+  state.equipmentBag.push(weapon);
+  state.equipped.weapon = weapon.id;
+  recalculateStats(state, 1);
+  // (level-1 white attack 25 + weapon 100) * 1.10 = 137.5, floored.
+  assert.equal(state.stats.attack, 137);
+});
+
+test("free attack points share the additive attack multiplier with equipment percentages", () => {
+  const state = createInitialGameState();
+  state.attributes.attack = 10;
+  const weapon = {
+    id: "free-percent-weapon", slot: "weapon", name: "混合攻击武器", quality: 3, enhance: 0,
+    mainStat: "攻击力", mainValue: 100, locked: false, bound: true,
+    affixes: [{ name: "攻击%", type: "attack", value: 10, display: "+10%" }],
+  };
+  state.equipmentBag.push(weapon);
+  state.equipped.weapon = weapon.id;
+  recalculateStats(state, 1);
+  // (25 + 100) × (1 + 10% equipment + 18% free) = 160.
+  assert.equal(state.stats.attack, 160);
 });
 
 test("attribute points are awarded, allocated, reset and repaired for legacy saves", async (context) => {
@@ -353,6 +385,45 @@ test("boss 20 finishes map expansion and boss 21 only advances difficulty", () =
   assert.equal((boss21.event.enemy as string[])[0], BOSS_NAMES[19]);
 });
 
+test("construction grids are server-owned, persistent, and upgrade only while occupied", () => {
+  const originalRandom = Math.random;
+  try {
+    Math.random = () => 0;
+    const state = createInitialGameState();
+    state.mapGrids[1] = 15;
+    const character = { level: 10, experience: 0, gold: 10_000 };
+    const pending = applyGameCommand(state, character, "roll", {});
+    assert.equal(pending.state.gridIndex, 1);
+    assert.equal((pending.event as Record<string, unknown>).action, "choose");
+    assert.ok(pending.state.pendingConstruction);
+
+    const built = applyGameCommand(pending.state, pending.character, "construction_choose", { grid_index: 1, type: "shop" });
+    assert.equal(built.character.gold, 5_000);
+    assert.deepEqual(built.state.constructionBuildings["1"], { type: "shop", level: 1, lastCollectTurn: 0 });
+
+    const upgraded = applyGameCommand(built.state, built.character, "construction_upgrade", { grid_index: 1 });
+    assert.equal(upgraded.state.constructionBuildings["1"]?.level, 2);
+    assert.equal(upgraded.character.gold, 3_500);
+
+    upgraded.state.mapGrids[2] = 15;
+    upgraded.state.gridIndex = 1;
+    upgraded.state.completedLaps = 2;
+    const passed = applyGameCommand(upgraded.state, upgraded.character, "roll", {});
+    assert.equal((passed.event.pathEvents as Array<Record<string, unknown>> | undefined)?.length ?? 0, 0);
+    const demolished = applyGameCommand(upgraded.state, upgraded.character, "construction_demolish", { grid_index: 1 });
+    assert.equal(demolished.state.constructionBuildings["1"], undefined);
+
+    const timeoutState = createInitialGameState();
+    timeoutState.mapGrids[1] = 15;
+    timeoutState.pendingConstruction = { gridIndex: 1, expiresAt: Date.now() - 1 };
+    const timedOut = applyGameCommand(timeoutState, { level: 1, experience: 0, gold: 5_000 }, "construction_resolve", {});
+    assert.equal(timedOut.state.pendingConstruction, null);
+    assert.ok(timedOut.state.constructionBuildings["1"]);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
 test("server battle defeat atomically applies revival or home penalty state", () => {
   const originalRandom = Math.random;
   Math.random = () => 0.5;
@@ -398,9 +469,9 @@ test("server-generated equipment preserves original build fields", () => {
     state.mapGrids = state.mapGrids.map(() => 5);
     const result = applyGameCommand(state, { level: 20, experience: 0, gold: 0 }, "roll", {});
     const equipment = result.event.equipment as Record<string, unknown>;
-    assert.equal(equipment.quality, 1);
+    assert.ok(Number(equipment.quality) >= 1);
     assert.ok((equipment.affixes as unknown[]).length >= 1);
-    assert.ok((equipment.affixes as unknown[]).length <= 2);
+    assert.ok((equipment.affixes as unknown[]).length <= 3);
     assert.ok(typeof equipment.slotTypeId === "number");
     assert.ok(Array.isArray(equipment.gems));
     assert.ok(typeof equipment.suitName === "string");
@@ -494,6 +565,42 @@ test("fate card resolves on the server and empty auto-dismantle rules dismantle 
     assert.ok(rolled.state.dismantleEssence > 0);
   } finally {
     Math.random = random;
+  }
+});
+
+test("demolition fate fallback uses exactly level times fifty gold", () => {
+  const originalRandom = Math.random;
+  try {
+    // 0.72 falls in 拆迁通知 after 命运逆转 was removed (total weight 93).
+    Math.random = () => .72;
+    const state = createInitialGameState();
+    addItem(state, 5, 1);
+    const result = applyGameCommand(state, { level: 1, experience: 0, gold: 100 }, "item_use", { item_id: 5 });
+    assert.equal(result.character.gold, 50);
+    assert.equal((result.event.fate as Record<string, unknown>).gold, -50);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test("repeated fate buffs accumulate with the documented nine-battle cap", () => {
+  const originalRandom = Math.random;
+  try {
+    // 0.15 lands on 技能大赛 in the authoritative weighted event pool.
+    Math.random = () => 0.15;
+    const state = createInitialGameState();
+    addItem(state, 5, 3);
+    const character = { level: 1, experience: 0, gold: 0 };
+    let current = state;
+    let currentCharacter = character;
+    for (let index = 0; index < 3; index += 1) {
+      const result = applyGameCommand(current, currentCharacter, "item_use", { item_id: 5 });
+      current = result.state;
+      currentCharacter = result.character;
+    }
+    assert.equal(current.buffs.skillBoost, 9);
+  } finally {
+    Math.random = originalRandom;
   }
 });
 

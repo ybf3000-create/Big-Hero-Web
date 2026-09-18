@@ -316,6 +316,7 @@ func _start_game(server_character: Dictionary) -> void:
 
 static func server_state_to_save_data(server_character: Dictionary, state: Dictionary) -> Dictionary:
 	var attributes: Dictionary = state.get("attributes", {}) as Dictionary
+	var authoritative_stats: Dictionary = state.get("stats", {}) as Dictionary
 	var inventory_items: Array = []
 	for raw in state.get("inventory", []):
 		inventory_items.append({"item_id": int(raw.get("itemId", 0)), "count": int(raw.get("count", 0)), "bound": bool(raw.get("bound", false))})
@@ -343,6 +344,7 @@ static func server_state_to_save_data(server_character: Dictionary, state: Dicti
 	var map_values: Array[int] = []
 	for raw in state.get("mapGrids", []):
 		map_values.append(int(raw))
+	var construction_buildings: Dictionary = state.get("constructionBuildings", {}) as Dictionary
 	return {
 		"character_name": str(server_character.get("name", "勇者")),
 		"level": int(server_character.get("level", 1)),
@@ -361,9 +363,15 @@ static func server_state_to_save_data(server_character: Dictionary, state: Dicti
 		"stat_def": int(attributes.get("defense", 0)),
 		"stat_spd": int(attributes.get("speed", 0)),
 		"stat_luk": int(attributes.get("luck", 0)),
+		# Derived combat values are calculated and persisted by the server. Keep
+		# the snapshot for network UI/battle presentation instead of rebuilding it
+		# from client-side equipment formulas.
+		"authoritative_stats": authoritative_stats.duplicate(true),
 		"grid_index": int(state.get("gridIndex", 0)),
 		"map_total_grids": int(state.get("mapTotalGrids", map_values.size())),
 		"map_grids": map_values,
+		"construction_buildings": construction_buildings.duplicate(true),
+		"pending_construction": state.get("pendingConstruction", null),
 		"dice_history": state.get("diceHistory", []),
 		"poker_records": state.get("pokerRecords", []),
 		"inventory": {"items": inventory_items, "capacity": int(state.get("inventoryCapacity", 100)), "expansion_count": int(state.get("inventoryExpansionCount", 0))},

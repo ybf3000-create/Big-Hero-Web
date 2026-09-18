@@ -539,6 +539,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   };
 
   app.post("/api/v1/game/roll", async (request) => gameCommand(request, "roll"));
+  app.post("/api/v1/game/construction/choose", async (request) => gameCommand(request, "construction_choose"));
+  app.post("/api/v1/game/construction/resolve", async (request) => gameCommand(request, "construction_resolve"));
+  app.post("/api/v1/game/construction/upgrade", async (request) => gameCommand(request, "construction_upgrade"));
+  app.post("/api/v1/game/construction/demolish", async (request) => gameCommand(request, "construction_demolish"));
   app.post("/api/v1/game/item/use", async (request) => gameCommand(request, "item_use"));
   app.post("/api/v1/game/equipment/equip", async (request) => gameCommand(request, "equipment_equip"));
   app.post("/api/v1/game/equipment/unequip", async (request) => gameCommand(request, "equipment_unequip"));

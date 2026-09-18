@@ -23,6 +23,7 @@ const GRID_TYPES = [
 	{ "icon": "🟩", "name": "空地",      "clr": Color(0.3, 0.5, 0.2) },
 	{ "icon": "💰", "name": "空地2",     "clr": Color(0.3, 0.5, 0.2) },
 	{ "icon": "🎰", "name": "彩票格",    "clr": Color(0.75, 0.25, 0.45) },
+	{ "icon": "🔧", "name": "建设格",    "clr": Color(0.25, 0.55, 0.35) },
 ]
 
 # 扑克牌花色（工具常量已移至 UIUtils）
@@ -48,10 +49,13 @@ var player_stat_atk: int = 0
 var player_stat_def: int = 0
 var player_stat_spd: int = 0
 var player_stat_luk: int = 0
+var authoritative_stats: Dictionary = {}
 var _attribute_request_in_flight: bool = false
 var player_grid_index: int = 0
 var map_total_grids: int = 28
 var map_grids: Array[int] = []
+var construction_buildings: Dictionary = {}
+var pending_construction: Variant = null
 var last_dice_roll: int = 0
 var last_dice_suit: String = ""
 var last_dice_history: Array[int] = []
@@ -244,6 +248,7 @@ func _build_map_area() -> void:
 		tile.position = Vector2(start_x + i * TILE_W, tile_y)
 		tile.size = Vector2(TILE_W + TILE_SHEAR, TILE_H)  # 不含标签行
 		tile.set_label_positions(0, 0)
+		tile.clicked.connect(func() -> void: _on_map_tile_clicked(i))
 		area.add_child(tile)
 
 	# -- 主角图像（PNG 自带透明背景，直接读取源图避免导入压缩/透明异常） --
@@ -605,11 +610,14 @@ func _load_from_save_data(data: Dictionary) -> void:
 	player_stat_def = data.get("stat_def", 0)
 	player_stat_spd = data.get("stat_spd", 0)
 	player_stat_luk = data.get("stat_luk", 0)
+	authoritative_stats = data.get("authoritative_stats", {}).duplicate(true)
 	player_grid_index = data.get("grid_index", 0)
 	map_total_grids = data.get("map_total_grids", 28)
 	map_grids.clear()
 	for item in data.get("map_grids", []):
 		map_grids.append(int(item))
+	construction_buildings = (data.get("construction_buildings", {}) as Dictionary).duplicate(true)
+	pending_construction = data.get("pending_construction", null)
 	last_dice_history.clear()
 	for item in data.get("dice_history", []):
 		last_dice_history.append(int(item))
@@ -682,9 +690,12 @@ func _build_save_data() -> Dictionary:
 		"stat_def": player_stat_def,
 		"stat_spd": player_stat_spd,
 		"stat_luk": player_stat_luk,
+		"authoritative_stats": authoritative_stats.duplicate(true),
 		"grid_index": player_grid_index,
 		"map_total_grids": map_total_grids,
 		"map_grids": map_grids,
+		"construction_buildings": construction_buildings.duplicate(true),
+		"pending_construction": pending_construction,
 		"dice_history": last_dice_history,
 		"poker_records": poker_records,
 		"inventory": inventory.to_dict(),
@@ -977,6 +988,15 @@ func _apply_network_roll_response(response: Dictionary) -> void:
 	top_bar.refresh()
 	top_bar.refresh_compact_stats()
 	top_bar.refresh_poker_slots()
+	if str(event.get("kind", "")) == "construction" and str(event.get("action", "")) == "choose":
+		_show_construction_choice(int(event.get("gridIndex", player_grid_index)), event)
+		return
+	for raw_path_event in event.get("pathEvents", []):
+		var path_event: Dictionary = raw_path_event as Dictionary
+		var path_message := str(path_event.get("message", ""))
+		if not path_message.is_empty(): _show_float_text(path_message, Color(1.0, 0.85, 0.3))
+	if str(event.get("kind", "")) == "construction" and str(event.get("action", "")) in ["shop", "chest", "battle"] and not event.has("battle_result") and int(event.get("to", player_grid_index)) == player_grid_index:
+		_show_construction_management(int(event.get("gridIndex", player_grid_index)), event)
 	var battle_result: Dictionary = event.get("battle_result", {}) as Dictionary
 	var history: Array = battle_result.get("events", []) as Array
 	if not history.is_empty():
@@ -1003,6 +1023,133 @@ func _apply_network_roll_response(response: Dictionary) -> void:
 			_show_float_text(message, Color(1.0, 0.85, 0.3))
 	if auto_play_enabled and history.is_empty():
 		_start_auto_timer()
+
+
+func _show_construction_choice(grid_index: int, event: Dictionary) -> void:
+	var old := get_node_or_null("ConstructionChoice")
+	if old: old.queue_free()
+	var panel := Panel.new()
+	panel.name = "ConstructionChoice"
+	panel.position = Vector2(350, 180)
+	panel.size = Vector2(580, 300)
+	UIUtils.panel_style(panel, Color(0.10, 0.13, 0.18, 0.98))
+	var title := Label.new()
+	title.text = "🔧 建设格：选择建设方向"
+	title.position = Vector2(24, 18)
+	title.size = Vector2(530, 32)
+	title.add_theme_font_size_override("font_size", 22)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(title)
+	var hint := Label.new()
+	hint.text = "建设费用 5000 金币，10 秒未选择将由服务器随机选择"
+	hint.position = Vector2(24, 58)
+	hint.size = Vector2(530, 26)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_color_override("font_color", Color("d9c98a"))
+	panel.add_child(hint)
+	var options := [
+		{"type": "shop", "text": "🏪 商店\n收益随建设等级和间隔回合提高"},
+		{"type": "chest", "text": "🎁 宝箱\n提高宝箱最低品质"},
+		{"type": "battle", "text": "🗡️ 战斗\n提高金币、经验和装备掉落率"},
+	]
+	for index in range(options.size()):
+		var option: Dictionary = options[index]
+		var option_type := str(option["type"])
+		var button := Button.new()
+		button.text = str(option["text"])
+		button.position = Vector2(22 + index * 182, 112)
+		button.size = Vector2(170, 112)
+		button.add_theme_font_size_override("font_size", 14)
+		button.pressed.connect(Callable(self, "_choose_construction").bind(grid_index, option_type, panel))
+		panel.add_child(button)
+	add_child(panel)
+	var timeout_timer := get_tree().create_timer(10.2)
+	timeout_timer.timeout.connect(func() -> void:
+		if is_instance_valid(panel): _resolve_construction_timeout(panel))
+
+
+func _choose_construction(grid_index: int, direction: String, panel: Panel) -> void:
+	if is_instance_valid(panel): panel.queue_free()
+	var response: Dictionary = await NetworkClient.execute_game_command("construction/choose", {"grid_index": grid_index, "type": direction})
+	if not response.get("ok", false):
+		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
+		return
+	var server_character: Dictionary = response.get("character", {}) as Dictionary
+	var server_state: Dictionary = response.get("state", {}) as Dictionary
+	_load_from_save_data(LoginScriptRef.server_state_to_save_data(server_character, server_state))
+	_refresh_grid_display()
+	top_bar.refresh()
+	_show_float_text(str((response.get("event", {}) as Dictionary).get("message", "建设完成")), Color(0.4, 1.0, 0.6))
+	if auto_play_enabled:
+		_start_auto_timer()
+
+
+func _resolve_construction_timeout(panel: Panel) -> void:
+	if is_instance_valid(panel): panel.queue_free()
+	var response: Dictionary = await NetworkClient.execute_game_command("construction/resolve")
+	if not response.get("ok", false):
+		return
+	var server_character: Dictionary = response.get("character", {}) as Dictionary
+	var server_state: Dictionary = response.get("state", {}) as Dictionary
+	_load_from_save_data(LoginScriptRef.server_state_to_save_data(server_character, server_state))
+	_refresh_grid_display()
+	top_bar.refresh()
+	_show_float_text(str((response.get("event", {}) as Dictionary).get("message", "建设已自动完成")), Color(1.0, 0.85, 0.3))
+	if auto_play_enabled:
+		_start_auto_timer()
+
+
+func _show_construction_management(grid_index: int, event: Dictionary) -> void:
+	var old := get_node_or_null("ConstructionManagement")
+	if old: old.queue_free()
+	var building: Dictionary = construction_buildings.get(str(grid_index), {}) as Dictionary
+	if building.is_empty(): return
+	var panel := Panel.new()
+	panel.name = "ConstructionManagement"
+	panel.position = Vector2(430, 420)
+	panel.size = Vector2(420, 138)
+	UIUtils.panel_style(panel, Color(0.10, 0.13, 0.18, 0.97))
+	var title := Label.new()
+	title.text = "🔧 %s建设格 Lv.%d" % [str({"shop": "商店", "chest": "宝箱", "battle": "战斗"}.get(str(building.get("type", "")), "建设")), int(building.get("level", 1))]
+	title.position = Vector2(18, 12)
+	title.size = Vector2(384, 28)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(title)
+	var close := Button.new()
+	close.text = "关闭"
+	close.position = Vector2(330, 92)
+	close.size = Vector2(70, 30)
+	close.pressed.connect(panel.queue_free)
+	panel.add_child(close)
+	var level := int(building.get("level", 1))
+	if level < 10:
+		var upgrade := Button.new()
+		upgrade.text = "升级（%d金）" % (level * 1500)
+		upgrade.position = Vector2(38, 76)
+		upgrade.size = Vector2(130, 38)
+		upgrade.pressed.connect(func() -> void: _manage_construction("construction/upgrade", grid_index, panel))
+		panel.add_child(upgrade)
+	var demolish := Button.new()
+	demolish.text = "拆除（免费）"
+	demolish.position = Vector2(188, 76)
+	demolish.size = Vector2(130, 38)
+	demolish.pressed.connect(func() -> void: _manage_construction("construction/demolish", grid_index, panel))
+	panel.add_child(demolish)
+	add_child(panel)
+
+
+func _manage_construction(path: String, grid_index: int, panel: Panel) -> void:
+	if is_instance_valid(panel): panel.queue_free()
+	var response: Dictionary = await NetworkClient.execute_game_command(path, {"grid_index": grid_index})
+	if not response.get("ok", false):
+		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
+		return
+	var server_character: Dictionary = response.get("character", {}) as Dictionary
+	var server_state: Dictionary = response.get("state", {}) as Dictionary
+	_load_from_save_data(LoginScriptRef.server_state_to_save_data(server_character, server_state))
+	_refresh_grid_display()
+	top_bar.refresh()
+	_show_float_text(str((response.get("event", {}) as Dictionary).get("message", "建设格已更新")), Color(0.4, 1.0, 0.6))
 
 
 func _build_player_battle_state() -> Dictionary:
@@ -1250,9 +1397,9 @@ func _get_expansion_addition_plan(boss_tier: int) -> Array[int]:
 		1:
 			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.ELITE, GridExecutorCls.GridType.TREASURE, GridExecutorCls.GridType.EMPTY]
 		2:
-			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.FATE, GridExecutorCls.GridType.FORGE, GridExecutorCls.GridType.EMPTY2]
+			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.FATE, GridExecutorCls.GridType.FORGE, GridExecutorCls.GridType.CONSTRUCTION]
 		3:
-			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.ELITE, GridExecutorCls.GridType.TREASURE, GridExecutorCls.GridType.EMPTY2]
+			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.ELITE, GridExecutorCls.GridType.TREASURE, GridExecutorCls.GridType.CONSTRUCTION]
 		4:
 			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.FATE, GridExecutorCls.GridType.FATE, GridExecutorCls.GridType.SYNTH]
 		5:
@@ -1272,21 +1419,21 @@ func _get_expansion_addition_plan(boss_tier: int) -> Array[int]:
 		12:
 			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.FATE, GridExecutorCls.GridType.GOD, GridExecutorCls.GridType.LOTTERY]
 		13:
-			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.ELITE, GridExecutorCls.GridType.TREASURE, GridExecutorCls.GridType.EMPTY2]
+			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.ELITE, GridExecutorCls.GridType.TREASURE, GridExecutorCls.GridType.CONSTRUCTION]
 		14:
-			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.FATE, GridExecutorCls.GridType.EMPTY2, GridExecutorCls.GridType.BOSS]
+			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.FATE, GridExecutorCls.GridType.CONSTRUCTION, GridExecutorCls.GridType.BOSS]
 		15:
 			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.ELITE, GridExecutorCls.GridType.TREASURE, GridExecutorCls.GridType.BOSS]
 		16:
-			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.FATE, GridExecutorCls.GridType.FORGE, GridExecutorCls.GridType.EMPTY2]
+			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.FATE, GridExecutorCls.GridType.FORGE, GridExecutorCls.GridType.CONSTRUCTION]
 		17:
-			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.ELITE, GridExecutorCls.GridType.TREASURE, GridExecutorCls.GridType.EMPTY2]
+			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.ELITE, GridExecutorCls.GridType.TREASURE, GridExecutorCls.GridType.CONSTRUCTION]
 		18:
 			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.FATE, GridExecutorCls.GridType.GOD, GridExecutorCls.GridType.BOSS]
 		19:
-			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.ELITE, GridExecutorCls.GridType.TREASURE, GridExecutorCls.GridType.EMPTY2]
+			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.ELITE, GridExecutorCls.GridType.TREASURE, GridExecutorCls.GridType.CONSTRUCTION]
 		20:
-			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.REST, GridExecutorCls.GridType.FORGE, GridExecutorCls.GridType.EMPTY2]
+			return [GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.BATTLE, GridExecutorCls.GridType.REST, GridExecutorCls.GridType.FORGE, GridExecutorCls.GridType.CONSTRUCTION]
 		_:
 			return []
 
@@ -1307,7 +1454,7 @@ func _build_pending_grid_types_from_counts(counts: Dictionary, expected_size: in
 		GridExecutorCls.GridType.LIGHT,
 		GridExecutorCls.GridType.BOSS,
 		GridExecutorCls.GridType.EMPTY,
-		GridExecutorCls.GridType.EMPTY2,
+		GridExecutorCls.GridType.CONSTRUCTION,
 		GridExecutorCls.GridType.LOTTERY,
 	]
 	for grid_type in ordered_types:
@@ -2067,7 +2214,23 @@ func _get_grid_info(index: int) -> Dictionary:
 	var wrapped := index % map_total_grids
 	if wrapped < 0:
 		wrapped += map_total_grids
-	return GRID_TYPES[map_grids[wrapped]]
+	var info: Dictionary = (GRID_TYPES[map_grids[wrapped]] as Dictionary).duplicate(true)
+	var building: Dictionary = construction_buildings.get(str(wrapped), {}) as Dictionary
+	if not building.is_empty():
+		var btype := str(building.get("type", ""))
+		var labels := {"shop": "商店", "chest": "宝箱", "battle": "战斗"}
+		var icons := {"shop": "🏪", "chest": "🎁", "battle": "🗡️"}
+		info["name"] = str(labels.get(btype, "建设")) + " Lv." + str(int(building.get("level", 1)))
+		info["icon"] = str(icons.get(btype, "🔧"))
+	return info
+
+
+func _on_map_tile_clicked(slot: int) -> void:
+	if not _is_network_game(): return
+	var grid_index := posmod(player_grid_index + slot - CURRENT_TILE_SLOT, map_total_grids)
+	var building: Dictionary = construction_buildings.get(str(grid_index), {}) as Dictionary
+	if building.is_empty(): return
+	_show_construction_management(grid_index, {"kind": "construction", "action": "manage"})
 
 
 func _generate_mock_map() -> void:
@@ -4760,7 +4923,8 @@ func _show_reroll_panel(equip_idx: int, main_panel: Panel) -> void:
 		for cb in checks:
 			if cb.button_pressed: count += 1
 		var cost: Dictionary = EquipmentRulesCls.REROLL_COSTS[count]
-		cost_label.text = "锁定%d条：消耗 %d 精华 + %d 金币（余额：%d精华）" % [count, cost["essence"], cost["gold"], dismantle_essence]
+		var gold_cost := int(cost["legendary_gold"] if int(eqp.get("quality", 0)) == 4 else cost["epic_gold"])
+		cost_label.text = "锁定%d条：消耗 %d 精华 + %d 金币（余额：%d精华）" % [count, cost["essence"], gold_cost, dismantle_essence]
 	for cb in checks:
 		cb.toggled.connect(func(_pressed: bool): refresh_cost.call())
 	refresh_cost.call()
@@ -4774,19 +4938,20 @@ func _show_reroll_panel(equip_idx: int, main_panel: Panel) -> void:
 		for i in range(checks.size()):
 			if checks[i].button_pressed: locked.append(i)
 		var cost: Dictionary = EquipmentRulesCls.REROLL_COSTS[locked.size()]
+		var gold_cost := int(cost["legendary_gold"] if int(eqp.get("quality", 0)) == 4 else cost["epic_gold"])
 		if _is_network_game():
 			_close_all_tooltips()
 			if is_instance_valid(main_panel): main_panel.queue_free()
 			_run_network_game_command("equipment/reroll", {"equipment_id": str(eqp.get("server_id", "")), "locked_indices": locked}, "词缀重铸完成")
 			return
-		if dismantle_essence < int(cost["essence"]) or player_gold < int(cost["gold"]):
+		if dismantle_essence < int(cost["essence"]) or player_gold < gold_cost:
 			_show_float_text("金币或分解精华不足", Color(1.0, 0.45, 0.35))
 			return
 		if not EquipmentRulesCls.reroll_affixes(eqp, locked, EquipGenCls.AFFIX_POOL):
 			_show_float_text("重铸失败，装备数据异常", Color(1.0, 0.45, 0.35))
 			return
 		dismantle_essence -= int(cost["essence"])
-		player_gold -= int(cost["gold"])
+		player_gold -= gold_cost
 		_auto_save()
 		_close_all_tooltips()
 		if is_instance_valid(main_panel): main_panel.queue_free()
@@ -4874,6 +5039,32 @@ func _has_socket_target() -> bool:
 ## ============ 主角属性详情面板 ============
 ## ============ 主角属性计算 ============
 func _calc_player_stats() -> Dictionary:
+	if _is_network_game() and not authoritative_stats.is_empty():
+		# The server is the source of truth for derived values. The client only
+		# maps the snapshot to the keys used by existing panels and animations.
+		var s := authoritative_stats
+		var hp := maxi(int(s.get("maxHp", player_max_hp)), 1)
+		var atk := int(s.get("attack", 25))
+		var defense := int(s.get("defense", 15))
+		return {
+			"hp": hp, "hp_base": hp, "hp_equip": 0,
+			"atk": atk, "atk_base": atk, "atk_equip": 0, "free_atk_pct": 0.0,
+			"def": defense, "def_base": defense, "def_equip": 0, "free_def_pct": 0.0,
+			"spd": float(s.get("speed", 0)), "luk": float(s.get("luck", 0)),
+			"free_spd_pct": 0.0, "free_luk_pct": 0.0,
+			"crit": snapped(float(s.get("crit", 0)), 0.01),
+			"critdmg": snapped(float(s.get("critDamage", 150)), 0.01),
+			"hit": snapped(float(s.get("hit", 0)), 0.01),
+			"dodge": snapped(float(s.get("dodge", 0)), 0.01),
+			"block": snapped(float(s.get("block", 0)), 0.01),
+			"skill_dmg": snapped(float(s.get("skillDamage", 0)), 0.01),
+			"cd_reduce": snapped(float(s.get("cooldownReduction", 0)), 0.01),
+			"lifesteal": float(s.get("lifesteal", 0)),
+			"gold_bonus": float(s.get("goldBonus", 0)),
+			"exp_bonus": float(s.get("experienceBonus", 0)),
+			"free_stat_atk": player_stat_atk, "free_stat_def": player_stat_def,
+			"free_stat_spd": player_stat_spd, "free_stat_luk": player_stat_luk,
+		}
 	var lv: int = player_level
 	var hp_base: int = 500 + (lv - 1) * 80
 	var atk_base: int = 25 + (lv - 1) * 2

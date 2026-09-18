@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { BattleOutcome, runBattle, type BattlePlayerState } from "./battle-engine.js";
 import { BOSS_NAMES, ELITE_TEMPLATES, EQUIPMENT_SLOTS, GRID_ICONS, GRID_NAMES, MONSTER_DEFS, NORMAL_TEMPLATES, QUALITY_NAMES, QUALITY_WEIGHTS, SET_AFFIXES, SET_NAMES, itemById, skillById } from "./game-catalog.js";
-import { addItem, defaultGameState, recalculateStats, reconcileAttributePoints, removeItem, type EquipmentItem, type FreeAttributes, type GameState } from "./game-state.js";
+import { addItem, defaultGameState, recalculateStats, reconcileAttributePoints, removeItem, type ConstructionDirection, type EquipmentItem, type FreeAttributes, type GameState } from "./game-state.js";
 import { generateEncounter } from "./monster-generator.js";
 
 export interface CharacterProgress {
@@ -20,17 +20,35 @@ export interface GameCommandResult {
 const EXPANSION_COSTS = [5_000, 15_000, 30_000, 50_000, 75_000, 100_000, 150_000, 200_000, 300_000, 400_000, 500_000, 750_000, 1_000_000, 1_500_000];
 const MONSTER_ASSETS = ["char_0001.png", "char_0007.png", "char_0016.png", "char_0031.png", "char_0048.png", "char_0067.png", "char_0085.png", "char_0094.png", "char_0125.png", "char_0170.png", "char_0198.png", "char_0240.png", "char_0305.png", "char_0371.png", "char_0430.png"];
 const MAX_BOSS_INDEX = 200;
+const CONSTRUCTION_GRID = 15;
+const CONSTRUCTION_BUILD_COST = 5_000;
+const CONSTRUCTION_UPGRADE_MAX = 10;
+const GEM_LEVEL_WEIGHTS = [60, 25, 12, 3] as const;
+const CHEST_QUALITY_WEIGHTS = [.20, .34, .28, .13, .05] as const;
 const QUALITY_COEFFICIENTS = [1, 1.2, 1.5, 2, 3];
 const AFFIX_COUNTS = [1, 2, 3, 4, 5];
 const SET_QUALITY_MODIFIERS = [1.5, 1.2, 1, 0.7, 0.4];
-const AFFIX_POOL = [
-  ["攻击%", "attack", 3, 15, "%"], ["暴击率", "attack", 1, 8, "%"], ["暴击伤害", "attack", 5, 25, "%"],
-  ["技能伤害", "attack", 3, 15, "%"], ["命中", "attack", 1, 8, "%"], ["防御%", "defense", 3, 12, "%"],
-  ["生命%", "defense", 3, 15, "%"], ["格挡率", "defense", 1, 25, "%"], ["闪避率", "defense", 1, 25, "%"],
-  ["吸血", "defense", 1, 5, "%"], ["速度", "universal", 2, 15, ""], ["冷却缩减", "universal", 2, 10, "%"],
-  ["幸运", "universal", 2, 15, ""], ["金币加成", "universal", 5, 25, "%"], ["经验加成", "universal", 3, 10, "%"],
-  ["攻击(数值)", "attack", 5, 50, ""], ["防御(数值)", "defense", 5, 40, ""],
-] as const;
+type AffixDefinition = readonly [name: string, type: "attack" | "defense" | "universal", minimum: number, maximum: number, suffix: string, slots: readonly string[]];
+const ALL_EQUIPMENT_SLOTS = EQUIPMENT_SLOTS.map((slot) => slot.key);
+const AFFIX_POOL: readonly AffixDefinition[] = [
+  ["攻击%", "attack", 3, 15, "%", ["weapon", "ring", "necklace", "cape"]],
+  ["暴击率", "attack", 1, 8, "%", ["weapon", "ring", "necklace", "charm"]],
+  ["暴击伤害", "attack", 5, 25, "%", ALL_EQUIPMENT_SLOTS],
+  ["技能伤害", "attack", 3, 15, "%", ALL_EQUIPMENT_SLOTS],
+  ["命中", "attack", 1, 8, "%", ALL_EQUIPMENT_SLOTS],
+  ["防御%", "defense", 3, 12, "%", ["armor", "helmet", "shoes", "cape"]],
+  ["生命%", "defense", 3, 15, "%", ALL_EQUIPMENT_SLOTS],
+  ["格挡率", "defense", 1, 6, "%", ["armor", "helmet", "shoes", "charm"]],
+  ["闪避率", "defense", 1, 6, "%", ["shoes", "cape", "ring", "necklace"]],
+  ["吸血", "defense", 1, 5, "%", ALL_EQUIPMENT_SLOTS],
+  ["速度", "universal", 2, 15, "", ALL_EQUIPMENT_SLOTS],
+  ["冷却缩减", "universal", 2, 10, "%", ALL_EQUIPMENT_SLOTS],
+  ["幸运", "universal", 2, 15, "", ALL_EQUIPMENT_SLOTS],
+  ["金币加成", "universal", 5, 25, "%", ALL_EQUIPMENT_SLOTS],
+  ["经验加成", "universal", 3, 10, "%", ALL_EQUIPMENT_SLOTS],
+  ["攻击(数值)", "attack", 5, 50, "", ALL_EQUIPMENT_SLOTS],
+  ["防御(数值)", "defense", 5, 40, "", ALL_EQUIPMENT_SLOTS],
+];
 const ESSENCE_BY_QUALITY = [1, 3, 8, 20, 50] as const;
 const REROLL_COSTS = {
   0: { essence: 15, epicGold: 5_000, legendaryGold: 10_000 },
@@ -46,17 +64,18 @@ function expandMapAfterBoss(state: GameState, clearedTier: number): void {
   if (clearedTier > 20 || state.mapTotalGrids >= 128) return;
   const target = Math.min(128, 28 + clearedTier * 5);
   const plans: number[][] = [
-    [1, 1, 2, 5, 12], [1, 1, 7, 6, 13], [1, 1, 2, 5, 13], [1, 1, 7, 7, 9],
+    [1, 1, 2, 5, 12], [1, 1, 7, 6, 15], [1, 1, 2, 5, 15], [1, 1, 7, 7, 9],
     [1, 1, 2, 5, 9], [1, 1, 7, 6, 8], [1, 1, 2, 5, 8], [1, 1, 7, 8, 10],
     [1, 1, 2, 5, 10], [1, 1, 7, 6, 3], [1, 1, 2, 5, 3], [1, 1, 7, 8, 14],
-    [1, 1, 2, 5, 13], [1, 1, 7, 13, 11], [1, 1, 2, 5, 11], [1, 1, 7, 6, 13],
-    [1, 1, 2, 5, 13], [1, 1, 7, 8, 11], [1, 1, 2, 5, 13], [1, 1, 4, 6, 13],
+    [1, 1, 2, 5, 15], [1, 1, 7, 15, 11], [1, 1, 2, 5, 11], [1, 1, 7, 6, 15],
+    [1, 1, 2, 5, 15], [1, 1, 7, 8, 11], [1, 1, 2, 5, 15], [1, 1, 4, 6, 15],
   ];
   const previous = state.mapGrids;
   const protectedIndices = new Set<number>();
   for (let offset = -3; offset <= 3; offset += 1) {
     protectedIndices.add((state.gridIndex + offset + state.mapTotalGrids) % state.mapTotalGrids);
   }
+  for (const index of Object.keys(state.constructionBuildings).map(Number)) protectedIndices.add(index);
   const counts = new Map<number, number>();
   for (const grid of [...previous, ...(plans[clearedTier - 1] ?? [])].slice(0, target)) {
     counts.set(grid, (counts.get(grid) ?? 0) + 1);
@@ -66,7 +85,7 @@ function expandMapAfterBoss(state: GameState, clearedTier: number): void {
     counts.set(grid, Math.max(0, (counts.get(grid) ?? 0) - 1));
   }
   const pool: number[] = [];
-  for (let grid = 0; grid <= 14; grid += 1) {
+  for (let grid = 0; grid <= CONSTRUCTION_GRID; grid += 1) {
     for (let count = counts.get(grid) ?? 0; count > 0; count -= 1) pool.push(grid);
   }
   let shuffled = [...pool];
@@ -79,7 +98,7 @@ function expandMapAfterBoss(state: GameState, clearedTier: number): void {
     const positions = (type: number) => shuffled.flatMap((grid, index) => grid === type ? [index] : []);
     const separated = (type: number, gap: number) => positions(type).every((index, position, indices) => position === 0 || index - indices[position - 1]! >= gap);
     const lightningBossGap = positions(10).every((light) => positions(11).every((boss) => Math.abs(light - boss) >= 8));
-    if (separated(2, 3) && separated(4, 5) && separated(13, 6) && lightningBossGap && !shuffled.some((grid, index) => grid === 13 && shuffled[index + 1] === 13 && shuffled[index + 2] === 13)) break;
+    if (separated(2, 3) && separated(4, 5) && separated(CONSTRUCTION_GRID, 6) && lightningBossGap && !shuffled.some((grid, index) => grid === CONSTRUCTION_GRID && shuffled[index + 1] === CONSTRUCTION_GRID && shuffled[index + 2] === CONSTRUCTION_GRID)) break;
   }
   let cursor = 0;
   const rebuilt: number[] = [];
@@ -116,14 +135,29 @@ function reward(state: GameState, character: CharacterProgress, gold: number, ex
   return levelUp(character);
 }
 
-function qualityRoll(minimum = 0, maximum = QUALITY_WEIGHTS.length - 1): number {
-  const min = Math.max(0, Math.min(QUALITY_WEIGHTS.length - 1, minimum));
-  const max = Math.max(min, Math.min(QUALITY_WEIGHTS.length - 1, maximum));
-  const total = QUALITY_WEIGHTS.slice(min, max + 1).reduce((sum, weight) => sum + weight, 0);
+function mapGoldMultiplier(state: GameState): number {
+  let multiplier = Math.max(0, 1 + state.stats.goldBonus / 100);
+  if (state.stormRolls > 0) multiplier *= .5;
+  for (const buff of state.deityBuffs) {
+    if (String(buff.stat ?? "") === "gold_mult") multiplier *= numberValue(buff.value, 1);
+  }
+  return multiplier;
+}
+
+function grantMapGold(state: GameState, character: CharacterProgress, base: number): number {
+  const amount = Math.max(0, Math.floor(Math.max(0, base) * mapGoldMultiplier(state)));
+  character.gold = Math.min(9_000_000_000_000_000, character.gold + amount);
+  return amount;
+}
+
+function qualityRoll(minimum = 0, maximum = QUALITY_WEIGHTS.length - 1, weights: readonly number[] = QUALITY_WEIGHTS): number {
+  const min = Math.max(0, Math.min(weights.length - 1, minimum));
+  const max = Math.max(min, Math.min(weights.length - 1, maximum));
+  const total = weights.slice(min, max + 1).reduce((sum, weight) => sum + weight, 0);
   const roll = Math.random() * total;
   let cursor = 0;
   for (let index = min; index <= max; index += 1) {
-    cursor += QUALITY_WEIGHTS[index] ?? 0;
+    cursor += weights[index] ?? 0;
     if (roll <= cursor) return index;
   }
   return max;
@@ -138,9 +172,11 @@ function equipmentTier(level: number, bossTier: number): number {
   return result;
 }
 
-function generateEquipment(level: number, bossTier = 0, minimumQuality = 0, maximumQuality = 4, luck = 0): EquipmentItem {
-  const slot = EQUIPMENT_SLOTS[Math.floor(Math.random() * EQUIPMENT_SLOTS.length)] ?? EQUIPMENT_SLOTS[0];
-  const quality = qualityRoll(minimumQuality, maximumQuality);
+function generateEquipment(level: number, bossTier = 0, minimumQuality = 0, maximumQuality = 4, luck = 0, extraSuitRate = 0, setRateBonus = 0, requestedSlot?: string, qualityWeights: readonly number[] = QUALITY_WEIGHTS): EquipmentItem {
+  const slot = (requestedSlot ? EQUIPMENT_SLOTS.find((candidate) => candidate.key === requestedSlot) : undefined)
+    ?? EQUIPMENT_SLOTS[Math.floor(Math.random() * EQUIPMENT_SLOTS.length)]
+    ?? EQUIPMENT_SLOTS[0];
+  const quality = qualityRoll(minimumQuality, maximumQuality, qualityWeights);
   let mainValue = slot.base * (QUALITY_COEFFICIENTS[quality] ?? 1);
   if (!["shoes", "ring", "necklace", "helmet"].includes(slot.key)) {
     mainValue *= 1 + (equipmentTier(level, bossTier) - 1) * 0.015;
@@ -151,8 +187,9 @@ function generateEquipment(level: number, bossTier = 0, minimumQuality = 0, maxi
   let attackCount = 0;
   let defenseCount = 0;
   for (let count = AFFIX_COUNTS[quality] ?? 1; count > 0; count -= 1) {
-    for (let retry = 0; retry < 10; retry += 1) {
-      const definition = AFFIX_POOL[Math.floor(Math.random() * AFFIX_POOL.length)]!;
+    for (let retry = 0; retry < 5; retry += 1) {
+      const availableAffixes = AFFIX_POOL.filter((definition) => definition[5].includes(slot.key));
+      const definition = availableAffixes[Math.floor(Math.random() * availableAffixes.length)]!;
       const [name, type, minimum, maximum, suffix] = definition;
       if (used.has(name) || (name === "攻击%" && used.has("攻击(数值)")) || (name === "攻击(数值)" && used.has("攻击%")) || (name === "防御%" && used.has("防御(数值)")) || (name === "防御(数值)" && used.has("防御%"))) continue;
       if (type === "attack" && attackCount >= 2) continue;
@@ -166,10 +203,19 @@ function generateEquipment(level: number, bossTier = 0, minimumQuality = 0, maxi
     }
   }
   const gemSlots = quality >= 3 ? (Math.random() < 0.6 ? 1 : Math.random() < 0.75 ? 2 : 3) : 0;
-  const setChance = ((3 + Math.max(0, luck) * 0.3) * (SET_QUALITY_MODIFIERS[quality] ?? 1)) / 100;
+  const setChance = Math.min(1, ((3 + Math.max(0, luck) * 0.3 + Math.max(0, setRateBonus)) * (SET_QUALITY_MODIFIERS[quality] ?? 1)) / 100);
   const suitName = Math.random() < setChance ? SET_NAMES[Math.floor(Math.random() * SET_NAMES.length)] ?? "" : "";
   const setPool = suitName ? SET_AFFIXES[suitName] ?? [] : [];
   const setName = setPool[Math.floor(Math.random() * setPool.length)];
+  let extraSuitName = "";
+  let extraSetAffix: { name: string; type: string } | null = null;
+  if (setName && extraSuitRate > 0 && Math.random() < Math.min(1, extraSuitRate)) {
+    const candidates = SET_NAMES.filter((candidate) => candidate !== suitName);
+    extraSuitName = candidates[Math.floor(Math.random() * candidates.length)] ?? "";
+    const extraPool = extraSuitName ? SET_AFFIXES[extraSuitName] ?? [] : [];
+    const extraName = extraPool[Math.floor(Math.random() * extraPool.length)];
+    if (extraName) extraSetAffix = { name: extraName, type: "set" };
+  }
   return {
     id: randomUUID(),
     slot: slot.key,
@@ -188,11 +234,35 @@ function generateEquipment(level: number, bossTier = 0, minimumQuality = 0, maxi
     initialGemSlots: gemSlots,
     acquiredAt: Date.now(),
     suitName,
-    extraSuitName: "",
-    setAffixes: setName ? [{ name: setName, type: "set" }] : [],
+    extraSuitName,
+    setAffixes: [
+      ...(setName ? [{ name: setName, type: "set" }] : []),
+      ...(extraSetAffix ? [extraSetAffix] : []),
+    ],
     locked: quality >= 4,
     bound: false,
   };
+}
+
+function equippedSetGenerationBonuses(state: GameState): { extraSuitRate: number; setRateBonus: number } {
+  const setCounts: Record<string, number> = {};
+  const affixes = new Set<string>();
+  for (const itemId of Object.values(state.equipped)) {
+    if (!itemId) continue;
+    const item = state.equipmentBag.find((entry) => entry.id === itemId);
+    if (!item) continue;
+    for (const setName of [item.suitName, item.extraSuitName]) if (setName) setCounts[setName] = (setCounts[setName] ?? 0) + 1;
+    for (const affix of item.setAffixes ?? []) if (affix.name) affixes.add(affix.name);
+  }
+  return {
+    extraSuitRate: (setCounts["引力"] ?? 0) >= 4 ? 0.01 + state.stats.luck * 0.002 + (affixes.has("【引力】护符") ? 0.005 : 0) : 0,
+    setRateBonus: affixes.has("【引力】磁力") ? 2 : 0,
+  };
+}
+
+function generateStateEquipment(state: GameState, level: number, bossTier: number, minimumQuality = 0, maximumQuality = 4, requestedSlot?: string, qualityWeights: readonly number[] = QUALITY_WEIGHTS): EquipmentItem {
+  const bonuses = equippedSetGenerationBonuses(state);
+  return generateEquipment(level, bossTier, minimumQuality, maximumQuality, state.stats.luck, bonuses.extraSuitRate, bonuses.setRateBonus, requestedSlot, qualityWeights);
 }
 
 function addGem(state: GameState, gemId: number, level = 1, count = 1, bound = false): boolean {
@@ -277,13 +347,29 @@ function rerollAffixes(item: EquipmentItem, lockedIndices: number[]): void {
   if (item.quality < 3 || item.quality > 4 || lockedIndices.length > 2 || !item.affixes?.length) throw new Error("装备无法重铸");
   if (lockedIndices.some((index) => !Number.isInteger(index) || index < 0 || index >= item.affixes!.length)) throw new Error("锁定词条不存在");
   const used = new Set(lockedIndices.map((index) => item.affixes![index]!.name));
+  let attackCount = lockedIndices.filter((index) => item.affixes![index]!.type === "attack").length;
+  let defenseCount = lockedIndices.filter((index) => item.affixes![index]!.type === "defense").length;
   item.affixes = item.affixes.map((affix, index) => {
     if (lockedIndices.includes(index)) return affix;
-    const candidates = AFFIX_POOL.filter(([name]) => !used.has(name));
-    const [name, type, minimum, maximum, suffix] = candidates[Math.floor(Math.random() * candidates.length)]!;
-    const value = Math.round((minimum + Math.random() * (maximum - minimum)) * 10) / 10;
-    used.add(name);
-    return { name, type, value, display: `+${value}${suffix}` };
+    for (let retry = 0; retry < 5; retry += 1) {
+      const candidates = AFFIX_POOL.filter(([name, type, , , , slots]) => {
+        if (!slots.includes(item.slot) || used.has(name)) return false;
+        if ((name === "攻击%" && used.has("攻击(数值)")) || (name === "攻击(数值)" && used.has("攻击%"))) return false;
+        if ((name === "防御%" && used.has("防御(数值)")) || (name === "防御(数值)" && used.has("防御%"))) return false;
+        if (type === "attack" && attackCount >= 2) return false;
+        if (type === "defense" && defenseCount >= 2) return false;
+        return true;
+      });
+      const definition = candidates[Math.floor(Math.random() * candidates.length)];
+      if (!definition) break;
+      const [name, type, minimum, maximum, suffix] = definition;
+      const value = Math.round((minimum + Math.random() * (maximum - minimum)) * 10) / 10;
+      used.add(name);
+      if (type === "attack") attackCount += 1;
+      if (type === "defense") defenseCount += 1;
+      return { name, type, value, display: `+${value}${suffix}` };
+    }
+    return affix;
   });
 }
 
@@ -299,8 +385,8 @@ function pokerReward(state: GameState, character: CharacterProgress): Record<str
   if (!hand) return { matched: false };
   const base = Math.floor(Math.random() * 41) + 10;
   const gold = character.level * base * Number(hand[1]);
-  character.gold = Math.min(9_000_000_000_000_000, character.gold + gold);
-  return { matched: true, hand: hand[0], multiplier: hand[1], base, gold, message: `${hand[0]} ×${hand[1]}，+${gold}金币` };
+  const actualGold = grantMapGold(state, character, gold);
+  return { matched: true, hand: hand[0], multiplier: hand[1], base, gold: actualGold, message: `${hand[0]} ×${hand[1]}，+${actualGold}金币` };
 }
 
 function weightedPick<T extends { weight: number }>(entries: T[]): T {
@@ -311,6 +397,98 @@ function weightedPick<T extends { weight: number }>(entries: T[]): T {
     if (roll < 0) return entry;
   }
   return entries.at(-1)!;
+}
+
+function randomGemLevel(): number {
+  return weightedPick(GEM_LEVEL_WEIGHTS.map((weight, index) => ({ level: index + 1, weight }))).level;
+}
+
+function constructionLabel(type: ConstructionDirection): string {
+  return type === "shop" ? "商店" : type === "chest" ? "宝箱" : "战斗";
+}
+
+function constructionMinimumQuality(level: number): number {
+  if (level >= 5) return 3;
+  if (level >= 3) return 2;
+  return 1;
+}
+
+function chestQualityWeights(luck: number): number[] {
+  const weights: number[] = [...CHEST_QUALITY_WEIGHTS];
+  let shift = Math.min(1, Math.max(0, luck) * .015);
+  for (let index = 0; index < weights.length - 1 && shift > 0; index += 1) {
+    const moved = Math.min(weights[index]!, shift);
+    weights[index] = (weights[index] ?? 0) - moved;
+    weights[index + 1] = (weights[index + 1] ?? 0) + moved;
+    shift -= moved;
+  }
+  return weights;
+}
+
+function buildConstruction(state: GameState, character: CharacterProgress, gridIndex: number, type: ConstructionDirection, automatic = false): Record<string, unknown> {
+  state.pendingConstruction = null;
+  if (character.gold < CONSTRUCTION_BUILD_COST) {
+    return { kind: "construction", action: "build_failed", gridIndex, type, automatic, message: `金币不足，建设需要${CONSTRUCTION_BUILD_COST}金币` };
+  }
+  character.gold -= CONSTRUCTION_BUILD_COST;
+  state.constructionBuildings[String(gridIndex)] = {
+    type,
+    level: 1,
+    ...(type === "shop" ? { lastCollectTurn: state.completedLaps } : {}),
+  };
+  return { kind: "construction", action: "built", gridIndex, type, level: 1, automatic, cost: CONSTRUCTION_BUILD_COST, message: `建设${constructionLabel(type)}格 Lv.1，-${CONSTRUCTION_BUILD_COST}金币` };
+}
+
+function constructionChest(state: GameState, character: CharacterProgress, gridIndex: number, level: number): Record<string, unknown> {
+  const floor = constructionMinimumQuality(level);
+  if (level >= CONSTRUCTION_UPGRADE_MAX) {
+    const equipment = generateStateEquipment(state, character.level, state.bossTier, 1, 4, undefined, chestQualityWeights(state.stats.luck));
+    const received = receiveEquipment(state, equipment);
+    return { kind: "construction", action: "chest", gridIndex, level, equipment: received.accepted ? equipment : null, message: received.accepted ? `黄金宝库获得：${equipment.name}` : received.essence > 0 ? `黄金宝库装备自动分解：+${received.essence}精华` : "装备背包已满，宝箱装备未能收入" };
+  }
+  const roll = Math.random();
+  if (roll < .55) {
+    const gold = grantMapGold(state, character, Math.min(character.level, 100) * (Math.floor(Math.random() * 7) + 6));
+    return { kind: "construction", action: "chest", gridIndex, level, gold, message: `建设宝箱获得 +${gold}金币` };
+  }
+  if (roll < .8 && state.equipmentBag.length < state.equipmentCapacity) {
+    const equipment = generateStateEquipment(state, character.level, state.bossTier, floor, 4, undefined, chestQualityWeights(state.stats.luck));
+    const received = receiveEquipment(state, equipment);
+    return { kind: "construction", action: "chest", gridIndex, level, equipment: received.accepted ? equipment : null, message: received.accepted ? `建设宝箱获得：${equipment.name}` : received.essence > 0 ? `建设宝箱装备自动分解：+${received.essence}精华` : "装备背包已满" };
+  }
+  if (roll < .92) {
+    const added = addItem(state, 5, 1);
+    return { kind: "construction", action: "chest", gridIndex, level, itemId: added ? 5 : undefined, message: added ? "建设宝箱开出天命卡×1" : "背包已满，天命卡未能收入" };
+  }
+  const gemId = Math.floor(Math.random() * 8) + 1;
+  const gemLevel = randomGemLevel();
+  addGem(state, gemId, gemLevel);
+  return { kind: "construction", action: "chest", gridIndex, level, gemId, gemLevel, message: `建设宝箱开出宝石 #${gemId} Lv.${gemLevel}` };
+}
+
+function triggerConstruction(state: GameState, character: CharacterProgress, gridIndex: number): Record<string, unknown> {
+  const building = state.constructionBuildings[String(gridIndex)];
+  if (!building) {
+    state.pendingConstruction = { gridIndex, expiresAt: Date.now() + 10_000 };
+    return { kind: "construction", action: "choose", gridIndex, options: ["shop", "chest", "battle"], expiresAt: state.pendingConstruction.expiresAt, message: "请选择建设方向（商店 / 宝箱 / 战斗）" };
+  }
+  if (building.type === "shop") {
+    const last = Math.max(0, Math.floor(building.lastCollectTurn ?? state.completedLaps));
+    const interval = Math.max(0, state.completedLaps - last);
+    const gold = grantMapGold(state, character, character.level * 10 + interval * building.level * 5);
+    building.lastCollectTurn = state.completedLaps;
+    return { kind: "construction", action: "shop", gridIndex, level: building.level, interval, gold, message: `商店建设格获得 +${gold}金币` };
+  }
+  if (building.type === "chest") return constructionChest(state, character, gridIndex, building.level);
+  const battle = originalBattle(state, character, "battle", building.level);
+  return { ...battle, construction: { gridIndex, type: building.type, level: building.level } };
+}
+
+function resolveExpiredConstruction(state: GameState, character: CharacterProgress): Record<string, unknown> | null {
+  const pending = state.pendingConstruction;
+  if (!pending || pending.expiresAt > Date.now()) return null;
+  const types: ConstructionDirection[] = ["shop", "chest", "battle"];
+  return buildConstruction(state, character, pending.gridIndex, types[Math.floor(Math.random() * types.length)]!, true);
 }
 
 function tickWeatherRoll(state: GameState): void {
@@ -349,13 +527,13 @@ function lotteryLapDraw(state: GameState, character: CharacterProgress): Record<
   const rewards: Record<string, unknown> = {};
   if (won) {
     const gold = Math.max(10_000, character.level * 5_000);
-    character.gold = Math.min(9_000_000_000_000_000, character.gold + gold);
-    addGem(state, Math.floor(Math.random() * 8) + 1, 3);
+    const actualGold = grantMapGold(state, character, gold);
+    addGem(state, Math.floor(Math.random() * 8) + 1, randomGemLevel());
     addItem(state, 5, 1);
     for (const quality of [2, 3, 4]) {
-      receiveEquipment(state, generateEquipment(character.level, state.bossTier, quality, quality, state.stats.luck));
+      receiveEquipment(state, generateStateEquipment(state, character.level, state.bossTier, quality, quality));
     }
-    rewards.gold = gold;
+    rewards.gold = actualGold;
   }
   return { winningNumber, won, rewards };
 }
@@ -369,28 +547,38 @@ function tickLapEffects(state: GameState, character: CharacterProgress): Record<
 }
 
 function fateEvent(state: GameState, character: CharacterProgress): Record<string, unknown> {
-  if (state.weather !== "sunny" && state.bossTier >= 6 && Math.random() < Math.min(1, (30 + state.stats.luck * .5) / 100)) {
-    if (state.weather === "blizzard") { state.hibernateLaps = Math.max(state.hibernateLaps, 1); return { type: "special", name: "冬眠", hibernateLaps: 1, message: "冬眠：本圈普通怪物直接结算胜利" }; }
-    if (state.weather === "drizzle") { const before = state.reviveCoins; state.reviveCoins = Math.min(3, before + 1); return { type: "reward", name: "滋润", message: `滋润：复活币+${state.reviveCoins - before}` }; }
-    if (state.weather === "fog") return { type: "special", name: "雾中秘径", teleportTreasure: true, message: "雾中秘径：前往宝箱格" };
-    if (state.weather === "sandstorm") { const gold = character.level * 200; character.gold += gold; return { type: "reward", name: "沙中淘金", gold, message: `沙中淘金：+${gold}金币` }; }
-    if (state.weather === "aurora") {
-      const equipment = generateEquipment(character.level, state.bossTier, 4, 4, state.stats.luck);
-      receiveEquipment(state, equipment);
-      return { type: "equipment", name: "许愿", equipment, message: "许愿：获得传说装备" };
-    }
-  }
-  const selected = weightedPick([
+  const eventPool = [
     { name: "股市大涨", weight: 6 }, { name: "宝石行情好", weight: 6 }, { name: "技能大赛", weight: 7 },
     { name: "天命降临", weight: 6 }, { name: "装备促销", weight: 6 }, { name: "小憩", weight: 7 },
     { name: "获得宝石", weight: 6 }, { name: "获得打孔器", weight: 6 }, { name: "股市崩盘", weight: 8 },
     { name: "暴风雨", weight: 7 }, { name: "拆迁通知", weight: 7 }, { name: "诅咒降临", weight: 8 },
-    { name: "攻击削弱", weight: 5 }, { name: "传送门", weight: 8 }, { name: "命运逆转", weight: 7 },
-  ]).name;
+    { name: "攻击削弱", weight: 5 }, { name: "传送门", weight: 8 },
+  ];
+  const weatherEvents: Record<string, { name: string; weight: number }> = {
+    blizzard: { name: "冬眠", weight: 30 }, drizzle: { name: "滋润", weight: 25 }, fog: { name: "雾中秘径", weight: 22 },
+    sandstorm: { name: "沙中淘金", weight: 20 }, aurora: { name: "许愿", weight: 15 },
+  };
+  const weatherEvent = state.bossTier >= 6 ? weatherEvents[state.weather] : undefined;
+  if (weatherEvent) eventPool.push({ ...weatherEvent, weather: true } as typeof eventPool[number] & { weather: boolean });
+  let selectedEntry = weightedPick(eventPool);
+  if ((selectedEntry as { weather?: boolean }).weather) {
+    if (selectedEntry.name === "冬眠") { state.hibernateLaps = Math.max(state.hibernateLaps, 1); return { type: "special", name: "冬眠", hibernateLaps: 1, message: "冬眠：本圈普通怪物直接结算胜利" }; }
+    if (selectedEntry.name === "滋润") { const before = state.reviveCoins; state.reviveCoins = Math.min(3, before + 1); return { type: "reward", name: "滋润", message: `滋润：复活币+${state.reviveCoins - before}` }; }
+    if (selectedEntry.name === "雾中秘径") return { type: "special", name: "雾中秘径", teleportTreasure: true, message: "雾中秘径：前往宝箱格" };
+    if (selectedEntry.name === "沙中淘金") { const gold = grantMapGold(state, character, character.level * 200); return { type: "reward", name: "沙中淘金", gold, message: `沙中淘金：+${gold}金币` }; }
+    if (selectedEntry.name === "许愿") {
+      const equipment = generateStateEquipment(state, character.level, state.bossTier, 4, 4);
+      receiveEquipment(state, equipment);
+      return { type: "equipment", name: "许愿", equipment, message: "许愿：获得传说装备" };
+    }
+  }
+  const harmfulEvents = new Set(["股市崩盘", "暴风雨", "拆迁通知", "诅咒降临", "攻击削弱"]);
+  if (harmfulEvents.has(selectedEntry.name) && Math.random() < Math.min(.5, Math.max(0, state.stats.luck) * .02)) selectedEntry = weightedPick(eventPool);
+  const selected = selectedEntry.name;
   if (selected === "股市大涨") {
     const gold = Math.max(100, Math.min(50_000, Math.floor(character.gold * .05)));
-    character.gold += gold;
-    return { type: "reward", name: selected, gold, message: `股市大涨！+${gold} 金币` };
+    const actualGold = grantMapGold(state, character, gold);
+    return { type: "reward", name: selected, gold: actualGold, message: `股市大涨！+${actualGold} 金币` };
   }
   if (selected === "股市崩盘") {
     const gold = Math.min(character.gold, Math.max(100, Math.min(10_000, Math.floor(character.gold * .05))));
@@ -398,47 +586,58 @@ function fateEvent(state: GameState, character: CharacterProgress): Record<strin
     return { type: "punish", name: selected, gold: gold === 0 ? 0 : -gold, message: `股市崩盘！-${gold} 金币` };
   }
   if (selected === "小憩") {
-    const healing = Math.floor(state.maxHp / 2);
-    state.hp = Math.min(state.maxHp, state.hp + healing);
+    const before = state.reviveCoins;
+    state.reviveCoins = Math.min(3, before + 1);
     state.nextRollModifier = 1;
-    return { type: "reward", name: selected, healing, nextStepBonus: 1, message: "小憩恢复50%生命，下次步数+1" };
+    return { type: "reward", name: selected, reviveCoins: state.reviveCoins - before, nextStepBonus: 1, message: "小憩：复活币+1，下次步数+1" };
   }
-  if (selected === "获得宝石" || selected === "宝石行情好") {
+  if (selected === "宝石行情好") {
+    state.gemSynthesisRefunds = Math.min(10, state.gemSynthesisRefunds + 1);
+    return { type: "reward", name: selected, remaining: state.gemSynthesisRefunds, message: `宝石行情好：下次合成返还1颗（剩余${state.gemSynthesisRefunds}次）` };
+  }
+  if (selected === "获得宝石") {
     const gemId = Math.floor(Math.random() * 8) + 1;
-    const level = selected === "宝石行情好" ? 2 : 1;
+    const level = randomGemLevel();
     addGem(state, gemId, level);
-    return { type: "reward", name: selected, gemId, level, message: selected === "宝石行情好" ? "宝石行情好：获得Lv.2宝石" : `获得宝石 #${gemId}` };
+    return { type: "reward", name: selected, gemId, level, message: `获得宝石 #${gemId} Lv.${level}` };
   }
   if (selected === "获得打孔器") {
     addItem(state, 6, 1);
     return { type: "reward", name: selected, itemId: 6, message: "获得打孔器×1" };
   }
   if (selected === "技能大赛") {
-    state.buffs.skillBoost = 3;
-    return { type: "reward", name: selected, message: "未来3场战斗伤害+30%" };
+    state.buffs.skillBoost = Math.min(9, (state.buffs.skillBoost ?? 0) + 3);
+    return { type: "reward", name: selected, remaining: state.buffs.skillBoost, message: `未来${state.buffs.skillBoost}场战斗伤害+30%` };
   }
   if (selected === "攻击削弱") {
-    state.buffs.damagePenalty = 3;
-    return { type: "punish", name: selected, message: "未来3场战斗伤害-30%" };
+    state.buffs.damagePenalty = Math.min(9, (state.buffs.damagePenalty ?? 0) + 3);
+    return { type: "punish", name: selected, remaining: state.buffs.damagePenalty, message: `未来${state.buffs.damagePenalty}场战斗伤害-30%` };
   }
   if (selected === "诅咒降临") {
-    state.buffs.damagePenalty = 3;
-    return { type: "punish", name: selected, message: "诅咒降临：未来3场伤害-20%" };
+    const curse = weightedPick([
+      { name: "衰神", stat: "decline_god", value: 1, turns: 1, description: "伤害×0.7，受伤×1.5", weight: 1 },
+      { name: "穷神", stat: "gold_mult", value: .5, turns: 1, description: "金币收益×0.5", weight: 1 },
+      { name: "懒神", stat: "cd_mult", value: 1.3, turns: 1, description: "技能冷却×1.3", weight: 1 },
+    ]);
+    state.deityBuffs = state.deityBuffs.filter((buff) => !["decline_god", "gold_mult", "cd_mult"].includes(String(buff.stat ?? "")));
+    state.deityBuffs.push(curse);
+    return { type: "punish", name: selected, curse, message: `诅咒降临：${curse.name}，持续1圈` };
   }
   if (selected === "天命降临") {
     addItem(state, 5, 1);
     return { type: "reward", name: selected, itemId: 5, message: "获得天命卡×1" };
   }
   if (selected === "装备促销") {
-    const equipment = generateEquipment(character.level, state.bossTier, 1, 4, state.stats.luck);
-    const received = receiveEquipment(state, equipment);
-    return { type: "equipment", name: selected, equipment: received.accepted ? equipment : null, message: received.accepted ? `装备促销：获得${equipment.name}` : received.essence > 0 ? `装备促销：自动分解为${received.essence}精华` : "装备背包已满" };
+    state.rerollDiscounts = Math.min(10, state.rerollDiscounts + 1);
+    return { type: "reward", name: selected, remaining: state.rerollDiscounts, message: `装备促销：下次重铸费用减半（剩余${state.rerollDiscounts}次）` };
   }
-  if (selected === "暴风雨") { state.nextRollModifier = -1; return { type: "punish", name: selected, nextStepPenalty: 1, message: "暴风雨：下次骰子步数-1" }; }
-  if (selected === "拆迁通知") { const loss = Math.min(character.gold, Math.max(100, character.level * 50)); character.gold -= loss; return { type: "punish", name: selected, gold: -loss, message: `拆迁通知：支付${loss}金币` }; }
+  if (selected === "暴风雨") {
+    state.stormRolls = Math.min(15, state.stormRolls + 5);
+    return { type: "punish", name: selected, remaining: state.stormRolls, message: `暴风雨：接下来${state.stormRolls}投金币收益×0.5` };
+  }
+  if (selected === "拆迁通知") { const loss = Math.min(character.gold, Math.max(0, character.level * 50)); character.gold -= loss; return { type: "punish", name: selected, gold: -loss, message: `拆迁通知：支付${loss}金币` }; }
   if (selected === "传送门") return { type: "special", name: selected, teleport: true, message: "传送门！传送到闪电格" };
-  const healing = state.maxHp - state.hp; state.hp = state.maxHp;
-  return { type: "special", name: "命运逆转", healing, message: `命运逆转：恢复${healing}生命` };
+  return { type: "special", name: "命运平静", message: "命运暂时没有改变" };
 }
 
 function deityEvent(state: GameState, character: CharacterProgress): Record<string, unknown> {
@@ -453,6 +652,7 @@ function deityEvent(state: GameState, character: CharacterProgress): Record<stri
     { name: "命运之神", type: "special", weight: 10, stat: "fate_now", value: 1, turns: 0, description: "立即触发一次命运事件" },
   ]);
   if (selected.stat === "fate_now") return { kind: "deity", deity: selected.name, immediateFate: fateEvent(state, character), message: `遇到${selected.name}：${selected.description}` };
+  state.deityBuffs = state.deityBuffs.filter((buff) => String(buff.stat ?? "") !== selected.stat);
   state.deityBuffs.push({ name: selected.name, stat: selected.stat, value: selected.value, turns: selected.turns });
   return { kind: "deity", deity: selected.name, effect: { stat: selected.stat, value: selected.value, turns: selected.turns }, message: `遇到${selected.name}：${selected.description}` };
 }
@@ -472,8 +672,8 @@ function synthesizeEquipment(state: GameState, character: CharacterProgress): Re
   const quality = first.quality === second.quality
     ? Math.min(4, first.quality + 1)
     : low + Math.floor(Math.random() * (Math.min(4, high + 1) - low + 1));
-  const generated = generateEquipment(character.level, state.bossTier, quality, quality, state.stats.luck);
-  generated.slot = Math.random() < .5 ? first.slot : second.slot;
+  const generatedSlot = Math.random() < .5 ? first.slot : second.slot;
+  const generated = generateStateEquipment(state, character.level, state.bossTier, quality, quality, generatedSlot);
   const slotDefinition = EQUIPMENT_SLOTS.find((slot) => slot.key === generated.slot);
   if (slotDefinition) {
     generated.baseName = slotDefinition.name;
@@ -580,7 +780,7 @@ function legacyBattle(state: GameState, character: CharacterProgress, kind: "nor
     if (Math.random() < (kind === "boss" ? 1 : .35)) addItem(state, kind === "boss" ? 91 : 1, 1);
     const dropChance = kind === "boss" ? 1 : kind === "elite" ? .5 : .12;
     const equipment = Math.random() < dropChance && state.equipmentBag.length < state.equipmentCapacity
-      ? generateEquipment(character.level, state.bossTier, kind === "boss" ? 3 : 0, 4, state.stats.luck)
+      ? generateStateEquipment(state, character.level, state.bossTier, kind === "boss" ? 3 : 0, 4)
       : null;
     if (equipment) receiveEquipment(state, equipment);
     const passiveHeal = selectedSkills.filter((skill) => skill.healPct).reduce((sum, skill) => sum + Math.floor(state.stats.attack * (skill.healPct ?? 0) / 100), 0);
@@ -622,13 +822,16 @@ function equippedBattleBonuses(state: GameState): { setCounts: Record<string, nu
   return { setCounts, setAffixes };
 }
 
-function originalBattle(state: GameState, character: CharacterProgress, kind: "battle" | "elite" | "boss" | "challenge"): Record<string, unknown> {
+function originalBattle(state: GameState, character: CharacterProgress, kind: "battle" | "elite" | "boss" | "challenge", constructionLevel = 0): Record<string, unknown> {
   const encounter = generateEncounter(kind, character.level, state.bossTier, state.bossIndex, state.weather);
   const sets = equippedBattleBonuses(state);
-  let damageMultiplier = (state.buffs.skillBoost ?? 0) > 0 ? 1.3 : (state.buffs.damagePenalty ?? 0) > 0 ? .7 : 1;
+  let damageMultiplier = 1;
+  if ((state.buffs.skillBoost ?? 0) > 0) damageMultiplier *= 1.3;
+  if ((state.buffs.damagePenalty ?? 0) > 0) damageMultiplier *= .7;
   let incomingDamageMultiplier = 1;
   let cooldownModifier = 0;
-  let goldBonus = state.stats.goldBonus;
+  let goldMultiplier = 1 + state.stats.goldBonus / 100;
+  if (state.stormRolls > 0) goldMultiplier *= .5;
   let qualityUpgradeChance = 0;
   for (const buff of state.deityBuffs) {
     const stat = String(buff.stat ?? "");
@@ -636,9 +839,10 @@ function originalBattle(state: GameState, character: CharacterProgress, kind: "b
     if (stat === "war_god") { damageMultiplier *= 1.5; incomingDamageMultiplier *= .7; }
     if (stat === "decline_god") { damageMultiplier *= .7; incomingDamageMultiplier *= 1.5; }
     if (stat === "cd_mult") cooldownModifier += (1 - value) * 100;
-    if (stat === "gold_mult") goldBonus += (value - 1) * 100;
+    if (stat === "gold_mult") goldMultiplier *= value;
     if (stat === "quality_up_chance") qualityUpgradeChance = Math.max(qualityUpgradeChance, value);
   }
+  const goldBonus = (goldMultiplier - 1) * 100;
   const player: BattlePlayerState = {
     name: character.name ?? "勇者",
     level: character.level,
@@ -655,10 +859,13 @@ function originalBattle(state: GameState, character: CharacterProgress, kind: "b
     skillDamage: state.stats.skillDamage,
     cooldownReduction: Math.max(-50, Math.min(50, state.stats.cooldownReduction + cooldownModifier)),
     lifesteal: state.stats.lifesteal,
-    freeAttackPct: state.attributes.attack * .018,
+    // Free attack points are already folded into the authoritative attack
+    // stat using the additive attack multiplier from the role design.
+    freeAttackPct: 0,
     freeDefensePct: Math.min(.5, state.attributes.defense * .012),
     goldBonus,
     experienceBonus: state.stats.experienceBonus,
+    luck: state.stats.luck,
     skillSlots: state.skillSlots.map((skillId) => ({ skillId, priority: Math.max(1, Math.min(3, state.skillPriorities[String(skillId)] ?? 2)) })),
     battleDamageMultiplier: damageMultiplier,
     incomingDamageMultiplier,
@@ -689,6 +896,18 @@ function originalBattle(state: GameState, character: CharacterProgress, kind: "b
   }
   const isChallenge = kind === "challenge";
   const won = result.outcome === BattleOutcome.VICTORY || (isChallenge && result.outcome === BattleOutcome.CHALLENGE_DONE);
+  if (won && constructionLevel > 0 && kind === "battle") {
+    const rewardMultiplier = 1 + constructionLevel * .15;
+    const dropMultiplier = 1 + constructionLevel * .10;
+    result.gold_gain = Math.round(Number(result.gold_gain ?? 0) * rewardMultiplier);
+    result.exp_gain = Math.round(Number(result.exp_gain ?? 0) * rewardMultiplier);
+    const baseDropChance = Math.min(1, .15 + Math.max(0, state.stats.luck) * .005);
+    const targetDropChance = Math.min(1, baseDropChance * dropMultiplier);
+    if (Array.isArray(result.drops) && result.drops.length === 0 && targetDropChance > baseDropChance && Math.random() < (targetDropChance - baseDropChance) / Math.max(.0001, 1 - baseDropChance)) {
+      result.drops.push({ kind: "equip", ...(constructionLevel >= CONSTRUCTION_UPGRADE_MAX ? { quality_floor: 1 } : {}) });
+    }
+    result.construction_multiplier = { gold: rewardMultiplier, experience: rewardMultiplier, drop: dropMultiplier };
+  }
   character.gold = Math.max(0, character.gold - result.luxury_gold_spent);
   const equipment: EquipmentItem[] = [];
   const messages: string[] = [];
@@ -709,8 +928,9 @@ function originalBattle(state: GameState, character: CharacterProgress, kind: "b
     }
     for (const drop of result.drops) {
       let qualityFloor = Number(drop.quality_floor ?? (drop.kind === "boss" ? 3 : 0));
+      if (constructionLevel >= CONSTRUCTION_UPGRADE_MAX && kind === "battle") qualityFloor = Math.max(1, qualityFloor);
       if (Math.random() < qualityUpgradeChance) qualityFloor = Math.min(4, qualityFloor + 1);
-      const generated = generateEquipment(character.level, state.bossTier, qualityFloor, 4, state.stats.luck);
+      const generated = generateStateEquipment(state, character.level, state.bossTier, qualityFloor, 4);
       const received = receiveEquipment(state, generated);
       if (received.accepted) equipment.push(generated);
       else if (received.essence > 0) messages.push(`自动分解${generated.name}，获得${received.essence}分解精华`);
@@ -777,7 +997,39 @@ export function applyGameCommand(
   recalculateStats(state, character.level);
   let event: Record<string, unknown>;
   let rollLotteryDraw: Record<string, unknown> | null = null;
-  if (command === "roll") {
+  let stormRollsAtStart = -1;
+  const automaticConstruction = resolveExpiredConstruction(state, character);
+  if (state.pendingConstruction && !automaticConstruction && !["construction_choose", "construction_resolve"].includes(command)) {
+    throw new Error("请先完成建设方向选择");
+  }
+  if (automaticConstruction && ["construction_choose", "construction_resolve"].includes(command)) {
+    event = automaticConstruction;
+  } else if (command === "construction_choose") {
+    const pending = state.pendingConstruction;
+    const gridIndex = numberValue(payload.grid_index, -1);
+    const type = payload.type;
+    if (!pending || pending.gridIndex !== gridIndex || (type !== "shop" && type !== "chest" && type !== "battle")) throw new Error("建设选择已失效");
+    event = buildConstruction(state, character, gridIndex, type, false);
+  } else if (command === "construction_upgrade") {
+    const gridIndex = numberValue(payload.grid_index, -1);
+    const building = state.constructionBuildings[String(gridIndex)];
+    if (!building || state.mapGrids[gridIndex] !== CONSTRUCTION_GRID) throw new Error("建设格不存在");
+    if (state.gridIndex !== gridIndex) throw new Error("只有停留在该建设格时才能升级");
+    if (building.level >= CONSTRUCTION_UPGRADE_MAX) throw new Error("建设格已达到Lv.10上限");
+    const cost = building.level * 1_500;
+    if (character.gold < cost) throw new Error("金币不足");
+    character.gold -= cost;
+    building.level += 1;
+    event = { kind: "construction", action: "upgrade", gridIndex, type: building.type, level: building.level, cost, message: `${constructionLabel(building.type)}建设格升级至 Lv.${building.level}` };
+  } else if (command === "construction_demolish") {
+    const gridIndex = numberValue(payload.grid_index, -1);
+    const building = state.constructionBuildings[String(gridIndex)];
+    if (!building || state.mapGrids[gridIndex] !== CONSTRUCTION_GRID) throw new Error("建设格不存在");
+    delete state.constructionBuildings[String(gridIndex)];
+    if (state.pendingConstruction?.gridIndex === gridIndex) state.pendingConstruction = null;
+    event = { kind: "construction", action: "demolish", gridIndex, message: "建设格已拆除，建设费用和升级费用不返还" };
+  } else if (command === "roll") {
+    stormRollsAtStart = state.stormRolls;
     const baseDice = Math.floor(Math.random() * 6) + 1;
     const dice = Math.max(1, Math.min(6, baseDice + state.nextRollModifier));
     state.nextRollModifier = 0;
@@ -792,7 +1044,7 @@ export function applyGameCommand(
     const poker = pokerReward(state, character);
     if (previous + dice >= state.mapTotalGrids) {
       state.completedLaps += 1;
-      character.gold = Math.min(9_000_000_000_000_000, character.gold + 50);
+      grantMapGold(state, character, 50);
       rollLotteryDraw = tickLapEffects(state, character);
       for (const buffName of Object.keys(state.buffs)) {
         if ((state.buffs[buffName] ?? 0) > 0 && !["skillBoost", "damagePenalty"].includes(buffName)) {
@@ -800,28 +1052,34 @@ export function applyGameCommand(
         }
       }
     }
+    const pathEvents: Record<string, unknown>[] = [];
+    for (let step = 1; step < dice; step += 1) {
+      const passedIndex = (previous + step) % state.mapTotalGrids;
+      if (state.mapGrids[passedIndex] !== CONSTRUCTION_GRID || !state.constructionBuildings[String(passedIndex)]) continue;
+      pathEvents.push({ ...triggerConstruction(state, character, passedIndex), passed: true });
+    }
     const gridType = state.mapGrids[next] ?? 12;
     const eventName = GRID_NAMES[gridType] ?? "空地";
     if (gridType === 1 || gridType === 2 || gridType === 3 || gridType === 11) {
       const battleKind = gridType === 11 ? "boss" : gridType === 3 ? "challenge" : gridType === 2 ? "elite" : "battle";
       event = { ...originalBattle(state, character, battleKind), dice, from: previous, to: next, gridType, gridName: eventName, icon: GRID_ICONS[gridType], ...(rollLotteryDraw ? { lotteryDraw: rollLotteryDraw } : {}) };
+    } else if (gridType === CONSTRUCTION_GRID) {
+      event = { ...triggerConstruction(state, character, next), dice, from: previous, to: next, gridType, gridName: eventName, icon: GRID_ICONS[gridType] };
     } else if (gridType === 4) {
       if (state.reviveCoins < 3) {
         state.reviveCoins += 1;
         event = { kind: "rest", dice, from: previous, to: next, gridType, gridName: eventName, message: "+1 复活币" };
       } else {
-        const gold = Math.min(character.level, 100) * 5;
-        character.gold += gold;
+        const gold = grantMapGold(state, character, Math.min(character.level, 100) * 5);
         event = { kind: "rest", dice, from: previous, to: next, gridType, gridName: eventName, gold, message: `+${gold} 金币（复活币已满）` };
       }
     } else if (gridType === 5) {
       const chestRoll = Math.random();
       if (chestRoll < .55) {
-        const gold = Math.min(character.level, 100) * (Math.floor(Math.random() * 7) + 6);
-        character.gold += gold;
+        const gold = grantMapGold(state, character, Math.min(character.level, 100) * (Math.floor(Math.random() * 7) + 6));
         event = { kind: "chest", dice, from: previous, to: next, gridType, gridName: eventName, gold, message: `宝箱开出 +${gold} 金币` };
       } else if (chestRoll < .8 && state.equipmentBag.length < state.equipmentCapacity) {
-        const equipment = generateEquipment(character.level, state.bossTier, 0, 4, state.stats.luck);
+        const equipment = generateStateEquipment(state, character.level, state.bossTier, 0, 4, undefined, chestQualityWeights(state.stats.luck));
         const received = receiveEquipment(state, equipment);
         event = { kind: "chest", dice, from: previous, to: next, gridType, gridName: eventName, equipment: received.accepted ? equipment : null, message: received.accepted ? `宝箱获得：${equipment.name}` : received.essence > 0 ? `宝箱装备自动分解：+${received.essence}精华` : "装备背包已满" };
       } else if (chestRoll < .92) {
@@ -829,9 +1087,9 @@ export function applyGameCommand(
         event = { kind: "chest", dice, from: previous, to: next, gridType, gridName: eventName, itemId: 5, itemName: itemById(5)?.name, message: "宝箱开出天命卡×1" };
       } else {
         const gemId = Math.floor(Math.random() * 8) + 1;
-        const gem = state.gemBag.find((entry) => entry.gemId === gemId);
-        if (gem) gem.count += 1; else state.gemBag.push({ gemId, count: 1 });
-        event = { kind: "chest", dice, from: previous, to: next, gridType, gridName: eventName, gemId, message: `宝箱开出宝石 #${gemId}` };
+        const gemLevel = randomGemLevel();
+        addGem(state, gemId, gemLevel);
+        event = { kind: "chest", dice, from: previous, to: next, gridType, gridName: eventName, gemId, gemLevel, message: `宝箱开出宝石 #${gemId} Lv.${gemLevel}` };
       }
     } else if (gridType === 6) {
       const equippedSlots = Object.entries(state.equipped).filter((entry) => entry[1] !== null).map((entry) => entry[0]);
@@ -877,10 +1135,11 @@ export function applyGameCommand(
       state.hp = state.maxHp;
       event = { kind: "home", dice, from: previous, to: next, gridType, gridName: eventName, message: "回到勇者之家，状态已整备" };
     } else {
-      const gold = Math.max(1, Math.floor(Math.min(character.level, 100) * (.3 + Math.random() * .5)));
-      character.gold += gold;
+      const gold = grantMapGold(state, character, Math.max(1, Math.floor(Math.min(character.level, 100) * (.3 + Math.random() * .5))));
       event = { kind: "move", dice, from: previous, to: next, gridType, gridName: eventName, gold, message: `+${gold} 金币` };
     }
+    if (pathEvents.length > 0) event.pathEvents = pathEvents;
+    if (automaticConstruction) event.automaticConstruction = automaticConstruction;
     if (poker) event.poker = poker;
   } else if (command === "item_use") {
     const itemId = numberValue(payload.item_id, -1);
@@ -1019,20 +1278,29 @@ export function applyGameCommand(
     if (!consumed.ok) throw new Error("需要3颗同等级宝石");
     character.gold -= cost;
     addGem(state, gemId, level + 1, 1, consumed.bound);
-    event = { kind: "gem", action: "synthesize", gemId, fromLevel: level, level: level + 1, cost };
+    let refund = false;
+    if (state.gemSynthesisRefunds > 0) {
+      addGem(state, gemId, level, 1, consumed.bound);
+      state.gemSynthesisRefunds -= 1;
+      refund = true;
+    }
+    event = { kind: "gem", action: "synthesize", gemId, fromLevel: level, level: level + 1, cost, refund, remainingRefunds: state.gemSynthesisRefunds };
   } else if (command === "equipment_reroll") {
     const equipmentId = typeof payload.equipment_id === "string" ? payload.equipment_id : "";
     const item = state.equipmentBag.find((entry) => entry.id === equipmentId);
     const locked = Array.isArray(payload.locked_indices) ? payload.locked_indices.filter((value): value is number => typeof value === "number" && Number.isInteger(value)) : [];
     if (!item || item.quality < 3 || item.quality > 4 || locked.length !== (Array.isArray(payload.locked_indices) ? payload.locked_indices.length : 0) || new Set(locked).size !== locked.length || locked.length > 2) throw new Error("装备无法重铸");
     const costs = REROLL_COSTS[Math.min(2, locked.length) as 0 | 1 | 2];
-    const goldCost = item.quality === 4 ? costs.legendaryGold : costs.epicGold;
-    if (state.dismantleEssence < costs.essence) throw new Error("分解精华不足");
+    const discount = state.rerollDiscounts > 0 ? .5 : 1;
+    const essenceCost = Math.floor(costs.essence * discount);
+    const goldCost = Math.floor((item.quality === 4 ? costs.legendaryGold : costs.epicGold) * discount);
+    if (state.dismantleEssence < essenceCost) throw new Error("分解精华不足");
     if (character.gold < goldCost) throw new Error("金币不足");
     rerollAffixes(item, locked);
-    state.dismantleEssence -= costs.essence;
+    state.dismantleEssence -= essenceCost;
     character.gold -= goldCost;
-    event = { kind: "equipment", action: "reroll", equipmentId, lockedIndices: locked, essence: costs.essence, gold: goldCost, item };
+    if (discount < 1) state.rerollDiscounts -= 1;
+    event = { kind: "equipment", action: "reroll", equipmentId, lockedIndices: locked, essence: essenceCost, gold: goldCost, discounted: discount < 1, item };
   } else if (command === "auto_dismantle") {
     const enabled = typeof payload.enabled === "boolean" ? payload.enabled : state.autoDismantleEnabled;
     const rules = payload.rules && typeof payload.rules === "object" && !Array.isArray(payload.rules) ? payload.rules as Record<string, unknown> : state.autoDismantleRules;
@@ -1133,6 +1401,7 @@ export function applyGameCommand(
     throw new Error("不支持的游戏操作");
   }
   if (command === "roll" && rollLotteryDraw) event.lotteryDraw = rollLotteryDraw;
+  if (command === "roll" && stormRollsAtStart > 0) state.stormRolls = Math.max(0, state.stormRolls - 1);
   reconcileAttributePoints(state, character.level);
   recalculateStats(state, character.level);
   return { state, character, event };

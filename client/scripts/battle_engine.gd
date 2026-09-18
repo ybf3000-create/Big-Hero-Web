@@ -1203,6 +1203,7 @@ static func _apply_weather_start(player: Dictionary, enemies: Array[Dictionary],
 			"aurora":
 				unit["crit"] = float(unit.get("crit", 0.0)) * 2.0
 				unit["dodge"] = float(unit.get("dodge", 0.0)) * 2.0
+				unit["luck"] = maxf(0.0, float(unit.get("luck", 0.0))) * 1.5
 
 
 static func _weather_interval(weather: String) -> float:

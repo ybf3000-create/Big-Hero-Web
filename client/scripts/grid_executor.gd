@@ -25,6 +25,7 @@ enum GridType {
 	EMPTY    = 12,
 	EMPTY2   = 13,
 	LOTTERY  = 14,
+	CONSTRUCTION = 15,
 }
 
 
@@ -45,6 +46,7 @@ static func execute(grid_type: int, ctx: Dictionary) -> Dictionary:
 		GridType.EMPTY:    return _exec_empty(ctx)
 		GridType.EMPTY2:   return _exec_empty(ctx)
 		GridType.LOTTERY:  return _exec_lottery(ctx)
+		GridType.CONSTRUCTION: return {"event": "construction", "data": {}}
 	return {"event": "unknown", "data": {}}
 
 
@@ -257,7 +259,6 @@ static var FATE_EVENTS: Array[Dictionary] = [
 	{"name": "诅咒降临", "type": "punish", "weight": 8},
 	{"name": "攻击削弱", "type": "punish", "weight": 5},
 	{"name": "传送门", "type": "special", "weight": 8},
-	{"name": "命运逆转", "type": "special", "weight": 7},
 ]
 
 static func _exec_fate(ctx: Dictionary) -> Dictionary:
@@ -287,7 +288,9 @@ static func _exec_fate(ctx: Dictionary) -> Dictionary:
 			return {"event": "fate", "data": {"type": "reward", "name": "小憩", "next_step_bonus": 1, "message": "小憩恢复50%HP，下次步数+1"}}
 		"获得宝石":
 			var gid: int = randi_range(1, 8)
-			return {"event": "fate", "data": {"type": "reward", "name": "获得宝石", "gem_id": gid, "level": 1, "message": "获得宝石"}}
+			var gem_roll := randf()
+			var gem_level := 1 if gem_roll < 0.60 else 2 if gem_roll < 0.85 else 3 if gem_roll < 0.97 else 4
+			return {"event": "fate", "data": {"type": "reward", "name": "获得宝石", "gem_id": gid, "level": gem_level, "message": "获得宝石 Lv.%d" % gem_level}}
 		"获得打孔器":
 			return {"event": "fate", "data": {"type": "reward", "name": "获得打孔器", "item_id": 6, "count": 1, "message": "获得打孔器×1"}}
 		"传送门":
@@ -313,10 +316,6 @@ static func _exec_fate(ctx: Dictionary) -> Dictionary:
 			return {"event": "fate", "data": {"type": "punish", "name": "诅咒降临", "buff_type": "dmg_x0.8", "buff_turns": 3, "message": "诅咒降临：未来3场伤害-20%"}}
 		"攻击削弱":
 			return {"event": "fate", "data": {"type": "punish", "name": "攻击削弱", "message": "未来3场战斗伤害-30%"}}
-		"命运逆转":
-			var heal_full := int(ctx.get("player_max_hp", 1)) - int(ctx.get("player_hp", 0))
-			ctx["player_hp"] = int(ctx.get("player_max_hp", 1))
-			return {"event": "fate", "data": {"type": "special", "name": "命运逆转", "message": "命运逆转：恢复%d生命" % heal_full}}
 		_:
 			return {"event": "fate", "data": {"type": chosen["type"], "name": chosen["name"], "message": chosen["name"]}}
 

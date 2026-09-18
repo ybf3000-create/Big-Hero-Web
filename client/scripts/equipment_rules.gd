@@ -3,9 +3,9 @@ extends RefCounted
 
 const ESSENCE_BY_QUALITY: Array[int] = [1, 3, 8, 20, 50]
 const REROLL_COSTS := {
-	0: {"essence": 15, "gold": 5000},
-	1: {"essence": 30, "gold": 20000},
-	2: {"essence": 100, "gold": 50000},
+	0: {"essence": 15, "epic_gold": 5000, "legendary_gold": 10000},
+	1: {"essence": 30, "epic_gold": 10000, "legendary_gold": 20000},
+	2: {"essence": 100, "epic_gold": 30000, "legendary_gold": 60000},
 }
 const EQUIP_CAPACITY_BASE := 100
 const EQUIP_CAPACITY_MAX := 1000
