@@ -214,6 +214,11 @@ func logout() -> void:
 	_should_reconnect = false
 	if not session_token.is_empty():
 		await _request_json("/api/v1/auth/logout", HTTPClient.METHOD_POST, {}, true)
+	invalidate_local_session()
+
+
+func invalidate_local_session() -> void:
+	_should_reconnect = false
 	if _websocket.get_ready_state() == WebSocketPeer.STATE_OPEN:
 		_websocket.close(1000, "logout")
 	session_token = ""

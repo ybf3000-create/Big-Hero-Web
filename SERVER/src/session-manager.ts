@@ -20,6 +20,7 @@ export type SessionRemovalReason =
   | "reconnect_timeout"
   | "heartbeat_timeout"
   | "session_expired"
+  | "session_initialization_failed"
   | "server_shutdown";
 
 export interface SessionIdentity {

@@ -51,6 +51,46 @@ test("game state survives commands and repeated roll requests are idempotent", a
   assert.equal((await repository.getGameState(character.id)).lastDiceRoll, first.state.lastDiceRoll);
 });
 
+test("a committed battle is recoverable after the response is lost", async (context) => {
+  const { directory, repository } = await setup();
+  context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
+  const inviteHash = hashSecret("BATTLE-RECOVERY-INVITE");
+  repository.insertInviteCode("battle-recovery-invite", inviteHash);
+  const account = await repository.registerAccount({ requestId: "recovery_register", username: "recovery_hero", passwordHash: "x", inviteCodeHash: inviteHash });
+  const character = await repository.createCharacter({ id: "recovery-character", requestId: "recovery_character", accountId: account.id, displayName: "恢复勇者", normalizedName: "恢复勇者" });
+  const state = createInitialGameState();
+  state.mapGrids = Array.from({ length: state.mapTotalGrids }, () => 1);
+  repository.database.prepare("UPDATE character_states SET state_json = ? WHERE character_id = ?").run(serializeGameState(state), character.id);
+  const originalRandom = Math.random;
+  Math.random = () => 0.5;
+  try {
+    // Simulate the HTTP response being discarded after the transaction commits.
+    const committed = await repository.executeGameCommand({ characterId: character.id, requestId: "recovery_roll_1", command: "roll", payload: {} });
+    const recovered = await repository.getGameSnapshot(character.id);
+    assert.deepEqual(recovered.state, committed.state);
+    assert.equal(recovered.character.level, committed.character.level);
+    assert.equal(recovered.character.experience, committed.character.experience);
+    assert.equal(recovered.character.gold, String(committed.character.gold));
+    assert.equal(recovered.state.hp, committed.state.hp);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test("corrupt stored state fails closed without overwriting player data", async (context) => {
+  const { directory, repository } = await setup();
+  context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
+  const inviteHash = hashSecret("CORRUPT-STATE-INVITE");
+  repository.insertInviteCode("corrupt-state-invite", inviteHash);
+  const account = await repository.registerAccount({ requestId: "corrupt_register", username: "corrupt_hero", passwordHash: "x", inviteCodeHash: inviteHash });
+  const character = await repository.createCharacter({ id: "corrupt-character", requestId: "corrupt_character", accountId: account.id, displayName: "保护勇者", normalizedName: "保护勇者" });
+  const corruptJson = JSON.stringify({ version: 99, inventory: [], equipmentBag: [] });
+  repository.database.prepare("UPDATE character_states SET state_json = ? WHERE character_id = ?").run(corruptJson, character.id);
+  await assert.rejects(repository.getGameState(character.id), /stored game state is invalid/);
+  const stored = repository.database.prepare("SELECT state_json FROM character_states WHERE character_id = ?").get(character.id) as { state_json: string };
+  assert.equal(stored.state_json, corruptJson);
+});
+
 test("dice, skill slots, equipment locks and enhancement limits enforce game rules", () => {
   let state = createInitialGameState();
   const character = { level: 1, experience: 0, gold: 10_000_000 };

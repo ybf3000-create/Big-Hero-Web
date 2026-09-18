@@ -227,14 +227,20 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       await options.repository.revokeSession(sessionId, new Date(now()), "capacity_race");
       throw error;
     }
-    let character = await options.repository.getCharacter(account.id);
-    let offlineReward = null;
-    if (character && options.repository.claimOfflineProgress) {
-      const claimed = await options.repository.claimOfflineProgress(character.id, createdAt);
-      character = claimed.character;
-      offlineReward = claimed.reward;
+    try {
+      let character = await options.repository.getCharacter(account.id);
+      let offlineReward = null;
+      if (character && options.repository.claimOfflineProgress) {
+        const claimed = await options.repository.claimOfflineProgress(character.id, createdAt);
+        character = claimed.character;
+        offlineReward = claimed.reward;
+      }
+      return { sessionId, token, character, offlineReward };
+    } catch (error) {
+      await options.repository.revokeSession(sessionId, new Date(now()), "session_initialization_failed");
+      sessionManager.revoke(sessionId, "session_initialization_failed");
+      throw error;
     }
-    return { sessionId, token, character, offlineReward };
   };
 
   const startSession = async (account: { id: string }) =>

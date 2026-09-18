@@ -105,6 +105,13 @@ export interface GameState {
   activeBattle: null | Record<string, unknown>;
 }
 
+export class InvalidGameStateError extends Error {
+  constructor() {
+    super("stored game state is invalid");
+    this.name = "InvalidGameStateError";
+  }
+}
+
 export function defaultGameState(): GameState {
   const equipped: Record<string, string | null> = {};
   const slotEnhance: Record<string, number> = {};
@@ -169,7 +176,7 @@ export function parseGameState(value: string | null | undefined): GameState {
   try {
     const parsed = JSON.parse(value) as Partial<GameState>;
     const fallback = defaultGameState();
-    if (parsed.version !== 1 || !Array.isArray(parsed.inventory) || !Array.isArray(parsed.equipmentBag)) return fallback;
+    if (parsed.version !== 1 || !Array.isArray(parsed.inventory) || !Array.isArray(parsed.equipmentBag)) throw new InvalidGameStateError();
     const state = {
       ...fallback,
       ...parsed,
@@ -195,6 +202,7 @@ export function parseGameState(value: string | null | undefined): GameState {
     state.bossIndex = Math.max(1, Math.min(200, Math.floor(Number(state.bossIndex) || state.bossTier + 1)));
     return state;
   } catch {
+    if (value) throw new InvalidGameStateError();
     return defaultGameState();
   }
 }

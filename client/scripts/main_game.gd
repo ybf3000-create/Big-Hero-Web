@@ -122,6 +122,7 @@ var hibernate_laps: int = 0
 var _moving: bool = false
 var _network_roll_in_flight: bool = false
 var _network_action_in_flight: bool = false
+var _network_state_recovery_in_flight: bool = false
 var _pending_network_response: Dictionary = {}
 var _move_step: int = 0
 var _move_total: int = 0
@@ -191,6 +192,12 @@ func _ready() -> void:
 			NetworkClient.chat_message_received.connect(_on_world_chat_message)
 		if not NetworkClient.chat_error.is_connected(_on_world_chat_error):
 			NetworkClient.chat_error.connect(_on_world_chat_error)
+		if not NetworkClient.realtime_authenticated.is_connected(_on_network_reconnected):
+			NetworkClient.realtime_authenticated.connect(_on_network_reconnected)
+		if not NetworkClient.realtime_disconnected.is_connected(_on_network_disconnected):
+			NetworkClient.realtime_disconnected.connect(_on_network_disconnected)
+		if not NetworkClient.kicked.is_connected(_on_network_kicked):
+			NetworkClient.kicked.connect(_on_network_kicked)
 	if not _pending_offline_reward.is_empty():
 		_show_offline_reward(_pending_offline_reward)
 
@@ -757,6 +764,16 @@ func _on_network_dice_roll() -> void:
 	var response: Dictionary = await NetworkClient.execute_game_command("roll")
 	_network_roll_in_flight = false
 	if not response.get("ok", false):
+		var recovered := false
+		if _is_session_failure(response):
+			_return_to_network_login()
+			return
+		if _is_transport_failure(response):
+			recovered = await _recover_network_state("服务器已完成的操作会在重新同步后保留")
+		if recovered:
+			if auto_play_enabled:
+				_start_auto_timer()
+			return
 		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
 		if auto_play_enabled:
 			_start_auto_timer()
@@ -1611,6 +1628,11 @@ func _run_network_game_command(path: String, payload: Dictionary = {}, success_m
 	var response: Dictionary = await NetworkClient.execute_game_command(path, payload)
 	_network_action_in_flight = false
 	if not response.get("ok", false):
+		if _is_session_failure(response):
+			_return_to_network_login()
+			return false
+		if _is_transport_failure(response):
+			await _recover_network_state("服务器已完成的操作会在重新同步后保留")
 		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
 		return false
 	var server_character: Dictionary = response.get("character", {}) as Dictionary
@@ -1625,6 +1647,66 @@ func _run_network_game_command(path: String, payload: Dictionary = {}, success_m
 	var display_message := success_message if not success_message.is_empty() else str(event.get("message", "操作完成"))
 	_show_float_text(display_message, Color(0.45, 1.0, 0.65))
 	return true
+
+
+func _is_transport_failure(response: Dictionary) -> bool:
+	var error: Dictionary = response.get("error", {}) as Dictionary
+	var code := str(error.get("code", ""))
+	return code in ["NETWORK_ERROR", "INVALID_RESPONSE", "SERVICE_UNAVAILABLE"]
+
+
+func _is_session_failure(response: Dictionary) -> bool:
+	var error: Dictionary = response.get("error", {}) as Dictionary
+	return str(error.get("code", "")) in ["SESSION_INVALID", "CHARACTER_REQUIRED"]
+
+
+func _return_to_network_login() -> void:
+	_stop_auto_timer()
+	_moving = false
+	NetworkClient.invalidate_local_session()
+	get_tree().change_scene_to_file("res://scenes/login.tscn")
+
+
+func _recover_network_state(message := "服务器状态已重新同步") -> bool:
+	if not _is_network_game() or _network_state_recovery_in_flight:
+		return false
+	_network_state_recovery_in_flight = true
+	var response: Dictionary = await NetworkClient.get_game_state()
+	_network_state_recovery_in_flight = false
+	if not response.get("ok", false):
+		var error: Dictionary = response.get("error", {}) as Dictionary
+		if str(error.get("code", "")) in ["SESSION_INVALID", "CHARACTER_REQUIRED"]:
+			_return_to_network_login()
+		return false
+	var server_character: Dictionary = response.get("character", {}) as Dictionary
+	var server_state: Dictionary = response.get("state", {}) as Dictionary
+	_load_from_save_data(LoginScriptRef.server_state_to_save_data(server_character, server_state))
+	_refresh_grid_display()
+	top_bar.refresh()
+	top_bar.refresh_poker_slots()
+	top_bar.refresh_compact_stats()
+	_refresh_all_stats_panels()
+	_show_float_text(message, Color(0.35, 0.85, 1.0))
+	return true
+
+
+func _on_network_reconnected() -> void:
+	if _is_network_game():
+		await _recover_network_state("网络恢复，已同步服务器状态")
+
+
+func _on_network_disconnected(message: String) -> void:
+	if not _is_network_game():
+		return
+	_stop_auto_timer()
+	_moving = false
+	await _recover_network_state(message)
+
+
+func _on_network_kicked(message: String) -> void:
+	if not _is_network_game():
+		return
+	_return_to_network_login()
 
 
 func _skill_slots_payload(priority_override_slot: int = -1, remove_slot: int = -1, add_skill_id: int = 0) -> Array:
