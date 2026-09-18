@@ -51,6 +51,18 @@ export interface OfflineProgressResult {
   reward: { seconds: number; gold: number; experience: number } | null;
 }
 
+export interface GameSnapshot {
+  state: GameState;
+  character: CharacterSummary;
+}
+
+export interface AuctionMutationResult {
+  listing: AuctionListing;
+  state: GameState;
+  gold: number;
+  character: CharacterSummary;
+}
+
 export interface AuctionListing {
   id: string;
   sellerCharacterId: string;
@@ -64,6 +76,8 @@ export interface AuctionListing {
   expiresAt: number;
   buyerCharacterId: string | null;
   claimCharacterId: string | null;
+  /** Snapshot captured by a mutating auction transaction when available. */
+  character?: CharacterSummary;
 }
 
 export interface CreateAuctionInput {
@@ -139,12 +153,13 @@ export interface GameRepository {
   listChatMessages?(channel: "world" | "system", limit: number): Promise<ChatMessage[]>;
   createChatMessage?(input: CreateChatMessageInput): Promise<ChatMessage>;
   getGameState?(characterId: string): Promise<GameState>;
+  getGameSnapshot?(characterId: string): Promise<GameSnapshot>;
   claimOfflineProgress?(characterId: string, at: Date): Promise<OfflineProgressResult>;
   executeGameCommand?(input: GameCommandInput): Promise<GameCommandResult>;
   listAuctionListings?(limit: number): Promise<AuctionListing[]>;
   listMyAuctionListings?(characterId: string, limit: number): Promise<AuctionListing[]>;
   createAuctionListing?(input: CreateAuctionInput): Promise<AuctionListing>;
-  buyAuctionListing?(characterId: string, requestId: string, listingId: string): Promise<{ listing: AuctionListing; state: GameState; gold: number }>;
-  cancelAuctionListing?(characterId: string, listingId: string): Promise<AuctionListing>;
-  claimAuctionListing?(characterId: string, listingId: string): Promise<{ listing: AuctionListing; state: GameState; gold: number }>;
+  buyAuctionListing?(characterId: string, requestId: string, listingId: string): Promise<AuctionMutationResult>;
+  cancelAuctionListing?(characterId: string, listingId: string, requestId?: string): Promise<AuctionListing>;
+  claimAuctionListing?(characterId: string, requestId: string, listingId: string): Promise<AuctionMutationResult>;
 }

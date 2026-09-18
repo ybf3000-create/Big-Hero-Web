@@ -507,6 +507,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const identity = authenticateRequest(request);
     const repository = requireGameRepository();
     const character = await characterForIdentity(identity);
+    if (repository.getGameSnapshot) {
+      const snapshot = await repository.getGameSnapshot(character.id);
+      return { ok: true, character: snapshot.character, state: snapshot.state };
+    }
     return { ok: true, character, state: await repository.getGameState!(character.id) };
   });
 
@@ -521,7 +525,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       ? body.payload as Record<string, unknown>
       : {};
     const result = await repository.executeGameCommand!({ characterId: character.id, requestId, command, payload });
-    const updatedCharacter = await options.repository.getCharacter(identity.accountId);
+    // SqliteRepository includes the character row captured in the same
+    // transaction. Keep the fallback for lightweight test repositories.
+    const storedResult = result as typeof result & { characterSnapshot?: unknown };
+    const updatedCharacter = storedResult.characterSnapshot ?? { ...character, ...result.character };
     return { ok: true, character: updatedCharacter, state: result.state, event: result.event };
   };
 
@@ -577,8 +584,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const itemLevel = body.item_level === undefined ? undefined : Number(body.item_level);
     const buyoutPrice = Number(body.buyout_price);
     const durationHours = Number(body.duration_hours ?? 24);
-    const listing = await options.repository.createAuctionListing({ characterId: character.id, requestId, itemKind, itemId, itemCount, buyoutPrice, durationHours, ...(itemLevel === undefined ? {} : { itemLevel }) });
-    return { ok: true, listing, character: await options.repository.getCharacter(identity.accountId) };
+    const created = await options.repository.createAuctionListing({ characterId: character.id, requestId, itemKind, itemId, itemCount, buyoutPrice, durationHours, ...(itemLevel === undefined ? {} : { itemLevel }) });
+    const { character: characterSnapshot, ...listing } = created;
+    return { ok: true, listing, character: characterSnapshot ?? await options.repository.getCharacter(identity.accountId) };
   });
 
   app.post("/api/v1/auction/buy", async (request) => {
@@ -590,7 +598,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const requestId = validateRequestId(body.request_id);
     if (typeof body.listing_id !== "string" || body.listing_id.length < 8) throw badRequest("订单编号不正确");
     const result = await options.repository.buyAuctionListing(character.id, requestId, body.listing_id);
-    return { ok: true, ...result, character: await options.repository.getCharacter(identity.accountId) };
+    return { ok: true, ...result };
   });
 
   app.post("/api/v1/auction/cancel", async (request) => {
@@ -598,8 +606,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (!options.repository.cancelAuctionListing) throw new AppError("SERVICE_UNAVAILABLE", 503, "拍卖行暂时不可用");
     const character = await characterForIdentity(identity);
     const body = bodyObject(request.body);
+    validateRulesVersion(body.rules_version, rulesVersion);
+    const requestId = validateRequestId(body.request_id);
     if (typeof body.listing_id !== "string" || body.listing_id.length < 8) throw badRequest("订单编号不正确");
-    return { ok: true, listing: await options.repository.cancelAuctionListing(character.id, body.listing_id) };
+    const cancelled = await options.repository.cancelAuctionListing(character.id, body.listing_id, requestId);
+    const { character: characterSnapshot, ...listing } = cancelled;
+    return { ok: true, listing, ...(characterSnapshot ? { character: characterSnapshot } : {}) };
   });
 
   app.post("/api/v1/auction/claim", async (request) => {
@@ -607,9 +619,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     if (!options.repository.claimAuctionListing) throw new AppError("SERVICE_UNAVAILABLE", 503, "拍卖行暂时不可用");
     const character = await characterForIdentity(identity);
     const body = bodyObject(request.body);
+    validateRulesVersion(body.rules_version, rulesVersion);
+    const requestId = validateRequestId(body.request_id);
     if (typeof body.listing_id !== "string" || body.listing_id.length < 8) throw badRequest("订单编号不正确");
-    const result = await options.repository.claimAuctionListing(character.id, body.listing_id);
-    return { ok: true, ...result, character: await options.repository.getCharacter(identity.accountId) };
+    const result = await options.repository.claimAuctionListing(character.id, requestId, body.listing_id);
+    return { ok: true, ...result };
   });
 
   app.get("/ws", { websocket: true }, (socket: WebSocket) => {

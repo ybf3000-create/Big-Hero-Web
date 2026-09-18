@@ -289,7 +289,7 @@ test("local admin enforces 72-hour limits, temporary passwords and auction-safe 
   assert.throws(() => repository.deleteAccountForAdmin(account.username, "test"), /未领取的拍卖订单/);
   assert.equal((await repository.findAccountForLogin(account.username))?.status, "normal");
   await repository.cancelAuctionListing(hero.id, listing.id);
-  await repository.claimAuctionListing(hero.id, listing.id);
+  await repository.claimAuctionListing(hero.id, "admin_claim", listing.id);
   repository.deleteAccountForAdmin(account.username, "test");
   assert.equal((await repository.findAccountForLogin(account.username))?.status, "deleted");
   assert.equal(await repository.getCharacter(account.id), null);

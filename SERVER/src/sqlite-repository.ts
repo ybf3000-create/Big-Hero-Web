@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { AppError } from "./errors.js";
 import { applyGameCommand, createInitialGameState } from "./game-engine.js";
-import { addItem, parseGameState, reconcileAttributePoints, removeTradableItem, serializeGameState, type EquipmentItem, type GameState } from "./game-state.js";
+import { addItem, parseGameState, recalculateStats, reconcileAttributePoints, removeTradableItem, serializeGameState, type EquipmentItem, type GameState } from "./game-state.js";
 import type {
   AccountForLogin,
   AccountSummary,
@@ -539,23 +539,32 @@ export class SqliteRepository implements GameRepository {
   }
 
   async getGameState(characterId: string): Promise<GameState> {
+    const snapshot = await this.getGameSnapshot(characterId);
+    return snapshot.state;
+  }
+
+  async getGameSnapshot(characterId: string) {
     const load = this.database.transaction((id: string) => {
-      const character = this.database.prepare(
-        `SELECT level FROM characters WHERE id = ? AND deleted_at IS NULL`,
-      ).get(id) as { level: number } | undefined;
-      if (!character) throw new AppError("CHARACTER_REQUIRED", 409, "请先创建角色");
+      const characterRow = this.database.prepare(
+        `SELECT id, display_name, level, experience, gold, revision
+           FROM characters
+          WHERE id = ? AND deleted_at IS NULL`,
+      ).get(id) as Record<string, unknown> | undefined;
+      if (!characterRow) throw new AppError("CHARACTER_REQUIRED", 409, "请先创建角色");
       const row = this.database.prepare(
         `SELECT state_json FROM character_states WHERE character_id = ?`,
       ).get(id) as { state_json: string } | undefined;
       const state = parseGameState(row?.state_json);
-      const changed = reconcileAttributePoints(state, Number(character.level));
-      if (!row || changed) {
+      const beforeDerived = JSON.stringify({ stats: state.stats, maxHp: state.maxHp, hp: state.hp });
+      const changed = reconcileAttributePoints(state, Number(characterRow.level));
+      recalculateStats(state, Number(characterRow.level));
+      if (!row || changed || beforeDerived !== JSON.stringify({ stats: state.stats, maxHp: state.maxHp, hp: state.hp })) {
         this.database.prepare(
           `INSERT INTO character_states (character_id, state_json, updated_at) VALUES (?, ?, ?)
            ON CONFLICT(character_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`,
         ).run(id, serializeGameState(state), Date.now());
       }
-      return state;
+      return { state, character: characterFromRow(characterRow) };
     });
     return load.immediate(characterId);
   }
@@ -593,6 +602,7 @@ export class SqliteRepository implements GameRepository {
       }
       state.lastOnline = now;
       reconcileAttributePoints(state, level);
+      recalculateStats(state, level);
       this.database.prepare(
         `INSERT INTO character_states (character_id, state_json, updated_at) VALUES (?, ?, ?)
          ON CONFLICT(character_id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at`,
@@ -619,8 +629,8 @@ export class SqliteRepository implements GameRepository {
       }
 
       const characterRow = this.database.prepare(
-        `SELECT level, experience, gold FROM characters WHERE id = ? AND deleted_at IS NULL`,
-      ).get(value.characterId) as { level: number; experience: number; gold: number } | undefined;
+        `SELECT display_name, level, experience, gold FROM characters WHERE id = ? AND deleted_at IS NULL`,
+      ).get(value.characterId) as { display_name: string; level: number; experience: number; gold: number } | undefined;
       if (!characterRow) throw new AppError("CHARACTER_REQUIRED", 409, "请先创建角色");
       const stateRow = this.database.prepare(
         `SELECT state_json FROM character_states WHERE character_id = ?`,
@@ -629,7 +639,7 @@ export class SqliteRepository implements GameRepository {
       try {
         result = applyGameCommand(
           parseGameState(stateRow?.state_json),
-          { level: Number(characterRow.level), experience: Number(characterRow.experience), gold: Number(characterRow.gold) },
+          { name: String(characterRow.display_name), level: Number(characterRow.level), experience: Number(characterRow.experience), gold: Number(characterRow.gold) },
           value.command,
           value.payload,
         );
@@ -645,7 +655,13 @@ export class SqliteRepository implements GameRepository {
       this.database.prepare(
         `UPDATE characters SET level = ?, experience = ?, gold = ?, revision = revision + 1 WHERE id = ?`,
       ).run(result.character.level, result.character.experience, result.character.gold, value.characterId);
-      const stored = { ...result, character: result.character };
+      // Capture the complete character row inside the same transaction as the
+      // state update. Reading it after commit would allow a concurrent command
+      // to pair a newer character balance with this command's older state/event.
+      const characterSnapshot = characterFromRow(this.database.prepare(
+        `SELECT id, display_name, level, experience, gold, revision FROM characters WHERE id = ?`,
+      ).get(value.characterId) as Record<string, unknown>);
+      const stored = { ...result, character: result.character, characterSnapshot };
       this.database.prepare(
         `INSERT INTO game_commands (character_id, request_id, command, result_json) VALUES (?, ?, ?, ?)`,
       ).run(value.characterId, value.requestId, value.command, JSON.stringify(stored));
@@ -695,6 +711,9 @@ export class SqliteRepository implements GameRepository {
       ).get(value.characterId, value.requestId) as Record<string, unknown> | undefined;
       if (repeated) {
         const listing = listingFromRow(repeated);
+        listing.character = characterFromRow(this.database.prepare(
+          `SELECT id, display_name, level, experience, gold, revision FROM characters WHERE id = ?`,
+        ).get(value.characterId) as Record<string, unknown>);
         const itemId = listing.itemKind === "equipment" ? String(listing.item.id) : listing.itemKind === "item" ? Number(listing.item.itemId) : Number(listing.item.gemId);
         const itemLevelMatches = value.itemKind !== "gem" || Number(listing.item.level ?? 1) === (value.itemLevel ?? 1);
         if (listing.itemKind !== value.itemKind || !itemLevelMatches || itemId !== (value.itemKind === "equipment" ? String(value.itemId) : Number(value.itemId)) || listing.itemCount !== value.itemCount || listing.buyoutPrice !== value.buyoutPrice) {
@@ -746,12 +765,17 @@ export class SqliteRepository implements GameRepository {
       const now = Date.now();
       const id = randomUUID();
       this.database.prepare(`UPDATE character_states SET state_json = ?, updated_at = ? WHERE character_id = ?`).run(serializeGameState(state), now, value.characterId);
+      this.database.prepare(`UPDATE characters SET revision = revision + 1 WHERE id = ?`).run(value.characterId);
       this.database.prepare(
         `INSERT INTO auction_listings (id, seller_character_id, seller_name, item_kind, item_json, item_count, buyout_price, created_at, expires_at, client_request_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(id, value.characterId, character.display_name, value.itemKind, JSON.stringify(item), value.itemCount, value.buyoutPrice, now, now + value.durationHours * 60 * 60_000, value.requestId);
       const row = this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(id) as Record<string, unknown>;
-      return listingFromRow(row);
+      const listing = listingFromRow(row);
+      listing.character = characterFromRow(this.database.prepare(
+        `SELECT id, display_name, level, experience, gold, revision FROM characters WHERE id = ?`,
+      ).get(value.characterId) as Record<string, unknown>);
+      return listing;
     });
     return create.immediate(input);
   }
@@ -759,10 +783,11 @@ export class SqliteRepository implements GameRepository {
   async buyAuctionListing(characterId: string, requestId: string, listingId: string) {
     const buy = this.database.transaction(() => {
       const repeated = this.database.prepare(
-        `SELECT result_json FROM game_commands WHERE character_id = ? AND request_id = ? AND command = 'auction_buy'`,
-      ).get(characterId, requestId) as { result_json: string } | undefined;
+        `SELECT command, result_json FROM game_commands WHERE character_id = ? AND request_id = ?`,
+      ).get(characterId, requestId) as { command: string; result_json: string } | undefined;
       if (repeated) {
-        const result = JSON.parse(repeated.result_json) as { listing: AuctionListing; state: GameState; gold: number };
+        if (repeated.command !== "auction_buy") throw new AppError("REQUEST_ID_REUSED", 409, "request_id已用于其他游戏操作");
+        const result = JSON.parse(repeated.result_json) as { listing: AuctionListing; state: GameState; gold: number; character: ReturnType<typeof characterFromRow> };
         if (result.listing.id !== listingId) throw new AppError("REQUEST_ID_REUSED", 409, "request_id已用于其他购买请求");
         return result;
       }
@@ -789,7 +814,10 @@ export class SqliteRepository implements GameRepository {
       this.database.prepare(`UPDATE characters SET gold = gold - ?, revision = revision + 1 WHERE id = ?`).run(listing.buyoutPrice, characterId);
       this.database.prepare(`UPDATE auction_listings SET status = 'sold', buyer_character_id = ?, claim_character_id = seller_character_id, sold_at = ? WHERE id = ? AND status = 'active'`).run(characterId, Date.now(), listingId);
       const updated = this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown>;
-      const result = { listing: listingFromRow(updated), state, gold: Number(buyer.gold) - listing.buyoutPrice };
+      const character = characterFromRow(this.database.prepare(
+        `SELECT id, display_name, level, experience, gold, revision FROM characters WHERE id = ?`,
+      ).get(characterId) as Record<string, unknown>);
+      const result = { listing: listingFromRow(updated), state, gold: Number(buyer.gold) - listing.buyoutPrice, character };
       this.database.prepare(
         `INSERT INTO game_commands (character_id, request_id, command, result_json) VALUES (?, ?, 'auction_buy', ?)`,
       ).run(characterId, requestId, JSON.stringify(result));
@@ -798,21 +826,60 @@ export class SqliteRepository implements GameRepository {
     return buy.immediate();
   }
 
-  async cancelAuctionListing(characterId: string, listingId: string): Promise<AuctionListing> {
+  async cancelAuctionListing(characterId: string, listingId: string, requestId?: string): Promise<AuctionListing> {
     const cancel = this.database.transaction(() => {
+      if (requestId) {
+        const repeated = this.database.prepare(
+          `SELECT command, result_json FROM game_commands WHERE character_id = ? AND request_id = ?`,
+        ).get(characterId, requestId) as { command: string; result_json: string } | undefined;
+        if (repeated) {
+          if (repeated.command !== "auction_cancel") throw new AppError("REQUEST_ID_REUSED", 409, "request_id已用于其他游戏操作");
+          const result = JSON.parse(repeated.result_json) as AuctionListing;
+          if (result.id !== listingId) throw new AppError("REQUEST_ID_REUSED", 409, "request_id已用于其他取消请求");
+          return result;
+        }
+      }
       const row = this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown> | undefined;
       if (!row || String(row.seller_character_id) !== characterId || String(row.status) !== "active") throw new AppError("AUCTION_INVALID", 400, "订单无法取消");
       this.database.prepare(`UPDATE auction_listings SET status = 'cancelled', claim_character_id = seller_character_id WHERE id = ?`).run(listingId);
-      return listingFromRow(this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown>);
+      this.database.prepare(`UPDATE characters SET revision = revision + 1 WHERE id = ?`).run(characterId);
+      const result = listingFromRow(this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown>);
+      result.character = characterFromRow(this.database.prepare(
+        `SELECT id, display_name, level, experience, gold, revision FROM characters WHERE id = ?`,
+      ).get(characterId) as Record<string, unknown>);
+      if (requestId) {
+        this.database.prepare(
+          `INSERT INTO game_commands (character_id, request_id, command, result_json) VALUES (?, ?, 'auction_cancel', ?)`,
+        ).run(characterId, requestId, JSON.stringify(result));
+      }
+      return result;
     });
     return cancel.immediate();
   }
 
-  async claimAuctionListing(characterId: string, listingId: string) {
+  async claimAuctionListing(characterId: string, requestId: string, listingId: string) {
     const claim = this.database.transaction(() => {
-      const row = this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown> | undefined;
+      const repeated = this.database.prepare(
+        `SELECT command, result_json FROM game_commands WHERE character_id = ? AND request_id = ?`,
+      ).get(characterId, requestId) as { command: string; result_json: string } | undefined;
+      if (repeated) {
+        if (repeated.command !== "auction_claim") throw new AppError("REQUEST_ID_REUSED", 409, "request_id已用于其他游戏操作");
+        const result = JSON.parse(repeated.result_json) as { listing: AuctionListing; state: GameState; gold: number; character: ReturnType<typeof characterFromRow> };
+        if (result.listing.id !== listingId) throw new AppError("REQUEST_ID_REUSED", 409, "request_id已用于其他领取请求");
+        return result;
+      }
+      let row = this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown> | undefined;
       if (!row) throw new AppError("AUCTION_NOT_FOUND", 404, "拍卖订单不存在");
-      const listing = listingFromRow(row);
+      let listing = listingFromRow(row);
+      if (listing.status === "active" && listing.expiresAt <= Date.now()) {
+        this.database.prepare(
+          `UPDATE auction_listings
+              SET status = 'expired', claim_character_id = seller_character_id
+            WHERE id = ? AND status = 'active'`,
+        ).run(listingId);
+        row = this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown>;
+        listing = listingFromRow(row);
+      }
       if (listing.claimCharacterId !== characterId || !["sold", "cancelled", "expired"].includes(listing.status)) throw new AppError("AUCTION_INVALID", 400, "没有可领取的订单");
       const state = parseGameState((this.database.prepare(`SELECT state_json FROM character_states WHERE character_id = ?`).get(characterId) as { state_json: string } | undefined)?.state_json);
       let gold = 0;
@@ -831,7 +898,14 @@ export class SqliteRepository implements GameRepository {
       this.database.prepare(`UPDATE characters SET gold = gold + ?, revision = revision + 1 WHERE id = ?`).run(gold, characterId);
       this.database.prepare(`UPDATE character_states SET state_json = ?, updated_at = ? WHERE character_id = ?`).run(serializeGameState(state), Date.now(), characterId);
       this.database.prepare(`UPDATE auction_listings SET status = 'claimed' WHERE id = ?`).run(listingId);
-      return { listing: listingFromRow(this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown>), state, gold };
+      const character = characterFromRow(this.database.prepare(
+        `SELECT id, display_name, level, experience, gold, revision FROM characters WHERE id = ?`,
+      ).get(characterId) as Record<string, unknown>);
+      const result = { listing: listingFromRow(this.database.prepare(`SELECT * FROM auction_listings WHERE id = ?`).get(listingId) as Record<string, unknown>), state, gold, character };
+      this.database.prepare(
+        `INSERT INTO game_commands (character_id, request_id, command, result_json) VALUES (?, ?, 'auction_claim', ?)`,
+      ).run(characterId, requestId, JSON.stringify(result));
+      return result;
     });
     return claim.immediate();
   }

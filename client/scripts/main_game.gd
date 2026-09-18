@@ -314,6 +314,8 @@ func _load_hero_texture(res_path: String) -> Texture2D:
 
 ## 调试面板开关
 func _toggle_debug_panel() -> void:
+	if _is_network_game():
+		return
 	var existing := get_node_or_null("DebugOverlay")
 	if existing:
 		existing.queue_free()
@@ -408,6 +410,8 @@ func _build_debug_panel() -> void:
 
 ## -- 测试战斗触发 --
 func _on_test_battle(battle_kind: String) -> void:
+	if _is_network_game():
+		return
 	var ctx := {
 		"player_level": player_level,
 		"player_gold": player_gold,
@@ -450,6 +454,8 @@ func _on_test_battle(battle_kind: String) -> void:
 
 
 func _on_test_add_free_point() -> void:
+	if _is_network_game():
+		return
 	player_free_points += 1
 	_show_float_text("+1 自由属性点 (共" + str(player_free_points) + "点)", Color(1.0, 0.85, 0.2))
 	_refresh_all_stats_panels()
@@ -517,15 +523,16 @@ func _build_bottom_bar() -> void:
 		btn.add_theme_font_size_override("font_size", 16)
 		bar.add_child(btn)
 
-	# -- 调试面板入口按钮 --
-	var debug_btn := Button.new()
-	debug_btn.name = "DebugPanelBtn"
-	debug_btn.text = "🔧 调试"
-	debug_btn.position = Vector2(8, 314)
-	debug_btn.size = Vector2(80, 28)
-	UIUtils.btn_style_mini(debug_btn, Color(0.22, 0.22, 0.35))
-	debug_btn.pressed.connect(_toggle_debug_panel)
-	add_child(debug_btn)
+	# 调试工具只属于离线开发档，联网模式下客户端不能提供本地改档入口。
+	if not _is_network_game():
+		var debug_btn := Button.new()
+		debug_btn.name = "DebugPanelBtn"
+		debug_btn.text = "🔧 调试"
+		debug_btn.position = Vector2(8, 314)
+		debug_btn.size = Vector2(80, 28)
+		UIUtils.btn_style_mini(debug_btn, Color(0.22, 0.22, 0.35))
+		debug_btn.pressed.connect(_toggle_debug_panel)
+		add_child(debug_btn)
 
 	add_child(bar)
 
@@ -618,6 +625,9 @@ func _load_from_save_data(data: Dictionary) -> void:
 	skill_system.from_dict(data.get("skill_system", {}))
 	skill_system.update_max_slots(player_level)
 	_refresh_player_hp_bounds(true)
+	if data.has("player_max_hp"):
+		player_max_hp = maxi(int(data.get("player_max_hp", player_max_hp)), 1)
+		player_hp = clampi(int(data.get("player_hp", player_max_hp)), 0, player_max_hp)
 	gem_bag.assign(data.get("gem_bag", []))
 	lottery_tickets.assign(data.get("lottery_tickets", []))
 	for ticket_index in range(lottery_tickets.size()):
@@ -957,6 +967,17 @@ func _apply_network_roll_response(response: Dictionary) -> void:
 			"battle_kind": str(event.get("battleKind", "battle")),
 			"battle_result": battle_result,
 			"encounter": event.get("encounter", {}),
+			# The server result is the only source for combat rewards and outcome.
+			# Forward these fields to the view so its summary matches the state
+			# already loaded above instead of displaying zero rewards.
+			"gold_gain": int(battle_result.get("gold_gain", 0)),
+			"exp_gain": int(battle_result.get("exp_gain", 0)),
+			"drops": battle_result.get("drops", []),
+			"revive_used": bool(battle_result.get("revive_used", false)),
+			"force_home": bool(battle_result.get("force_home", false)),
+			"gold_penalty": int(battle_result.get("gold_penalty", 0)),
+			"luxury_gold_spent": int(battle_result.get("luxury_gold_spent", 0)),
+			"boss_cleared": bool(battle_result.get("boss_cleared", false)),
 			"message": str(event.get("message", "")),
 		})
 	else:
@@ -973,7 +994,7 @@ func _build_player_battle_state() -> Dictionary:
 	return {
 		"name": player_name,
 		"level": player_level,
-		"current_hp": player_max_hp,
+		"current_hp": player_hp,
 		"max_hp": player_max_hp,
 		"atk": ps.get("atk", 25),
 		"def": ps.get("def", 15),
@@ -2139,6 +2160,8 @@ func _cancel_pending_detail_click() -> void:
 
 
 func _on_test_generate_equip() -> void:
+	if _is_network_game():
+		return
 	var slots: Array[String] = ["weapon","armor","shoes","ring","necklace","cape","helmet","charm"]
 	var slot: String = slots[randi() % slots.size()]
 	var eqp: Dictionary = EquipGenCls.generate(slot, player_level)
@@ -2148,6 +2171,8 @@ func _on_test_generate_equip() -> void:
 
 
 func _on_test_generate_gem() -> void:
+	if _is_network_game():
+		return
 	var gid: int = randi_range(1, 8)
 	_add_gem(gid, 1, 1)
 	var gdef: Dictionary = EquipData.GEM_DEFS.get(gid, {})
@@ -2155,6 +2180,8 @@ func _on_test_generate_gem() -> void:
 
 
 func _on_test_add_socket_tool() -> void:
+	if _is_network_game():
+		return
 	inventory.add_item(6, 1)
 	_auto_save()
 	_show_float_text("获得 打孔器×1", Color(0.75, 0.25, 0.3))
@@ -2201,6 +2228,8 @@ func _synthesize_gem(gid: int, lv: int) -> void:
 
 
 func _on_test_generate_lottery() -> void:
+	if _is_network_game():
+		return
 	if lottery_tickets.size() >= 10:
 		_show_float_text("彩票已满（最多10张）", Color(1, 0.4, 0.4))
 		return
@@ -4886,7 +4915,7 @@ func _calc_player_stats() -> Dictionary:
 
 	# 自由属性点加成（v0.2: 每级2点）
 	var free_atk_pct: float = player_stat_atk * 0.018    # 每点+1.8%最终伤害
-	var free_def_pct: float = minf(player_stat_def * 0.015, 0.50)    # 每点+1.5%直接减伤（上限50%）
+	var free_def_pct: float = minf(player_stat_def * 0.012, 0.50)    # 每点+1.2%直接减伤（上限50%）
 	var free_spd_pct: float = minf(player_stat_spd * 0.008, 0.50)    # 每点-0.8%出手CD（上限50%）
 	var free_luk_pct: float = player_stat_luk * 0.015    # 每点+1.5%稀有掉落
 

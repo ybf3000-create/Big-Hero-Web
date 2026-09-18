@@ -21,7 +21,7 @@ export interface EquipmentItem {
   iconPath?: string;
   slotTypeId?: number;
   affixes?: Array<{ name: string; type: string; value: number; display: string }>;
-  gems?: Array<number | { id: number; level?: number }>;
+  gems?: Array<number | { id: number; level?: number; bound?: boolean }>;
   gemSlots?: number;
   initialGemSlots?: number;
   acquiredAt?: number;
@@ -291,7 +291,9 @@ export function recalculateStats(state: GameState, level = 1): void {
     attack: rawAttack,
     defense: rawDefense,
     maxHp: rawMaxHp,
-    speed: 0,
+    // Free speed points and equipment speed share the same 50% cooldown cap
+    // in the battle engine, so keep the total speed in the server snapshot.
+    speed: state.attributes.speed,
     crit: 0,
     critDamage: 150,
     hit: 0,
@@ -349,6 +351,44 @@ export function recalculateStats(state: GameState, level = 1): void {
       if (gemId === 8) base.block += 0.5 * gemLevel;
     }
   }
+
+  // Set bonuses are derived from equipped server items. They must be applied
+  // here, rather than only in the client UI, so battle, drops, and every
+  // subsequent command use the same authoritative values.
+  const setCounts: Record<string, number> = {};
+  const setAffixes = new Set<string>();
+  for (const itemId of Object.values(state.equipped)) {
+    if (!itemId) continue;
+    const item = state.equipmentBag.find((entry) => entry.id === itemId);
+    if (!item) continue;
+    for (const setName of [item.suitName, item.extraSuitName]) {
+      if (setName) setCounts[setName] = (setCounts[setName] ?? 0) + 1;
+    }
+    for (const affix of item.setAffixes ?? []) {
+      if (affix.name) setAffixes.add(affix.name);
+    }
+  }
+  if (setAffixes.has("【龙鳞】坚韧")) base.block += 3;
+  if (setAffixes.has("【疾风】疾行")) base.speed += 5;
+  if (setAffixes.has("【铁壁】铁甲")) base.block += 3;
+  if (setAffixes.has("【自然】生根")) base.lifesteal += 2;
+  if (setAffixes.has("【引力】吸引")) base.goldBonus += 10;
+  if (setAffixes.has("【引力】万有")) base.luck += 5;
+  if (setAffixes.has("【幻影】灵动")) base.dodge += 3;
+  if ((setCounts["龙鳞"] ?? 0) >= 2) base.defense += Math.floor(base.defense * .15);
+  if ((setCounts["烈焰"] ?? 0) >= 2) base.attack += Math.floor(base.attack * .10);
+  if ((setCounts["冰霜"] ?? 0) >= 2) base.speed += 10;
+  if ((setCounts["雷霆"] ?? 0) >= 2) base.crit += 8;
+  if ((setCounts["疾风"] ?? 0) >= 2) base.speed += 20;
+  if ((setCounts["铁壁"] ?? 0) >= 2) base.block += 8;
+  if ((setCounts["暗影"] ?? 0) >= 2) base.critDamage += 25;
+  if ((setCounts["自然"] ?? 0) >= 2) base.lifesteal += 3;
+  if ((setCounts["引力"] ?? 0) >= 2) base.goldBonus += 30;
+  if ((setCounts["引力"] ?? 0) >= 3) base.luck += 15;
+  if ((setCounts["星辰"] ?? 0) >= 2) base.cooldownReduction += 10;
+  if ((setCounts["幻影"] ?? 0) >= 2) base.dodge += 8;
+  if ((setCounts["口才"] ?? 0) >= 2) base.luck += 10;
+  if ((setCounts["奢侈"] ?? 0) >= 2) base.goldBonus -= 50;
   state.stats = base;
   state.maxHp = base.maxHp;
   state.hp = Math.min(state.hp, state.maxHp);

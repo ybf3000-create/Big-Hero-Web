@@ -74,3 +74,30 @@ test("control, dot, shield and healing event families are all represented", () =
   }
   for (const family of ["cast", "damage", "status", "shield", "heal"]) assert.ok(resultFamilies.has(family), `missing ${family} events`);
 });
+
+test("enemy skill damage remains finite and changes the authoritative player HP", () => {
+  const encounter = {
+    battle_kind: "battle" as const,
+    monster_level: 10,
+    template_id: "regression-enemy-skill",
+    template_name: "敌方技能回归",
+    units: [{
+      id: 1, name: "测试射手", display_name: "测试射手", row: "front" as const, level: 10,
+      max_hp: 99_999, current_hp: 99_999, atk: 120, def: 10, speed_points: 35, action_cd: 2.16,
+      crit: 0, critdmg: 150, hit: 100, dodge: 0, block: 0, skill_ids: [10], passives: [],
+      is_elite: false, is_boss: false, infinite_hp: false, template_id: "regression-enemy-skill",
+    }],
+    formation: { front: [1], back: [] }, duration_limit: 0, weather: "sunny",
+  };
+  const result = runBattle({
+    name: "测试勇者", level: 10, currentHp: 10_000, maxHp: 10_000, attack: 1, defense: 10,
+    speedPoints: 0, crit: 0, critDamage: 150, hit: 100, dodge: 0, block: 0, skillDamage: 0,
+    cooldownReduction: 0, lifesteal: 0, freeAttackPct: 0, freeDefensePct: 0, goldBonus: 0,
+    experienceBonus: 0, skillSlots: [], battleDamageMultiplier: 1, incomingDamageMultiplier: 1,
+    passives: [], setCounts: {}, setAffixes: [], battleGold: 0,
+  }, encounter, () => 0.9);
+  const enemyDamage = result.events.filter((event) => event.type === "damage" && event.source?.side === "enemy");
+  assert.ok(enemyDamage.length > 0);
+  assert.ok(enemyDamage.every((event) => Number.isFinite(event.amount) && Number(event.amount) > 0));
+  assert.ok(result.player_hp < result.player_max_hp);
+});

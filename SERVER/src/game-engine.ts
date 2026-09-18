@@ -5,6 +5,7 @@ import { addItem, defaultGameState, recalculateStats, reconcileAttributePoints, 
 import { generateEncounter } from "./monster-generator.js";
 
 export interface CharacterProgress {
+  name?: string;
   level: number;
   experience: number;
   gold: number;
@@ -201,29 +202,33 @@ function addGem(state: GameState, gemId: number, level = 1, count = 1, bound = f
   return true;
 }
 
-function removeGem(state: GameState, gemId: number, level: number, count: number): boolean {
+function takeGems(state: GameState, gemId: number, level: number, count: number): { ok: boolean; bound: boolean } {
   const candidates = state.gemBag.filter((entry) => entry.gemId === gemId && (entry.level ?? 1) === level);
-  if (candidates.reduce((sum, entry) => sum + entry.count, 0) < count) return false;
+  if (candidates.reduce((sum, entry) => sum + entry.count, 0) < count) return { ok: false, bound: false };
   let remaining = count;
+  let consumedBound = false;
   candidates.sort((left, right) => Number(Boolean(right.bound)) - Number(Boolean(left.bound)));
   for (const entry of candidates) {
     const taken = Math.min(entry.count, remaining);
     entry.count -= taken;
+    consumedBound ||= Boolean(entry.bound) && taken > 0;
     remaining -= taken;
     if (remaining === 0) break;
   }
   state.gemBag = state.gemBag.filter((entry) => entry.count > 0);
-  return true;
+  return { ok: true, bound: consumedBound };
 }
 
-function gemParts(raw: number | { id: number; level?: number }): { id: number; level: number } {
-  return typeof raw === "number" ? { id: raw, level: 1 } : { id: Number(raw.id), level: Math.max(1, Math.floor(Number(raw.level ?? 1))) };
+function gemParts(raw: number | { id: number; level?: number; bound?: boolean }): { id: number; level: number; bound: boolean } {
+  return typeof raw === "number"
+    ? { id: raw, level: 1, bound: false }
+    : { id: Number(raw.id), level: Math.max(1, Math.floor(Number(raw.level ?? 1))), bound: Boolean(raw.bound) };
 }
 
 function returnEquipmentGems(state: GameState, item: EquipmentItem): void {
   for (const raw of item.gems ?? []) {
     const gem = gemParts(raw);
-    if (gem.id >= 1 && gem.id <= 8) addGem(state, gem.id, gem.level, 1);
+    if (gem.id >= 1 && gem.id <= 8) addGem(state, gem.id, gem.level, 1, gem.bound);
   }
 }
 
@@ -635,9 +640,9 @@ function originalBattle(state: GameState, character: CharacterProgress, kind: "b
     if (stat === "quality_up_chance") qualityUpgradeChance = Math.max(qualityUpgradeChance, value);
   }
   const player: BattlePlayerState = {
-    name: "勇者",
+    name: character.name ?? "勇者",
     level: character.level,
-    currentHp: state.maxHp,
+    currentHp: Math.max(1, Math.min(state.maxHp, numberValue(state.hp, state.maxHp))),
     maxHp: state.maxHp,
     attack: state.stats.attack,
     defense: state.stats.defense,
@@ -662,7 +667,26 @@ function originalBattle(state: GameState, character: CharacterProgress, kind: "b
     setAffixes: sets.setAffixes,
     battleGold: character.gold,
   };
-  const result = runBattle(player, encounter);
+  const talkChance = kind === "battle"
+    ? (state.hibernateLaps > 0
+      ? 1
+      : (sets.setCounts["口才"] ?? 0) >= 3
+        ? .25 + (sets.setAffixes.includes("【口才】魅力") ? .05 : 0) + (sets.setAffixes.includes("【口才】超级魅力") ? .05 : 0)
+        : 0)
+    : kind === "elite" && (sets.setCounts["口才"] ?? 0) >= 4
+      ? .05 + (sets.setAffixes.includes("【口才】雄辩") ? .03 : 0) + (sets.setAffixes.includes("【口才】超级雄辩") ? .03 : 0)
+      : 0;
+  const talkSkip = talkChance > 0 && Math.random() < talkChance;
+  // A speech/hibernate skip still uses the authoritative reward generator,
+  // but runs with no enemies so the returned timeline is an instant victory.
+  const battleEncounter = talkSkip
+    ? { ...encounter, units: [], formation: { front: [], back: [] } }
+    : encounter;
+  const result = runBattle(player, battleEncounter);
+  if (talkSkip) {
+    result.talk_skip = true;
+    result.log = ["口才套装说服敌人，直接胜利"];
+  }
   const isChallenge = kind === "challenge";
   const won = result.outcome === BattleOutcome.VICTORY || (isChallenge && result.outcome === BattleOutcome.CHALLENGE_DONE);
   character.gold = Math.max(0, character.gold - result.luxury_gold_spent);
@@ -700,15 +724,25 @@ function originalBattle(state: GameState, character: CharacterProgress, kind: "b
   } else if (!isChallenge) {
     if (state.reviveCoins > 0) {
       state.reviveCoins -= 1;
+      result.player_hp = state.maxHp;
+      result.player_alive = true;
+      result.revive_used = true;
       messages.push("战败，消耗1复活币重新站起");
     } else {
       const penalty = Math.floor(character.gold * .15);
       character.gold -= penalty;
       state.gridIndex = 0;
+      state.reviveCoins = 3;
+      result.player_hp = state.maxHp;
+      result.player_alive = true;
+      result.force_home = true;
+      result.gold_penalty = penalty;
       messages.push(`战败，强制回家并损失${penalty}金币`);
     }
   }
-  state.hp = state.maxHp;
+  // Normal victories preserve the authoritative HP left by the battle.
+  // Defeat handling below overwrites this with the revived/full HP value.
+  state.hp = Math.max(0, Math.min(state.maxHp, result.player_hp));
   for (const name of ["skillBoost", "damagePenalty"]) {
     if ((state.buffs[name] ?? 0) > 0) state.buffs[name] = Math.max(0, (state.buffs[name] ?? 0) - 1);
   }
@@ -886,6 +920,8 @@ export function applyGameCommand(
     const item = state.equipmentBag.find((entry) => entry.id === equipmentId);
     if (command === "equipment_equip") {
       if (!item) throw new Error("装备不存在");
+      if (!(item.slot in state.equipped)) throw new Error("装备槽不存在");
+      if (Object.entries(state.equipped).some(([slot, id]) => slot !== item.slot && id === item.id)) throw new Error("装备已穿戴");
       state.equipped[item.slot] = item.id;
       event = { kind: "equipment", action: "equip", item };
     } else {
@@ -957,15 +993,18 @@ export function applyGameCommand(
     while (gems.length < (equipment.gemSlots ?? 0)) gems.push(0);
     const old = gems[socketIndex] ?? 0;
     if (command === "equipment_gem_unsocket") {
-      if (old !== 0) { const parsed = gemParts(old); addGem(state, parsed.id, parsed.level); }
+      if (old !== 0) { const parsed = gemParts(old); addGem(state, parsed.id, parsed.level, 1, parsed.bound); }
       gems[socketIndex] = 0;
       event = { kind: "equipment", action: "gem_unsocket", equipmentId, socketIndex };
     } else {
       const gemId = numberValue(payload.gem_id, -1);
       const level = numberValue(payload.level, 1);
-      if (!Number.isInteger(gemId) || gemId < 1 || gemId > 8 || !Number.isInteger(level) || level < 1 || level > 10 || !removeGem(state, gemId, level, 1)) throw new Error("宝石数量不足或等级不正确");
-      if (old !== 0) { const parsed = gemParts(old); addGem(state, parsed.id, parsed.level); }
-      gems[socketIndex] = { id: gemId, level };
+      const consumed = (!Number.isInteger(gemId) || gemId < 1 || gemId > 8 || !Number.isInteger(level) || level < 1 || level > 10)
+        ? { ok: false, bound: false }
+        : takeGems(state, gemId, level, 1);
+      if (!consumed.ok) throw new Error("宝石数量不足或等级不正确");
+      if (old !== 0) { const parsed = gemParts(old); addGem(state, parsed.id, parsed.level, 1, parsed.bound); }
+      gems[socketIndex] = { id: gemId, level, ...(consumed.bound ? { bound: true } : {}) };
       event = { kind: "equipment", action: "gem_socket", equipmentId, socketIndex, gemId, level };
     }
     equipment.gems = gems;
@@ -976,9 +1015,10 @@ export function applyGameCommand(
     if (!Number.isInteger(gemId) || gemId < 1 || gemId > 8 || !Number.isInteger(level) || level < 1 || level >= 10) throw new Error("宝石等级不正确");
     const cost = (level + 1) * 500;
     if (character.gold < cost) throw new Error("金币不足");
-    if (!removeGem(state, gemId, level, 3)) throw new Error("需要3颗同等级宝石");
+    const consumed = takeGems(state, gemId, level, 3);
+    if (!consumed.ok) throw new Error("需要3颗同等级宝石");
     character.gold -= cost;
-    addGem(state, gemId, level + 1, 1);
+    addGem(state, gemId, level + 1, 1, consumed.bound);
     event = { kind: "gem", action: "synthesize", gemId, fromLevel: level, level: level + 1, cost };
   } else if (command === "equipment_reroll") {
     const equipmentId = typeof payload.equipment_id === "string" ? payload.equipment_id : "";

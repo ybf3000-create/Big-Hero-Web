@@ -93,6 +93,11 @@ function actorFromEncounter(unit: EncounterUnit): Data {
     side: "enemy", id: unit.id, name: unit.name, displayName: unit.display_name, row: unit.row, level: unit.level,
     maxHp: unit.max_hp, currentHp: unit.current_hp, attack: unit.atk, baseAttack: unit.atk, defense: unit.def, baseDefense: unit.def,
     speedPoints: unit.speed_points, crit: unit.crit, critDamage: unit.critdmg, hit: unit.hit, dodge: unit.dodge, block: unit.block,
+    // Enemy units use the same arithmetic path as the player. Keep every
+    // optional combat modifier explicit so a skill cannot turn into NaN
+    // because an enemy does not have a player-only stat.
+    skillDamage: 0, cooldownReduction: 0, lifesteal: 0, freeAttackPct: 0, freeDefensePct: 0,
+    incomingDamageMultiplier: 1,
     skillIds: [...unit.skill_ids], passives: [...unit.passives], isElite: unit.is_elite, isBoss: unit.is_boss, infiniteHp: unit.infinite_hp,
     bossIndex: unit.boss_index ?? 0, bossMechanic: structuredClone(unit.boss_mechanic ?? {}), cooldowns, shield: 0, shieldTime: 0,
     buffs: {}, controls: {}, dots: [], hots: [], alive: true, undyingUsed: false, battleDamageMultiplier: 1,
@@ -322,9 +327,11 @@ function resolveHit(actor: Data, target: Data, random: RandomSource): Data {
 }
 
 function defenseDamage(target: Data, damage: number, ignoreDefensePct: number): number {
-  let defense = target.defense * (target.buffs.def_x2 ? 2 : 1) * (1 - ignoreDefensePct / 100);
-  let result = damage * (1 - defense / (defense + 400));
-  if (target.side === "player") result *= (1 - Math.min(target.freeDefensePct, .5)) * n(target.incomingDamageMultiplier, 1);
+  const safeDamage = Math.max(0, n(damage));
+  const safeIgnoreDefense = Math.max(0, Math.min(100, n(ignoreDefensePct)));
+  let defense = Math.max(0, n(target.defense)) * (target.buffs.def_x2 ? 2 : 1) * (1 - safeIgnoreDefense / 100);
+  let result = safeDamage * (1 - defense / (defense + 400));
+  if (target.side === "player") result *= (1 - Math.min(n(target.freeDefensePct), .5)) * n(target.incomingDamageMultiplier, 1);
   if (target.buffs.tenacity) result *= .6;
   if (target.buffs.dragon_guard) result *= .7;
   if (target.bossMechanic?.id === "rock") result *= 1 - n(target.bossMechanic.damageReduction, .3);
@@ -332,7 +339,7 @@ function defenseDamage(target: Data, damage: number, ignoreDefensePct: number): 
 }
 
 function applyFinalDamage(state: Data, target: Data, damage: number, meta: Data): number {
-  let remaining = damage * (hasSetAffix(target, "【龙鳞】硬皮") ? .96 : 1);
+  let remaining = Math.max(0, n(damage)) * (hasSetAffix(target, "【龙鳞】硬皮") ? .96 : 1);
   let absorbed = 0;
   if (!meta.ignoreShield && target.shield > 0) {
     absorbed = Math.min(target.shield, remaining);
@@ -364,11 +371,13 @@ function applyFinalDamage(state: Data, target: Data, damage: number, meta: Data)
   }
   if (meta.owner && meta.owner.lifesteal > 0 && dealtHp > 0) applyHeal(state, meta.owner, dealtHp * meta.owner.lifesteal / 100, "吸血");
   handleBossHpTriggers(state, target);
-  return dealtHp + absorbed;
+  const total = dealtHp + absorbed;
+  if (meta.owner?.side === "player") state.damageTotal += Math.max(0, total);
+  return total;
 }
 
 function applyHeal(state: Data, actor: Data, amount: number, label: string): void {
-  let actual = amount * n(actor.weatherHealMultiplier, 1) * (actor.controls.anti_heal ? .5 : 1);
+  const actual = Math.max(0, n(amount)) * n(actor.weatherHealMultiplier, 1) * (actor.controls.anti_heal ? .5 : 1);
   const before = actor.currentHp;
   actor.currentHp = Math.min(actor.maxHp, before + actual);
   const healed = actor.currentHp - before;
@@ -378,8 +387,11 @@ function applyHeal(state: Data, actor: Data, amount: number, label: string): voi
     actor.shield = Math.min(cap, actor.shield + overflow);
     actor.shieldTime = Math.max(actor.shieldTime, SHIELD_DURATION);
   }
+  // Keep a no-op heal in the authoritative timeline for replay/debugging, but
+  // mark it ineffective so the client does not show a misleading "+0" pop-up.
+  const effective = healed > 0 || overflow > 0;
   state.log.push(`${actor.name} ${label} ${Math.round(healed)}`);
-  state.events.push({ type: "heal", target: actorRef(actor), amount: Math.round(healed), hp: Math.round(actor.currentHp), max_hp: actor.maxHp, label });
+  state.events.push({ type: "heal", target: actorRef(actor), amount: Math.round(healed), hp: Math.round(actor.currentHp), max_hp: actor.maxHp, label, effective });
 }
 
 function applyShield(state: Data, actor: Data, skill: BattleSkill): void {
@@ -453,13 +465,13 @@ function handleSetKill(state: Data, actor: Data): void {
 }
 
 function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, skill: BattleSkill | undefined, label: string, isBasic: boolean, random: RandomSource): void {
-  let rawDamage = actor.attack * damagePct / 100;
+  let rawDamage = n(actor.attack) * Math.max(0, n(damagePct)) / 100;
   if (actor.buffs.phantom_step) rawDamage *= hasSetAffix(actor, "【幻影】残影") ? 1.45 : 1.3;
   if (label.includes("暗影突袭") && hasSetAffix(actor, "【暗影】之刃")) rawDamage *= 1.3;
-  if (actor.side === "player") rawDamage *= 1 + actor.freeAttackPct;
-  rawDamage *= actor.battleDamageMultiplier;
-  if (hasPassive(actor, "狂暴") && actor.currentHp / actor.maxHp < .5) rawDamage *= 1.5;
-  if (skill) rawDamage *= 1 + actor.skillDamage / 100;
+  if (actor.side === "player") rawDamage *= 1 + n(actor.freeAttackPct);
+  rawDamage *= n(actor.battleDamageMultiplier, 1);
+  if (hasPassive(actor, "狂暴") && n(actor.currentHp) / Math.max(1, n(actor.maxHp, 1)) < .5) rawDamage *= 1.5;
+  if (skill) rawDamage *= 1 + n(actor.skillDamage) / 100;
   for (let hit = 0; hit < (skill?.hits ?? 1); hit += 1) {
     const result = resolveHit(actor, target, random);
     if (!result.hit) {
@@ -477,7 +489,7 @@ function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, 
     if (actor.buffs.shadow_strike) damage *= 2.5;
     damage = defenseDamage(target, damage, n(skill?.bonus?.ignoreDefPct));
     if (result.crit) {
-      let criticalDamage = actor.critDamage;
+      let criticalDamage = n(actor.critDamage, 150);
       if (label.includes("暗影突袭") && hasSetAffix(actor, "【暗影】杀意")) criticalDamage += 50;
       if (actor.buffs.thunder_frenzy && hasSetAffix(actor, "【雷霆】蓄能")) criticalDamage += 50;
       damage *= criticalDamage / 100;
@@ -494,7 +506,6 @@ function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, 
     if (n(skill?.bonus?.missingHpScale) > 0) damage *= 1 + (1 - target.currentHp / target.maxHp) * n(skill?.bonus?.missingHpScale);
     const dealt = applyFinalDamage(state, target, damage, { owner: actor });
     state.events.push({ type: "damage", source: actorRef(actor), target: actorRef(target), amount: Math.round(dealt), hp: Math.round(target.currentHp), max_hp: target.maxHp, shield: Math.round(target.shield), crit: result.crit, block: result.block, dot: false, label });
-    if (actor.side === "player") state.damageTotal += Math.max(0, dealt);
     if (dealt > 0 && setCount(actor, "烈焰") >= 3 && target.alive) {
       applySetBurn(state, target, actor);
       const activeBurns = target.dots.filter((dot: Data) => dot.dotType === "set_burn").length;
@@ -590,11 +601,10 @@ function executeSkill(state: Data, actor: Data, skillId: number, random: RandomS
     if (skillId === 31) {
       const total = target.dots.reduce((sum: number, dot: Data) => sum + dot.damage * dot.ticksRemaining, 0);
       const dealt = applyFinalDamage(state, target, total * n(skill.bonus?.detonateDot, 1.5), { owner: actor });
-      if (actor.side === "player") state.damageTotal += dealt;
     }
     if (skillId === 32) for (const enemy of state.actors.enemies) if (enemy !== target && enemy.alive) enemy.dots.push(...target.dots.map((dot: Data) => structuredClone(dot)).slice(0, Math.max(0, 10 - enemy.dots.length)));
   }
-  const reduction = Math.min(actor.cooldownReduction / 100, .5);
+  const reduction = Math.min(Math.max(0, n(actor.cooldownReduction)) / 100, .5);
   actor.cooldowns[skillId] = skill.actionCd * (1 - reduction) * (actor.controls.paralysis ? 1.3 : 1);
   const resetChance = .25 + (hasSetAffix(actor, "【星辰】专注") ? .1 : 0);
   if (setCount(actor, "星辰") >= 3 && random() < resetChance) {
@@ -656,7 +666,7 @@ function summon(state: Data, boss: Data, name: string, hpMultiplier: number, max
   if ((!ignoreBossAlive && !boss.alive) || boss.summonCount >= maximum) return;
   const id = state.actors.enemies.reduce((value: number, enemy: Data) => Math.max(value, enemy.id + 1), 1);
   const maxHp = Math.max(1, Math.round(boss.maxHp * Math.max(hpMultiplier, .01)));
-  state.actors.enemies.push({ side: "enemy", id, name, displayName: name, row: "front", level: boss.level, maxHp, currentHp: maxHp, attack: boss.baseAttack * .45, baseAttack: boss.baseAttack * .45, defense: boss.baseDefense * .6, baseDefense: boss.baseDefense * .6, speedPoints: 20, actionCooldown: actionCooldown(20), timeToAct: actionCooldown(20), crit: 0, critDamage: 150, hit: 100, dodge: 0, block: 0, skillIds: [], passives: [], shield: 0, shieldTime: 0, buffs: {}, controls: {}, dots: [], hots: [], cooldowns: {}, alive: true, isBoss: false, isElite: false, infiniteHp: false, regenTimer: REGEN_INTERVAL, setCounts: {}, setAffixes: [], setActionCount: 0, battleDamageMultiplier: 1 });
+  state.actors.enemies.push({ side: "enemy", id, name, displayName: name, row: "front", level: boss.level, maxHp, currentHp: maxHp, attack: boss.baseAttack * .45, baseAttack: boss.baseAttack * .45, defense: boss.baseDefense * .6, baseDefense: boss.baseDefense * .6, speedPoints: 20, actionCooldown: actionCooldown(20), timeToAct: actionCooldown(20), crit: 0, critDamage: 150, hit: 100, dodge: 0, block: 0, skillDamage: 0, cooldownReduction: 0, lifesteal: 0, freeAttackPct: 0, freeDefensePct: 0, incomingDamageMultiplier: 1, skillIds: [], passives: [], shield: 0, shieldTime: 0, buffs: {}, controls: {}, dots: [], hots: [], cooldowns: {}, alive: true, isBoss: false, isElite: false, infiniteHp: false, regenTimer: REGEN_INTERVAL, setCounts: {}, setAffixes: [], setActionCount: 0, battleDamageMultiplier: 1 });
   boss.summonCount += 1;
   emitMechanic(state, boss, `${boss.bossMechanic.name ?? "召唤"}·召唤${name}`);
 }

@@ -6,7 +6,7 @@ import test from "node:test";
 import { buildApp } from "../src/app.js";
 import { BOSS_NAMES } from "../src/game-catalog.js";
 import { applyGameCommand, createInitialGameState } from "../src/game-engine.js";
-import { addItem, serializeGameState } from "../src/game-state.js";
+import { addItem, recalculateStats, serializeGameState } from "../src/game-state.js";
 import { applyMigrations } from "../src/migrations.js";
 import { hashSecret } from "../src/security.js";
 import { SqliteRepository } from "../src/sqlite-repository.js";
@@ -72,6 +72,29 @@ test("dice, skill slots, equipment locks and enhancement limits enforce game rul
   assert.deepEqual(slotted.state.skillSlots, [1, 22]);
 });
 
+test("server derived stats include free speed/luck and equipped set bonuses", () => {
+  const state = createInitialGameState();
+  state.attributes = { attack: 0, defense: 0, speed: 10, luck: 4 };
+  const equipment = [
+    { id: "dragon-a", slot: "weapon", name: "龙鳞刃", quality: 4, enhance: 0, mainStat: "攻击力", mainValue: 1, locked: false, bound: true, suitName: "龙鳞", setAffixes: [{ name: "【龙鳞】坚韧", type: "set" }] },
+    { id: "dragon-b", slot: "armor", name: "龙鳞甲", quality: 4, enhance: 0, mainStat: "防御力", mainValue: 1, locked: false, bound: true, suitName: "龙鳞", setAffixes: [] },
+    { id: "flame-a", slot: "shoes", name: "烈焰靴", quality: 4, enhance: 0, mainStat: "攻击力", mainValue: 1, locked: false, bound: true, suitName: "烈焰", setAffixes: [] },
+    { id: "flame-b", slot: "ring", name: "烈焰戒", quality: 4, enhance: 0, mainStat: "攻击力", mainValue: 1, locked: false, bound: true, suitName: "烈焰", setAffixes: [] },
+    { id: "frost-a", slot: "necklace", name: "冰霜坠", quality: 4, enhance: 0, mainStat: "速度", mainValue: 1, locked: false, bound: true, suitName: "冰霜", setAffixes: [] },
+    { id: "frost-b", slot: "cape", name: "冰霜披风", quality: 4, enhance: 0, mainStat: "速度", mainValue: 1, locked: false, bound: true, suitName: "冰霜", setAffixes: [] },
+    { id: "wind-a", slot: "helmet", name: "疾风盔", quality: 4, enhance: 0, mainStat: "速度", mainValue: 1, locked: false, bound: true, suitName: "疾风", setAffixes: [{ name: "【疾风】疾行", type: "set" }] },
+    { id: "wind-b", slot: "charm", name: "疾风符", quality: 4, enhance: 0, mainStat: "速度", mainValue: 1, locked: false, bound: true, suitName: "疾风", setAffixes: [] },
+  ];
+  state.equipmentBag.push(...equipment);
+  for (const item of equipment) state.equipped[item.slot] = item.id;
+  recalculateStats(state, 1);
+  assert.equal(state.stats.attack, 30);
+  assert.equal(state.stats.defense, 18);
+  assert.equal(state.stats.speed, 49);
+  assert.equal(state.stats.luck, 4);
+  assert.equal(state.stats.block, 3);
+});
+
 test("attribute points are awarded, allocated, reset and repaired for legacy saves", async (context) => {
   const { directory, repository } = await setup();
   context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
@@ -123,6 +146,7 @@ test("auction purchase transfers an item once and charges the buyer once", async
   grantItem(repository, sellerCharacter.id, 6, 1);
   repository.database.prepare("UPDATE characters SET gold = 1000 WHERE id = ?").run(buyerCharacter.id);
   const listing = await repository.createAuctionListing({ characterId: sellerCharacter.id, requestId: "auction_list_1", itemKind: "item", itemId: 6, itemCount: 1, buyoutPrice: 100, durationHours: 24 });
+  assert.ok((listing.character?.revision ?? 0) > 0);
   await assert.rejects(repository.buyAuctionListing(sellerCharacter.id, "auction_self_1", listing.id), /不能购买自己的订单/);
   const purchased = await repository.buyAuctionListing(buyerCharacter.id, "auction_buy_1", listing.id);
   const repeated = await repository.buyAuctionListing(buyerCharacter.id, "auction_buy_1", listing.id);
@@ -132,8 +156,27 @@ test("auction purchase transfers an item once and charges the buyer once", async
   const boughtTool = (await repository.getGameState(buyerCharacter.id)).inventory.find((item) => item.itemId === 6);
   assert.equal(boughtTool?.count, 1);
   assert.equal(boughtTool?.bound, true);
-  const claimed = await repository.claimAuctionListing(sellerCharacter.id, listing.id);
+  const claimed = await repository.claimAuctionListing(sellerCharacter.id, "auction_claim_1", listing.id);
+  const claimedRepeated = await repository.claimAuctionListing(sellerCharacter.id, "auction_claim_1", listing.id);
   assert.equal(claimed.gold, 95);
+  assert.deepEqual(claimedRepeated, claimed);
+});
+
+test("auction cancel is idempotent and returns the transaction character snapshot", async (context) => {
+  const { directory, repository } = await setup();
+  context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
+  const inviteHash = hashSecret("AUCTION-CANCEL-1");
+  repository.insertInviteCode("auction-cancel-1", inviteHash);
+  const account = await repository.registerAccount({ requestId: "cancel_register", username: "cancel_hero", passwordHash: "x", inviteCodeHash: inviteHash });
+  const character = await repository.createCharacter({ id: "cancel-character", requestId: "cancel_character", accountId: account.id, displayName: "取消勇者", normalizedName: "取消勇者" });
+  grantItem(repository, character.id, 6, 1);
+  const listing = await repository.createAuctionListing({ characterId: character.id, requestId: "cancel_listing", itemKind: "item", itemId: 6, itemCount: 1, buyoutPrice: 100, durationHours: 8 });
+  const cancelled = await repository.cancelAuctionListing(character.id, listing.id, "cancel_request_1");
+  const repeated = await repository.cancelAuctionListing(character.id, listing.id, "cancel_request_1");
+  assert.equal(cancelled.status, "cancelled");
+  assert.deepEqual(repeated, cancelled);
+  assert.equal(cancelled.character?.revision, (listing.character?.revision ?? 0) + 1);
+  await assert.rejects(repository.cancelAuctionListing(character.id, listing.id, "cancel_request_2"), /订单无法取消/);
 });
 
 test("auction price and active listing boundaries are enforced", async (context) => {
@@ -224,7 +267,13 @@ test("boss progression and formulas use the confirmed 200-tier rules", () => {
     state.mapTotalGrids = 128;
     state.mapGrids = Array.from({ length: 128 }, () => 11);
     state.equipmentBag.push({ id: "boss-weapon", slot: "weapon", name: "测试武器", quality: 4, enhance: 0, mainStat: "攻击力", mainValue: 1_000_000_000, locked: true, bound: true });
+    // Keep the progression fixture focused on the 200-tier formulas while
+    // giving the player enough survivability to take a turn now that enemy
+    // skill damage is authoritative instead of the old NaN/zero result.
+    state.equipmentBag.push({ id: "boss-armor", slot: "armor", name: "测试护甲", quality: 4, enhance: 0, mainStat: "生命值", mainValue: 1_000_000_000, locked: true, bound: true });
     state.equipped.weapon = "boss-weapon";
+    state.equipped.armor = "boss-armor";
+    state.hp = 1_000_000_000;
     const result = applyGameCommand(state, { level: 100, experience: 0, gold: 0 }, "roll", {});
     const encounter = result.event.encounter as { units: Array<Record<string, unknown>> };
     const boss = encounter.units[0]!;
@@ -248,7 +297,10 @@ test("boss 20 finishes map expansion and boss 21 only advances difficulty", () =
   state.mapTotalGrids = 123;
   state.mapGrids = Array.from({ length: 123 }, () => 11);
   state.equipmentBag.push({ id: "map-weapon", slot: "weapon", name: "测试武器", quality: 4, enhance: 0, mainStat: "攻击力", mainValue: 1_000_000_000, locked: true, bound: true });
+  state.equipmentBag.push({ id: "map-armor", slot: "armor", name: "测试护甲", quality: 4, enhance: 0, mainStat: "生命值", mainValue: 1_000_000_000, locked: true, bound: true });
   state.equipped.weapon = "map-weapon";
+  state.equipped.armor = "map-armor";
+  state.hp = 1_000_000_000;
   const boss20 = applyGameCommand(state, { level: 100, experience: 0, gold: 0 }, "roll", {});
   assert.equal(boss20.state.bossTier, 20);
   assert.equal(boss20.state.bossIndex, 21);
@@ -259,6 +311,29 @@ test("boss 20 finishes map expansion and boss 21 only advances difficulty", () =
   assert.equal(boss21.state.bossIndex, 22);
   assert.equal(boss21.state.mapTotalGrids, 128);
   assert.equal((boss21.event.enemy as string[])[0], BOSS_NAMES[19]);
+});
+
+test("server battle defeat atomically applies revival or home penalty state", () => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.5;
+  try {
+    const state = createInitialGameState();
+    state.mapGrids = Array.from({ length: state.mapTotalGrids }, () => 11);
+    state.gridIndex = 0;
+    state.bossTier = 199;
+    state.bossIndex = 200;
+    state.reviveCoins = 0;
+    state.hp = state.maxHp;
+    const result = applyGameCommand(state, { level: 1, experience: 0, gold: 100 }, "roll", {});
+    assert.equal(result.event.battle_result?.outcome, 1);
+    assert.equal(result.event.battle_result?.force_home, true);
+    assert.equal(result.event.battle_result?.gold_penalty, 15);
+    assert.equal(result.state.hp, result.state.maxHp);
+    assert.equal(result.state.reviveCoins, 3);
+    assert.equal(result.character.gold, 85);
+  } finally {
+    Math.random = originalRandom;
+  }
 });
 
 test("the silver gem participates in the ordinary treasure pool", () => {
@@ -317,6 +392,14 @@ test("server owns gem, socket, dismantle and reroll state transitions", () => {
   const dismantled = applyGameCommand(rerolled.state, rerolled.character, "equipment_dismantle", { equipment_id: equipment.id });
   assert.equal(dismantled.state.equipmentBag.length, 0);
   assert.equal(dismantled.state.dismantleEssence, 105);
+
+  const boundState = createInitialGameState();
+  boundState.equipmentBag.push({ ...equipment, id: "bound-equip", gems: [] });
+  boundState.gemBag.push({ gemId: 8, level: 1, count: 1, bound: true });
+  const boundSocketed = applyGameCommand(boundState, character, "equipment_gem_socket", { equipment_id: "bound-equip", socket_index: 0, gem_id: 8, level: 1 });
+  assert.deepEqual(boundSocketed.state.equipmentBag[0]?.gems, [{ id: 8, level: 1, bound: true }]);
+  const boundUnsocketed = applyGameCommand(boundSocketed.state, boundSocketed.character, "equipment_gem_unsocket", { equipment_id: "bound-equip", socket_index: 0 });
+  assert.equal(boundUnsocketed.state.gemBag.find((gem) => gem.gemId === 8 && gem.level === 1)?.bound, true);
 });
 
 test("server poker reward consumes exactly three records and auto dismantle is authoritative", () => {

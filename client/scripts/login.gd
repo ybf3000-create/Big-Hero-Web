@@ -349,6 +349,10 @@ static func server_state_to_save_data(server_character: Dictionary, state: Dicti
 		"exp": int(server_character.get("experience", 0)),
 		"exp_max": int(100.0 * pow(1.12, int(server_character.get("level", 1)) - 1)),
 		"gold": int(str(server_character.get("gold", "0"))),
+		# HP is part of the server snapshot. Keep the browser presentation in
+		# sync after a battle instead of resetting the bar to full locally.
+		"player_hp": clampi(int(state.get("hp", state.get("maxHp", 500))), 0, maxi(1, int(state.get("maxHp", 500)))),
+		"player_max_hp": maxi(1, int(state.get("maxHp", 500))),
 		"revive_coins": int(state.get("reviveCoins", 3)),
 		"boss_tier": int(state.get("bossTier", 0)),
 		"boss_index": int(state.get("bossIndex", 1)),

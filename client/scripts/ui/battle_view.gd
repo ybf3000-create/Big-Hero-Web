@@ -499,6 +499,13 @@ func _play_damage(event: Dictionary) -> void:
 	if not target:
 		return
 	var amount := int(event.get("amount", 0))
+	# A server no-op event can occur for a fully absorbed/immune effect. It is
+	# still authoritative, but displaying "-0" makes the battle look broken.
+	if amount <= 0:
+		_update_unit_hp(target, float(event.get("hp", 0)), float(event.get("max_hp", 1)))
+		if event.has("shield"):
+			_set_unit_shield(target, float(event.get("shield", 0.0)))
+		return
 	var is_dot := bool(event.get("dot", false))
 	var is_crit := bool(event.get("crit", false))
 	var color := Color("ca8cff") if is_dot else (Color("ffe066") if is_crit else Color.WHITE)
@@ -545,6 +552,9 @@ func _play_gain(event: Dictionary, color: Color, prefix: String) -> void:
 	var target := _find_unit(event.get("target", {}))
 	if target:
 		var amount := int(event.get("amount", 0))
+		if amount <= 0:
+			_update_unit_hp(target, float(event.get("hp", 0)), float(event.get("max_hp", 1)))
+			return
 		_float_number(target, prefix + str(amount), color, 20)
 		if prefix == "+":
 			_spawn_heal_lines(target)

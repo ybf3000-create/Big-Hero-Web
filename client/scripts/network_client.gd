@@ -199,11 +199,15 @@ func buy_auction_listing(listing_id: String) -> Dictionary:
 
 
 func cancel_auction_listing(listing_id: String) -> Dictionary:
-	return await _request_json("/api/v1/auction/cancel", HTTPClient.METHOD_POST, {"listing_id": listing_id}, true)
+	return await _request_json("/api/v1/auction/cancel", HTTPClient.METHOD_POST, {
+		"request_id": create_request_id(), "rules_version": RULES_VERSION, "listing_id": listing_id,
+	}, true)
 
 
 func claim_auction_listing(listing_id: String) -> Dictionary:
-	return await _request_json("/api/v1/auction/claim", HTTPClient.METHOD_POST, {"listing_id": listing_id}, true)
+	return await _request_json("/api/v1/auction/claim", HTTPClient.METHOD_POST, {
+		"request_id": create_request_id(), "rules_version": RULES_VERSION, "listing_id": listing_id,
+	}, true)
 
 
 func logout() -> void:
