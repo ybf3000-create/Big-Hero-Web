@@ -20,6 +20,7 @@ var _character_name: LineEdit
 var _character_summary: Label
 var _enter_game: Button
 var _logout_account: Button
+var _delete_character: Button
 var NetworkClient: Variant
 
 
@@ -149,6 +150,12 @@ func _build_ui() -> void:
 	_logout_account.custom_minimum_size = Vector2(0, 38)
 	_logout_account.pressed.connect(_on_logout_account)
 	_character_area.add_child(_logout_account)
+	_delete_character = Button.new()
+	_delete_character.text = "删除当前角色"
+	_delete_character.custom_minimum_size = Vector2(0, 36)
+	_delete_character.add_theme_color_override("font_color", Color("ffaaa5"))
+	_delete_character.pressed.connect(_on_delete_character)
+	_character_area.add_child(_delete_character)
 
 
 func _show_mode(mode: String) -> void:
@@ -258,11 +265,13 @@ func _show_character_entry() -> void:
 		]
 		_character_name.visible = false
 		_enter_game.text = "进入游戏"
+		_delete_character.visible = true
 	else:
 		_character_summary.text = "创建你的勇者"
 		_character_name.visible = true
 		_character_name.clear()
 		_enter_game.text = "创建角色"
+		_delete_character.visible = false
 		_character_name.grab_focus()
 
 
@@ -288,6 +297,42 @@ func _on_logout_account() -> void:
 	_remember_credentials.button_pressed = false
 	_show_mode("login")
 	_show_status("已退出登录", false)
+
+
+func _on_delete_character() -> void:
+	if NetworkClient.character is not Dictionary:
+		return
+	var current := NetworkClient.character as Dictionary
+	var character_name := str(current.get("name", ""))
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "删除角色"
+	dialog.dialog_text = "此操作不可撤销。角色等级、装备、背包、拍卖记录都会被删除，账号会保留。\n请输入角色名后确认："
+	dialog.size = Vector2(460, 250)
+	var input := LineEdit.new()
+	input.custom_minimum_size = Vector2(0, 38)
+	input.placeholder_text = character_name
+	dialog.get_vbox().add_child(input)
+	dialog.confirmed.connect(_confirm_delete_character.bind(dialog, input, character_name))
+	dialog.canceled.connect(dialog.queue_free)
+	add_child(dialog)
+	dialog.popup_centered()
+	input.grab_focus()
+
+
+func _confirm_delete_character(dialog: ConfirmationDialog, input: LineEdit, character_name: String) -> void:
+	if input.text.strip_edges() != character_name:
+		_show_status("角色名不匹配，未执行删除", true)
+		dialog.queue_free()
+		return
+	_set_busy(true)
+	var response: Dictionary = await NetworkClient.delete_character(input.text)
+	_set_busy(false)
+	if response.get("ok", false):
+		_show_character_entry()
+		_show_status("角色已删除，可以创建新角色", false)
+	else:
+		_show_response_error(response)
+	dialog.queue_free()
 
 
 func _start_game(server_character: Dictionary) -> void:

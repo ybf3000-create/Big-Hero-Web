@@ -98,6 +98,21 @@ func create_character(character_name: String) -> Dictionary:
 	return response
 
 
+func delete_character(confirmation_name: String) -> Dictionary:
+	var response := await _request_json(
+		"/api/v1/characters/delete",
+		HTTPClient.METHOD_POST,
+		{
+			"rules_version": RULES_VERSION,
+			"confirm_name": confirmation_name.strip_edges(),
+		},
+		true
+	)
+	if response.get("ok", false):
+		character = null
+	return response
+
+
 func get_game_state() -> Dictionary:
 	var response := await _request_json("/api/v1/game/state", HTTPClient.METHOD_GET, {}, true)
 	if response.get("ok", false):

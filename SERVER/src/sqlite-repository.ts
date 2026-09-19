@@ -538,6 +538,45 @@ export class SqliteRepository implements GameRepository {
     }
   }
 
+  async deleteCharacter(accountId: string, characterId: string, confirmationName: string): Promise<void> {
+    const remove = this.database.transaction((value: { accountId: string; characterId: string; confirmationName: string }) => {
+      const character = this.database.prepare(
+        `SELECT id, display_name FROM characters
+          WHERE id = ? AND account_id = ? AND deleted_at IS NULL`,
+      ).get(value.characterId, value.accountId) as { id: string; display_name: string } | undefined;
+      if (!character) throw new AppError("CHARACTER_REQUIRED", 409, "请先创建角色");
+      if (character.display_name !== value.confirmationName) {
+        throw new AppError("CHARACTER_CONFIRMATION_REQUIRED", 400, "角色名不匹配，未执行删除");
+      }
+
+      // Keep the account and historical chat rows, but remove all data that
+      // would otherwise retain a foreign-key reference to the deleted role.
+      this.database.prepare(
+        `UPDATE chat_messages SET sender_character_id = NULL WHERE sender_character_id = ?`,
+      ).run(value.characterId);
+      this.database.prepare(
+        `DELETE FROM chat_blocks WHERE blocked_character_id = ?`,
+      ).run(value.characterId);
+      // A deleted seller loses that character's listings. A deleted buyer
+      // must not erase the seller's order or pending payout, so only clear
+      // the buyer reference in those listings.
+      this.database.prepare(
+        `DELETE FROM auction_listings WHERE seller_character_id = ?`,
+      ).run(value.characterId);
+      this.database.prepare(
+        `UPDATE auction_listings SET buyer_character_id = NULL WHERE buyer_character_id = ?`,
+      ).run(value.characterId);
+      this.database.prepare(
+        `INSERT INTO audit_events (event_type, actor_account_id, target_account_id, details)
+         VALUES ('character.deleted', ?, ?, ?)`,
+      ).run(value.accountId, value.accountId, JSON.stringify({ character_id: value.characterId, character_name: character.display_name }));
+      this.database.prepare(
+        `DELETE FROM characters WHERE id = ? AND account_id = ?`,
+      ).run(value.characterId, value.accountId);
+    });
+    remove.immediate({ accountId, characterId, confirmationName });
+  }
+
   async getGameState(characterId: string): Promise<GameState> {
     const snapshot = await this.getGameSnapshot(characterId);
     return snapshot.state;

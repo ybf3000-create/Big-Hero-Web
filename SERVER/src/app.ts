@@ -497,6 +497,25 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return reply.status(201).send({ ok: true, character });
   });
 
+  app.post("/api/v1/characters/delete", async (request) => {
+    const identity = authenticateRequest(request);
+    if (!options.repository.deleteCharacter) {
+      throw new AppError("SERVICE_UNAVAILABLE", 503, "角色服务暂时不可用");
+    }
+    const body = bodyObject(request.body);
+    validateRulesVersion(body.rules_version, rulesVersion);
+    const confirmationName = typeof body.confirm_name === "string" ? body.confirm_name.trim() : "";
+    if (confirmationName.length < 1 || confirmationName.length > 14) {
+      throw badRequest("请输入当前角色名确认删除");
+    }
+    const character = await characterForIdentity(identity);
+    if (confirmationName !== character.name) {
+      throw new AppError("CHARACTER_CONFIRMATION_REQUIRED", 400, "角色名不匹配，未执行删除");
+    }
+    await options.repository.deleteCharacter(identity.accountId, character.id, confirmationName);
+    return { ok: true, character: null, message: "角色已删除，可以创建新角色" };
+  });
+
   const requireGameRepository = () => {
     if (!options.repository.getGameState || !options.repository.executeGameCommand) {
       throw new AppError("SERVICE_UNAVAILABLE", 503, "游戏服务暂时不可用");

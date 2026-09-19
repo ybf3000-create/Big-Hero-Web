@@ -150,6 +150,7 @@ export interface GameRepository {
   ): Promise<void>;
   getCharacter(accountId: string): Promise<CharacterSummary | null>;
   createCharacter(input: CreateCharacterInput): Promise<CharacterSummary>;
+  deleteCharacter?(accountId: string, characterId: string, confirmationName: string): Promise<void>;
   listChatMessages?(channel: "world" | "system", limit: number): Promise<ChatMessage[]>;
   createChatMessage?(input: CreateChatMessageInput): Promise<ChatMessage>;
   getGameState?(characterId: string): Promise<GameState>;

@@ -167,6 +167,17 @@ class MemoryRepository implements GameRepository {
     this.creationRequests.set(input.requestId, character);
     return character;
   }
+
+  async deleteCharacter(accountId: string, characterId: string, confirmationName: string): Promise<void> {
+    const character = this.characters.get(accountId);
+    if (!character || character.id !== characterId) {
+      throw new AppError("CHARACTER_REQUIRED", 409, "请先创建角色");
+    }
+    if (character.name !== confirmationName) {
+      throw new AppError("CHARACTER_CONFIRMATION_REQUIRED", 400, "角色名不匹配，未执行删除");
+    }
+    this.characters.delete(accountId);
+  }
 }
 
 class ChatMemoryRepository extends MemoryRepository {
@@ -279,6 +290,37 @@ test("register, login and single-character flow uses stable public contracts", a
   });
   assert.equal(duplicateCharacter.statusCode, 409);
   assert.equal(duplicateCharacter.json().error.code, "CHARACTER_EXISTS");
+
+  const wrongDelete = await app.inject({
+    method: "POST",
+    url: "/api/v1/characters/delete",
+    headers: { authorization: `Bearer ${token}` },
+    payload: { rules_version: "network-1", confirm_name: "错误名字" },
+  });
+  assert.equal(wrongDelete.statusCode, 400);
+  assert.equal(wrongDelete.json().error.code, "CHARACTER_CONFIRMATION_REQUIRED");
+
+  const deleted = await app.inject({
+    method: "POST",
+    url: "/api/v1/characters/delete",
+    headers: { authorization: `Bearer ${token}` },
+    payload: { rules_version: "network-1", confirm_name: "勇者Hero2026" },
+  });
+  assert.equal(deleted.statusCode, 200);
+  assert.equal(deleted.json().character, null);
+  assert.equal((await app.inject({ method: "GET", url: "/api/v1/characters/me", headers: { authorization: `Bearer ${token}` } })).json().character, null);
+
+  const recreated = await app.inject({
+    method: "POST",
+    url: "/api/v1/characters",
+    headers: { authorization: `Bearer ${token}` },
+    payload: {
+      request_id: "character_003",
+      rules_version: "network-1",
+      name: "勇者Hero2026",
+    },
+  });
+  assert.equal(recreated.statusCode, 201);
 
   assert.equal((await register(app, "SECONDINVITE", "Hero_02", "register_002")).statusCode, 201);
   const full = await app.inject({
