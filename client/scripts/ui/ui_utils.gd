@@ -27,7 +27,9 @@ static func plain_text(value: String, fallback: String = "") -> String:
 		var codepoint := value.unicode_at(i)
 		if _is_ignored_symbol(codepoint):
 			continue
-		if (codepoint >= 0x20 and codepoint <= 0x7E) or _is_cjk(codepoint):
+		if (codepoint >= 0x20 and codepoint <= 0x7E) or _is_cjk(codepoint) \
+			or (codepoint >= 0x3000 and codepoint <= 0x303F) \
+			or (codepoint >= 0xFF00 and codepoint <= 0xFFEF):
 			result += value.substr(i, 1)
 	return result.strip_edges() if not result.strip_edges().is_empty() else fallback
 
