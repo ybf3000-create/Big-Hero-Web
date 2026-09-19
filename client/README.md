@@ -13,6 +13,7 @@ status: 唯一维护的Godot浏览器客户端
 |------|------|----------|
 | 确认规则 | 以本地策划案《网页网络游戏改造总案【定案】》§3.3和对应系统定案为准；`策划案/`目前未上传本仓库 | 代码与定案冲突或表现不明确时先讨论，不自行简化或改变数值 |
 | 修改源码 | 复用现有GDScript、场景、素材和规则回归 | 不为旧桌面客户端另做功能或兼容分支 |
+| 检查脚本 | 在仓库根目录执行`client\tools\check-gdscript.ps1` | 任一GDScript无法解析时停止发布 |
 | 导出网页 | 使用`export_presets.cfg`中的`Web`预设，保持`variant/thread_support=false`，导出到`../SERVER/public/game/index.html` | 导出失败时不发布旧包冒充新版本；线程开启时重新导出 |
 | 兼容与自动检查 | 在`SERVER`目录执行`npm run web:patch`和`npm run check` | 检查失败则修复后重试，不跳过HTTP兼容检查 |
 | 浏览器验收 | 用真实导出包验证Chrome/Edge及ZeroTier入口 | 编辑器运行不作为浏览器功能通过的证据；跨机访问需另一台电脑验证 |

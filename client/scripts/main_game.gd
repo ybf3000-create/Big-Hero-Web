@@ -3413,7 +3413,7 @@ func _build_inventory_panel() -> void:
 	var bottom_y: float = 500.0
 
 	var enhance_btn := Button.new()
-		enhance_btn.text = "槽位强化"
+	enhance_btn.text = "槽位强化"
 	enhance_btn.position = Vector2(16, bottom_y)
 	enhance_btn.size = Vector2(120, 30)
 	UIUtils.shrine_button_style(enhance_btn, false)
