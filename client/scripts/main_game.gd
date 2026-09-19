@@ -8,22 +8,22 @@ extends Control
 
 # -- 格子类型 --
 const GRID_TYPES = [
-	{ "icon": "🏠", "name": "勇者之家",  "clr": Color(0.3, 0.5, 0.3) },
-	{ "icon": "⚔️", "name": "战斗格",    "clr": Color(0.6, 0.2, 0.2) },
-	{ "icon": "🗡️", "name": "精英战斗",  "clr": Color(0.5, 0.1, 0.3) },
-	{ "icon": "🏆", "name": "挑战格",    "clr": Color(0.7, 0.5, 0.1) },
-	{ "icon": "🛌", "name": "休息格",    "clr": Color(0.2, 0.5, 0.5) },
-	{ "icon": "🎁", "name": "宝箱格",    "clr": Color(0.7, 0.6, 0.1) },
-	{ "icon": "🔨", "name": "锻造格",    "clr": Color(0.5, 0.3, 0.1) },
-	{ "icon": "🎲", "name": "命运格",    "clr": Color(0.4, 0.2, 0.6) },
-	{ "icon": "🏛", "name": "神祇格",    "clr": Color(0.6, 0.6, 0.1) },
-	{ "icon": "🔮", "name": "合成格",    "clr": Color(0.3, 0.2, 0.7) },
-	{ "icon": "⚡", "name": "闪电格",    "clr": Color(0.8, 0.8, 0.1) },
-	{ "icon": "💀", "name": "Boss格",    "clr": Color(0.6, 0.0, 0.0) },
-	{ "icon": "🟩", "name": "空地",      "clr": Color(0.3, 0.5, 0.2) },
-	{ "icon": "💰", "name": "空地2",     "clr": Color(0.3, 0.5, 0.2) },
-	{ "icon": "🎰", "name": "彩票格",    "clr": Color(0.75, 0.25, 0.45) },
-	{ "icon": "🔧", "name": "建设格",    "clr": Color(0.25, 0.55, 0.35) },
+	{ "icon": "家", "name": "勇者之家",  "clr": Color(0.3, 0.5, 0.3) },
+	{ "icon": "战", "name": "战斗格",    "clr": Color(0.6, 0.2, 0.2) },
+	{ "icon": "英", "name": "精英战斗",  "clr": Color(0.5, 0.1, 0.3) },
+	{ "icon": "挑", "name": "挑战格",    "clr": Color(0.7, 0.5, 0.1) },
+	{ "icon": "息", "name": "休息格",    "clr": Color(0.2, 0.5, 0.5) },
+	{ "icon": "箱", "name": "宝箱格",    "clr": Color(0.7, 0.6, 0.1) },
+	{ "icon": "锻", "name": "锻造格",    "clr": Color(0.5, 0.3, 0.1) },
+	{ "icon": "命", "name": "命运格",    "clr": Color(0.4, 0.2, 0.6) },
+	{ "icon": "神", "name": "神祇格",    "clr": Color(0.6, 0.6, 0.1) },
+	{ "icon": "合", "name": "合成格",    "clr": Color(0.3, 0.2, 0.7) },
+	{ "icon": "雷", "name": "闪电格",    "clr": Color(0.8, 0.8, 0.1) },
+	{ "icon": "B", "name": "Boss格",    "clr": Color(0.6, 0.0, 0.0) },
+	{ "icon": "空", "name": "空地",      "clr": Color(0.3, 0.5, 0.2) },
+	{ "icon": "金", "name": "空地2",     "clr": Color(0.3, 0.5, 0.2) },
+	{ "icon": "彩", "name": "彩票格",    "clr": Color(0.75, 0.25, 0.45) },
+	{ "icon": "建", "name": "建设格",    "clr": Color(0.25, 0.55, 0.35) },
 ]
 
 # 扑克牌花色（工具常量已移至 UIUtils）
@@ -267,7 +267,7 @@ func _build_map_area() -> void:
 	else:
 		var fallback := Label.new()
 		fallback.name = "HeroFallback"
-		fallback.text = "🚶"
+		fallback.text = "勇者"
 		fallback.add_theme_font_size_override("font_size", 64)
 		# 居中当前格
 		var fcx: float = start_x + CURRENT_TILE_SLOT * TILE_W + TILE_W / 2.0 + TILE_SHEAR / 2.0
@@ -371,7 +371,7 @@ func _build_debug_panel() -> void:
 
 	# 标题
 	var title := Label.new()
-	title.text = "🔧 调试面板"
+	title.text = "调试面板"
 	title.add_theme_font_size_override("font_size", 18)
 	title.add_theme_color_override("font_color", Color(0.4, 0.7, 1.0))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -391,15 +391,15 @@ func _build_debug_panel() -> void:
 	# ---------- 按钮定义 ----------
 	var btn_defs: Array[Dictionary] = [
 		# 第1排：资源生成
-		{"text": "💎 生成宝石",  "clr": Color(0.38, 0.12, 0.38), "cb": _on_test_generate_gem},
-		{"text": "🛠 获得打孔器", "clr": Color(0.30, 0.20, 0.10), "cb": _on_test_add_socket_tool},
-		{"text": "🔧 生成装备",  "clr": Color(0.22, 0.15, 0.38), "cb": _on_test_generate_equip},
-		{"text": "⭐ +自由点",   "clr": Color(0.30, 0.25, 0.10), "cb": _on_test_add_free_point},
-		{"text": "🎰 生成彩票",  "clr": Color(0.38, 0.08, 0.18), "cb": _on_test_generate_lottery},
+		{"text": "生成宝石",  "clr": Color(0.38, 0.12, 0.38), "cb": _on_test_generate_gem},
+		{"text": "获得打孔器", "clr": Color(0.30, 0.20, 0.10), "cb": _on_test_add_socket_tool},
+		{"text": "生成装备",  "clr": Color(0.22, 0.15, 0.38), "cb": _on_test_generate_equip},
+		{"text": "+自由点",   "clr": Color(0.30, 0.25, 0.10), "cb": _on_test_add_free_point},
+		{"text": "生成彩票",  "clr": Color(0.38, 0.08, 0.18), "cb": _on_test_generate_lottery},
 		# 第2排：战斗测试
-		{"text": "⚔ 普通战斗",   "clr": Color(0.15, 0.35, 0.15), "cb": func(): _on_test_battle("battle")},
-		{"text": "🗡 精英战斗",   "clr": Color(0.35, 0.20, 0.10), "cb": func(): _on_test_battle("elite")},
-		{"text": "👑 Boss战斗",   "clr": Color(0.35, 0.10, 0.10), "cb": func(): _on_test_battle("boss")},
+		{"text": "普通战斗",   "clr": Color(0.15, 0.35, 0.15), "cb": func(): _on_test_battle("battle")},
+		{"text": "精英战斗",   "clr": Color(0.35, 0.20, 0.10), "cb": func(): _on_test_battle("elite")},
+		{"text": "Boss战斗",   "clr": Color(0.35, 0.10, 0.10), "cb": func(): _on_test_battle("boss")},
 	]
 
 	for idx in range(btn_defs.size()):
@@ -513,7 +513,7 @@ func _build_bottom_bar() -> void:
 	# -- 掷骰大按钮（居中） --
 	var dice_btn := Button.new()
 	dice_btn.name = "DiceRollBtn"
-	dice_btn.text = "🎲  掷骰前进"
+	dice_btn.text = "掷骰前进"
 	dice_btn.position = Vector2(dice_x, dice_y)
 	dice_btn.size = Vector2(DICE_W, DICE_H)
 	UIUtils.shrine_button_style(dice_btn, true)
@@ -522,10 +522,10 @@ func _build_bottom_bar() -> void:
 
 	# -- 功能按钮（左侧2个 + 右侧2个） --
 	var btn_defs := [
-		{ "name": "BagBtn",       "text": "🎒 背包",  "x": GAP },
-		{ "name": "SkillBtn",     "text": "⚡ 技能",  "x": GAP + SMALL_W + GAP },
-		{ "name": "LogBtn",       "text": "💬 聊天",  "x": dice_x + DICE_W + GAP },
-		{ "name": "SettingsBtn",  "text": "🏠 主界面",  "x": dice_x + DICE_W + GAP + SMALL_W + GAP },
+		{ "name": "BagBtn",       "text": "背包",  "x": GAP },
+		{ "name": "SkillBtn",     "text": "技能",  "x": GAP + SMALL_W + GAP },
+		{ "name": "LogBtn",       "text": "聊天",  "x": dice_x + DICE_W + GAP },
+		{ "name": "SettingsBtn",  "text": "主界面",  "x": dice_x + DICE_W + GAP + SMALL_W + GAP },
 	]
 	for b in btn_defs:
 		var btn := Button.new()
@@ -541,7 +541,7 @@ func _build_bottom_bar() -> void:
 	if not _is_network_game():
 		var debug_btn := Button.new()
 		debug_btn.name = "DebugPanelBtn"
-		debug_btn.text = "🔧 调试"
+		debug_btn.text = "调试"
 		debug_btn.position = Vector2(8, 314)
 		debug_btn.size = Vector2(80, 28)
 		UIUtils.btn_style_mini(debug_btn, Color(0.22, 0.22, 0.35))
@@ -842,7 +842,7 @@ func _process(delta: float) -> void:
 			_check_lottery_draw()
 			var rl: Label = $TopBar/DiceRewardLabel as Label
 			if rl:
-				rl.text = "🎲 过起点 +50金!"
+				rl.text = "过起点 +50金!"
 			top_bar.refresh()
 
 		_refresh_grid_display()
@@ -985,7 +985,7 @@ func _apply_network_roll_response(response: Dictionary) -> void:
 	_load_from_save_data(data)
 	if completed_laps > previous_laps:
 		var reward_label: Label = $TopBar/DiceRewardLabel as Label
-		if reward_label: reward_label.text = "🎲 过起点 +50金!"
+		if reward_label: reward_label.text = "过起点 +50金!"
 	_refresh_grid_display()
 	top_bar.refresh()
 	top_bar.refresh_compact_stats()
@@ -1036,7 +1036,7 @@ func _show_construction_choice(grid_index: int, event: Dictionary) -> void:
 	panel.size = Vector2(580, 300)
 	UIUtils.panel_style(panel, Color(0.10, 0.13, 0.18, 0.98))
 	var title := Label.new()
-	title.text = "🔧 建设格：选择建设方向"
+	title.text = "建设格：选择建设方向"
 	title.position = Vector2(24, 18)
 	title.size = Vector2(530, 32)
 	title.add_theme_font_size_override("font_size", 22)
@@ -1050,9 +1050,9 @@ func _show_construction_choice(grid_index: int, event: Dictionary) -> void:
 	hint.add_theme_color_override("font_color", Color("d9c98a"))
 	panel.add_child(hint)
 	var options := [
-		{"type": "shop", "text": "🏪 商店\n收益随建设等级和间隔回合提高"},
-		{"type": "chest", "text": "🎁 宝箱\n提高宝箱最低品质"},
-		{"type": "battle", "text": "🗡️ 战斗\n提高金币、经验和装备掉落率"},
+		{"type": "shop", "text": "商店\n收益随建设等级和间隔回合提高"},
+		{"type": "chest", "text": "宝箱\n提高宝箱最低品质"},
+		{"type": "battle", "text": "战斗\n提高金币、经验和装备掉落率"},
 	]
 	for index in range(options.size()):
 		var option: Dictionary = options[index]
@@ -1112,7 +1112,7 @@ func _show_construction_management(grid_index: int, event: Dictionary) -> void:
 	panel.size = Vector2(420, 138)
 	UIUtils.panel_style(panel, Color(0.10, 0.13, 0.18, 0.97))
 	var title := Label.new()
-	title.text = "🔧 %s建设格 Lv.%d" % [str({"shop": "商店", "chest": "宝箱", "battle": "战斗"}.get(str(building.get("type", "")), "建设")), int(building.get("level", 1))]
+	title.text = "%s建设格 Lv.%d" % [str({"shop": "商店", "chest": "宝箱", "battle": "战斗"}.get(str(building.get("type", "")), "建设")), int(building.get("level", 1))]
 	title.position = Vector2(18, 12)
 	title.size = Vector2(384, 28)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1325,7 +1325,7 @@ func _handle_boss_clear() -> void:
 		var new_total: int = mini(128, 28 + player_boss_tier * 5)
 		if new_total > old_total:
 			_rebuild_map_for_boss_clear(old_total, new_total)
-			_show_float_text("👑 Boss击破！地图扩张到 " + str(map_total_grids) + " 格", Color(1.0, 0.75, 0.25))
+			_show_float_text("Boss击破！地图扩张到 " + str(map_total_grids) + " 格", Color(1.0, 0.75, 0.25))
 	_refresh_grid_display()
 
 
@@ -1942,7 +1942,7 @@ func _reset_network_stats() -> void:
 
 ## ============ 闪电跳跃 ============
 func _do_lightning_jump(jump_val: int) -> void:
-	_show_float_text("⚡ 闪电跳跃 " + str(jump_val) + " 格！", Color(1.0, 1.0, 0.3))
+	_show_float_text("闪电跳跃 " + str(jump_val) + " 格！", Color(1.0, 1.0, 0.3))
 	# 粒子特效(竖着上升)
 	_spawn_lightning_particles()
 	# 跳跃
@@ -2054,7 +2054,7 @@ func _show_lottery_popup(win_num: String, hit: bool) -> void:
 	popup.add_child(red_line)
 
 	var title: Label = Label.new()
-	title.text = "🎰 彩票开奖"
+	title.text = "彩票开奖"
 	title.add_theme_font_size_override("font_size", 24)
 	title.add_theme_color_override("font_color", Color("96353e"))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -2227,9 +2227,9 @@ func _get_grid_info(index: int) -> Dictionary:
 	if not building.is_empty():
 		var btype := str(building.get("type", ""))
 		var labels := {"shop": "商店", "chest": "宝箱", "battle": "战斗"}
-		var icons := {"shop": "🏪", "chest": "🎁", "battle": "🗡️"}
+		var icons := {"shop": "商", "chest": "箱", "battle": "战"}
 		info["name"] = str(labels.get(btype, "建设")) + " Lv." + str(int(building.get("level", 1)))
-		info["icon"] = str(icons.get(btype, "🔧"))
+		info["icon"] = str(icons.get(btype, "建"))
 	return info
 
 
@@ -2376,7 +2376,7 @@ func _add_equipment_icon(parent: Control, eqp: Dictionary, pos: Vector2, icon_si
 			parent.add_child(image)
 			return
 	var fallback := Label.new()
-	fallback.text = str(eqp.get("icon", "?"))
+	fallback.text = UIUtils.safe_icon(str(eqp.get("icon", "")), "装")
 	fallback.add_theme_font_size_override("font_size", fallback_font_size)
 	fallback.position = pos
 	fallback.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2429,7 +2429,7 @@ func _on_test_generate_gem() -> void:
 	var gid: int = randi_range(1, 8)
 	_add_gem(gid, 1, 1)
 	var gdef: Dictionary = EquipData.GEM_DEFS.get(gid, {})
-	_show_float_text(gdef.get("icon", "🔘") + " " + gdef.get("name", "???") + " Lv.1", Color(1, 0.7, 0.3))
+	_show_float_text(UIUtils.safe_icon(str(gdef.get("icon", "")), "宝") + " " + gdef.get("name", "???") + " Lv.1", Color(1, 0.7, 0.3))
 
 
 func _on_test_add_socket_tool() -> void:
@@ -2477,7 +2477,7 @@ func _synthesize_gem(gid: int, lv: int) -> void:
 	_auto_save()
 	top_bar.refresh()
 	var gdef: Dictionary = EquipData.GEM_DEFS.get(gid, {})
-	_show_float_text(gdef.get("icon", "🔘") + " 合成 → Lv." + str(lv + 1), Color(0.3, 1.0, 0.6))
+	_show_float_text(UIUtils.safe_icon(str(gdef.get("icon", "")), "宝") + " 合成 → Lv." + str(lv + 1), Color(0.3, 1.0, 0.6))
 
 
 func _on_test_generate_lottery() -> void:
@@ -2488,7 +2488,7 @@ func _on_test_generate_lottery() -> void:
 		return
 	var num: int = randi_range(0, 999)
 	lottery_tickets.append(num)
-	_show_float_text("🎟️ 获得彩票 " + _fmt_lottery(num), Color(1, 0.7, 0.2))
+	_show_float_text("获得彩票 " + _fmt_lottery(num), Color(1, 0.7, 0.2))
 
 
 func _fmt_lottery(num: int) -> String:
@@ -2594,7 +2594,7 @@ func _build_gem_tab(area: Panel, main_panel: Panel) -> void:
 		UIUtils.shrine_panel_style(card, Color("fffdfb"), Color("d6b8b3"), 1)
 		area.add_child(card)
 		var defn: Dictionary = EquipData.GEM_DEFS.get(int(gem.get("id", 0)), {})
-		var icon := Label.new(); icon.text = str(defn.get("icon", "◇")); icon.position = Vector2(10, 9); icon.add_theme_font_size_override("font_size", 24); card.add_child(icon)
+		var icon := Label.new(); icon.text = UIUtils.safe_icon(str(defn.get("icon", "")), "宝"); icon.position = Vector2(10, 9); icon.add_theme_font_size_override("font_size", 24); card.add_child(icon)
 		var name := Label.new(); name.text = "%s  Lv.%d" % [defn.get("name", "宝石"), int(gem.get("level", 1))]; name.position = Vector2(46, 8); name.add_theme_font_size_override("font_size", 13); name.add_theme_color_override("font_color", Color("352e38")); card.add_child(name)
 		var count := Label.new(); count.text = "持有 ×%d" % int(gem.get("count", 0)); count.position = Vector2(46, 29); count.add_theme_color_override("font_color", Color("6f6264")); card.add_child(count)
 		var synth := Button.new()
@@ -3037,8 +3037,9 @@ func _load_world_chat_history(panel: Panel) -> void:
 
 func _append_world_chat_message(history: RichTextLabel, message: Dictionary) -> void:
 	var sender_value: Variant = message.get("senderName")
-	var sender := "系统" if sender_value == null or str(sender_value).is_empty() else str(sender_value)
-	history.add_text("[%s] %s\n" % [sender, str(message.get("body", ""))])
+	var sender := UIUtils.plain_text("系统" if sender_value == null or str(sender_value).is_empty() else str(sender_value), "系统")
+	var body := UIUtils.plain_text(str(message.get("body", "")), "")
+	history.add_text("[%s] %s\n" % [sender, body])
 	history.scroll_to_line(maxi(0, history.get_line_count() - 1))
 
 
@@ -3161,7 +3162,7 @@ func _build_inventory_panel() -> void:
 	var used_capacity: int = equip_instances.size() if _inv_tab == "equip" else inventory.get_slot_count()
 	var shown_capacity: int = equip_capacity if _inv_tab == "equip" else inventory.capacity
 	var capacity_maxed: bool = equip_capacity >= EquipmentRulesCls.EQUIP_CAPACITY_MAX if _inv_tab == "equip" else inventory.is_expansion_maxed()
-	title.text = "💎 宝石背包  |  💰 %d 金币" % player_gold if _inv_tab == "gem" else "🎒 背包 (%d/%d%s)  |  💰 %d 金币  |  ✦ %d 精华" % [used_capacity, shown_capacity, "·满" if capacity_maxed else "", player_gold, dismantle_essence]
+	title.text = "宝石背包  |  金币 %d" % player_gold if _inv_tab == "gem" else "背包 (%d/%d%s)  |  金币 %d  |  精华 %d" % [used_capacity, shown_capacity, "·满" if capacity_maxed else "", player_gold, dismantle_essence]
 	title.add_theme_font_size_override("font_size", 22)
 	title.add_theme_color_override("font_color", Color("96353e"))
 	title.position = Vector2(20, 10)
@@ -3337,11 +3338,11 @@ func _build_inventory_panel() -> void:
 				equip_panel.add_child(slot_btn)
 			else:
 				var empty_icons := {
-					"weapon": "⚔", "armor": "♜", "shoes": "♢", "ring": "○",
-					"necklace": "◇", "cape": "▱", "helmet": "⌒", "charm": "✦",
+					"weapon": "武", "armor": "防", "shoes": "鞋", "ring": "戒",
+					"necklace": "链", "cape": "披", "helmet": "盔", "charm": "符",
 				}
 				var empty_icon := Label.new()
-				empty_icon.text = str(empty_icons.get(str(es["name"]), "◇"))
+				empty_icon.text = str(empty_icons.get(str(es["name"]), "装"))
 				empty_icon.position = Vector2(rx + 1, ry + 20)
 				empty_icon.size = Vector2(50, 38)
 				empty_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -3412,7 +3413,7 @@ func _build_inventory_panel() -> void:
 	var bottom_y: float = 500.0
 
 	var enhance_btn := Button.new()
-	enhance_btn.text = "🔨 槽位强化"
+		enhance_btn.text = "槽位强化"
 	enhance_btn.position = Vector2(16, bottom_y)
 	enhance_btn.size = Vector2(120, 30)
 	UIUtils.shrine_button_style(enhance_btn, false)
@@ -3421,7 +3422,7 @@ func _build_inventory_panel() -> void:
 	panel.add_child(enhance_btn)
 
 	var dismantle_btn: Button = Button.new()
-	dismantle_btn.text = "♻ 分解"
+	dismantle_btn.text = "分解"
 	dismantle_btn.position = Vector2(900, bottom_y)
 	dismantle_btn.size = Vector2(80, 30)
 	UIUtils.shrine_button_style(dismantle_btn, false)
@@ -3590,7 +3591,7 @@ func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
 				if badge: badge.text = "+" + str(level)
 		var inventory_title: Label = get_node_or_null("InventoryPanel/InventoryTitle") as Label
 		if inventory_title:
-			inventory_title.text = "🎒 背包 (%d/%d%s)  |  💰 %d 金币  |  ✦ %d 精华" % [equip_instances.size(), equip_capacity, "·满" if equip_capacity >= EquipmentRulesCls.EQUIP_CAPACITY_MAX else "", player_gold, dismantle_essence]
+			inventory_title.text = "背包 (%d/%d%s)  |  金币 %d  |  精华 %d" % [equip_instances.size(), equip_capacity, "·满" if equip_capacity >= EquipmentRulesCls.EQUIP_CAPACITY_MAX else "", player_gold, dismantle_essence]
 		refresh_text.call()
 	selected_one.pressed.connect(func():
 		var target: Array[String] = [str(selector.get_item_metadata(selector.selected))]
@@ -3968,7 +3969,7 @@ func _build_consume_tab(area: Panel, main_panel: Panel) -> void:
 			var defn: Dictionary = ItemDBRef.get_item(slot["item_id"])
 
 			var icon: Label = Label.new()
-			icon.text = defn.get("icon", "?")
+			icon.text = UIUtils.safe_icon(str(defn.get("icon", "")), "物")
 			icon.add_theme_font_size_override("font_size", 24)
 			icon.add_theme_color_override("font_color", Color("4f454d"))
 			icon.position = Vector2(x + 4, y + 4)
@@ -4258,7 +4259,7 @@ func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_pane
 			var gdef: Dictionary = EquipData.GEM_DEFS.get(gid, {})
 			var gl: Button = Button.new()
 			if gid > 0:
-				gl.text = "%s %s Lv.%d  ·  更换 / 拆卸" % [gdef.get("icon", "🔘"), gdef.get("name", "???"), gem_level]
+				gl.text = "%s %s Lv.%d  ·  更换 / 拆卸" % [UIUtils.safe_icon(str(gdef.get("icon", "")), "宝"), gdef.get("name", "???"), gem_level]
 			else:
 				gl.text = "○  空槽位  ·  点击镶嵌"
 			UIUtils.shrine_button_style(gl, gid > 0)
@@ -4437,7 +4438,7 @@ func _show_gem_socket_panel(eqp: Dictionary, socket_index: int, main_panel: Pane
 	dialog.add_child(title)
 
 	var current := Label.new()
-	current.text = "当前：%s %s Lv.%d" % [old_def.get("icon", "○"), old_def.get("name", "空槽位"), old_level] if old_id > 0 else "当前：空槽位"
+	current.text = "当前：%s %s Lv.%d" % [UIUtils.safe_icon(str(old_def.get("icon", "")), "宝"), old_def.get("name", "空槽位"), old_level] if old_id > 0 else "当前：空槽位"
 	current.position = Vector2(22, 48)
 	current.size = Vector2(450, 24)
 	current.add_theme_font_size_override("font_size", 12)
@@ -4462,7 +4463,7 @@ func _show_gem_socket_panel(eqp: Dictionary, socket_index: int, main_panel: Pane
 			var count := int(bag_entry.get("count", 0))
 			var gdef: Dictionary = EquipData.GEM_DEFS.get(gid, {})
 			var choose := Button.new()
-			choose.text = "%s  %s Lv.%d   持有×%d   %s" % [gdef.get("icon", "🔘"), gdef.get("name", "宝石"), level, count, gdef.get("desc", "")]
+			choose.text = "%s  %s Lv.%d   持有×%d   %s" % [UIUtils.safe_icon(str(gdef.get("icon", "")), "宝"), gdef.get("name", "宝石"), level, count, gdef.get("desc", "")]
 			choose.position = Vector2(22, y)
 			choose.size = Vector2(456, 32)
 			UIUtils.shrine_button_style(choose, false)
@@ -4626,7 +4627,7 @@ func _show_dismantle_panel(main_panel: Panel) -> void:
 	UIUtils.shrine_panel_style(dp, Color("fff9f5"), Color("b88d89"), 2)
 
 	var dtitle: Label = Label.new()
-	dtitle.text = "♻ 装备分解"
+	dtitle.text = "装备分解"
 	dtitle.add_theme_font_size_override("font_size", 16)
 	dtitle.add_theme_color_override("font_color", Color("96353e"))
 	dtitle.position = Vector2(12, 8)
@@ -5335,7 +5336,7 @@ func _build_skill_tab(panel: Panel) -> void:
 			panel.add_child(skill_bg)
 
 			var icon_lbl: Label = Label.new()
-			icon_lbl.text = sdata.get("icon", "?")
+			icon_lbl.text = UIUtils.safe_icon(str(sdata.get("icon", "")), "技")
 			icon_lbl.add_theme_font_size_override("font_size", 22)
 			icon_lbl.position = Vector2(sx + 8, sy + 10)
 			panel.add_child(icon_lbl)
@@ -5541,7 +5542,7 @@ func _build_skill_tab(panel: Panel) -> void:
 		content.add_child(pool_bg)
 
 		var pool_icon: Label = Label.new()
-		pool_icon.text = sdata.get("icon", "?")
+		pool_icon.text = UIUtils.safe_icon(str(sdata.get("icon", "")), "技")
 		pool_icon.add_theme_font_size_override("font_size", 18)
 		pool_icon.position = Vector2(cx + 6, cy + 6)
 		content.add_child(pool_icon)
@@ -5612,7 +5613,7 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 	tip.add_child(top_bar_rect)
 
 	var title: Label = Label.new()
-	title.text = sdata.get("icon", "?") + " " + sdata.get("name", "???")
+	title.text = UIUtils.safe_icon(str(sdata.get("icon", "")), "技") + " " + sdata.get("name", "???")
 	title.add_theme_font_size_override("font_size", 18)
 	title.add_theme_color_override("font_color", sc)
 	title.position = Vector2(16, 10)
@@ -5769,7 +5770,7 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 
 func _skill_hover_text(skill: Dictionary) -> String:
 	var lines: Array[String] = [
-		str(skill.get("icon", "?")) + " " + str(skill.get("name", "???")),
+		UIUtils.safe_icon(str(skill.get("icon", "")), "技") + " " + str(skill.get("name", "???")),
 		SkillDataRef.school_name(int(skill.get("school", 0))) + "  |  间隔 " + SkillDataRef.action_cd_text(skill),
 	]
 	var description := str(skill.get("desc", ""))
@@ -5918,10 +5919,10 @@ func _show_stats_panel() -> void:
 
 	# 4维自由属性
 	var free_stats: Array[Dictionary] = [
-		{ "name": "攻击", "key": "atk", "icon": "⚔", "value": player_stat_atk, "desc": "每点+1.8%最终伤害(无上限)" },
-		{ "name": "防御", "key": "def", "icon": "🛡", "value": player_stat_def, "desc": "每点+1.2%直接减伤(上限50%)" },
-		{ "name": "速度", "key": "spd", "icon": "👟", "value": player_stat_spd, "desc": "每点-0.8%出手CD(上限50%)" },
-		{ "name": "幸运", "key": "luk", "icon": "🍀", "value": player_stat_luk, "desc": "每点+1.5%稀有掉落/好事件概率" },
+		{ "name": "攻击", "key": "atk", "icon": "攻", "value": player_stat_atk, "desc": "每点+1.8%最终伤害(无上限)" },
+		{ "name": "防御", "key": "def", "icon": "防", "value": player_stat_def, "desc": "每点+1.2%直接减伤(上限50%)" },
+		{ "name": "速度", "key": "spd", "icon": "速", "value": player_stat_spd, "desc": "每点-0.8%出手CD(上限50%)" },
+		{ "name": "幸运", "key": "luk", "icon": "幸", "value": player_stat_luk, "desc": "每点+1.5%稀有掉落/好事件概率" },
 	]
 	for fi in range(free_stats.size()):
 		var fs: Dictionary = free_stats[fi]
@@ -5936,7 +5937,7 @@ func _show_stats_panel() -> void:
 
 		# 标签: 图标 + 名称
 		var fl: Label = Label.new()
-		fl.text = fs["icon"] + " " + fs["name"]
+		fl.text = UIUtils.safe_icon(str(fs["icon"]), "属") + " " + fs["name"]
 		fl.add_theme_font_size_override("font_size", 12)
 		fl.add_theme_color_override("font_color", Color("4f454d"))
 		fl.position = Vector2(fx, fy + 1)
@@ -5977,20 +5978,20 @@ func _show_stats_panel() -> void:
 	# 属性列表（使用真实计算的数值）—— 18词条全属性
 	var ps: Dictionary = _calc_player_stats()
 	var stats: Array[Dictionary] = [
-		{ "icon": "❤️", "name": "生命值 (HP)",   "value": str(ps["hp"]), "raw": ps["hp_base"], "eqp": ps["hp_equip"], "desc": "归零则战斗失败，消耗1枚复活币复活。\n每级+80" },
-		{ "icon": "⚔️", "name": "攻击力 (ATK)",  "value": str(ps["atk"]), "raw": ps["atk_base"], "eqp": ps["atk_equip"], "desc": "基础攻击力，与装备攻击力相加后\n受自由属性点和装备词条加成" },
-		{ "icon": "🛡️", "name": "防御力 (DEF)",  "value": str(ps["def"]), "raw": ps["def_base"], "eqp": ps["def_equip"], "desc": "决定受到的伤害减免。\n减伤率 = DEF/(DEF+400)" },
-		{ "icon": "👟", "name": "速度 (SPD)",    "value": str(ps["spd"]), "raw": 0, "eqp": ps["spd"], "desc": "每点-0.8%出手CD（上限50%）。\n3.0秒× (1-速度%) = 实际CD" },
-		{ "icon": "🍀", "name": "幸运 (LUK)",    "value": str(ps["luk"]), "raw": 0, "eqp": ps["luk"], "desc": "每点+1.5%稀有掉落/好事件概率。\n影响宝箱品质、命运事件、战斗掉落" },
+		{ "icon": "生", "name": "生命值 (HP)",   "value": str(ps["hp"]), "raw": ps["hp_base"], "eqp": ps["hp_equip"], "desc": "归零则战斗失败，消耗1枚复活币复活。\n每级+80" },
+		{ "icon": "攻", "name": "攻击力 (ATK)",  "value": str(ps["atk"]), "raw": ps["atk_base"], "eqp": ps["atk_equip"], "desc": "基础攻击力，与装备攻击力相加后\n受自由属性点和装备词条加成" },
+		{ "icon": "防", "name": "防御力 (DEF)",  "value": str(ps["def"]), "raw": ps["def_base"], "eqp": ps["def_equip"], "desc": "决定受到的伤害减免。\n减伤率 = DEF/(DEF+400)" },
+		{ "icon": "速", "name": "速度 (SPD)",    "value": str(ps["spd"]), "raw": 0, "eqp": ps["spd"], "desc": "每点-0.8%出手CD（上限50%）。\n3.0秒× (1-速度%) = 实际CD" },
+		{ "icon": "幸", "name": "幸运 (LUK)",    "value": str(ps["luk"]), "raw": 0, "eqp": ps["luk"], "desc": "每点+1.5%稀有掉落/好事件概率。\n影响宝箱品质、命运事件、战斗掉落" },
 		{ "icon": "💥", "name": "暴击率",        "value": str(ps["crit"]) + "%", "raw": 0, "eqp": ps["crit"], "desc": "攻击时触发暴击的概率，普攻也可暴击。\n暴击伤害=攻击力×暴击倍率" },
 		{ "icon": "💢", "name": "暴击伤害",       "value": str(ps["critdmg"]) + "%", "raw": 150, "eqp": ps["critdmg"], "desc": "暴击时的伤害倍率。\n基础150%，装备/宝石可提高" },
 		{ "icon": "🎯", "name": "命中率",        "value": str(ps["hit"]) + "%", "raw": 0, "eqp": ps["hit"], "desc": "决定攻击是否命中。\n可抵消目标的闪避率" },
 		{ "icon": "💨", "name": "闪避率",        "value": str(ps["dodge"]) + "%", "raw": 0, "eqp": ps["dodge"], "desc": "完全躲避攻击的概率。\n实际闪避=我方闪避-敌方命中" },
-		{ "icon": "🛡️", "name": "格挡率",        "value": str(ps["block"]) + "%", "raw": 0, "eqp": ps["block"], "desc": "格挡后伤害减半。\n暴击+格挡同时触发=暴击×0.5" },
+		{ "icon": "挡", "name": "格挡率",        "value": str(ps["block"]) + "%", "raw": 0, "eqp": ps["block"], "desc": "格挡后伤害减半。\n暴击+格挡同时触发=暴击×0.5" },
 		{ "icon": "💥", "name": "技能伤害",       "value": "+" + str(ps["skill_dmg"]) + "%", "raw": 0, "eqp": ps["skill_dmg"], "desc": "技能造成的额外伤害加成。\n装备词条/宝石可提高" },
 		{ "icon": "⏳", "name": "冷却缩减",       "value": "-" + str(ps["cd_reduce"]) + "%", "raw": 0, "eqp": ps["cd_reduce"], "desc": "减少技能冷却时间。\n装备词条/宝石可提高" },
-		{ "icon": "🩸", "name": "吸血%",         "value": "+" + str(ps["lifesteal"]) + "%", "raw": 0, "eqp": ps["lifesteal"], "desc": "攻击时吸取伤害百分比的生命。\n装备词条可提高" },
-		{ "icon": "💰", "name": "金币加成",       "value": "+" + str(ps["gold_bonus"]) + "%", "raw": 0, "eqp": ps["gold_bonus"], "desc": "战斗/宝箱获得金币的额外加成。\n天命卡/装备词条可提高" },
+		{ "icon": "血", "name": "吸血%",         "value": "+" + str(ps["lifesteal"]) + "%", "raw": 0, "eqp": ps["lifesteal"], "desc": "攻击时吸取伤害百分比的生命。\n装备词条可提高" },
+		{ "icon": "金", "name": "金币加成",       "value": "+" + str(ps["gold_bonus"]) + "%", "raw": 0, "eqp": ps["gold_bonus"], "desc": "战斗/宝箱获得金币的额外加成。\n天命卡/装备词条可提高" },
 		{ "icon": "📖", "name": "经验加成",       "value": "+" + str(ps["exp_bonus"]) + "%", "raw": 0, "eqp": ps["exp_bonus"], "desc": "战斗获得经验的额外加成。\n天命卡/装备词条可提高" },
 	]
 
@@ -6015,7 +6016,7 @@ func _show_stats_panel() -> void:
 
 		# 图标
 		var icon: Label = Label.new()
-		icon.text = st["icon"]
+		icon.text = UIUtils.safe_icon(str(st["icon"]), "属")
 		icon.add_theme_font_size_override("font_size", 16)
 		icon.position = Vector2(rx + 8, ry + 10)
 		panel.add_child(icon)
@@ -6055,7 +6056,7 @@ func _show_stats_panel() -> void:
 	# 底部信息
 	sy += 10.0
 	var footer: Label = Label.new()
-	footer.text = "💰 " + str(player_gold) + "金币  |  ♻️ " + str(player_revive) + "/" + str(player_max_revive) + "复活币  |  位置 " + str(player_grid_index) + "/" + str(map_total_grids)
+	footer.text = "金币 " + str(player_gold) + "  |  复活币 " + str(player_revive) + "/" + str(player_max_revive) + "  |  位置 " + str(player_grid_index) + "/" + str(map_total_grids)
 	footer.add_theme_font_size_override("font_size", 12)
 	footer.add_theme_color_override("font_color", Color("746672"))
 	footer.position = Vector2(20, sy)

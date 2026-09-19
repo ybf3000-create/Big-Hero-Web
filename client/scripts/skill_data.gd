@@ -68,7 +68,7 @@ const MELEE_SKILL_IDS: Array[int] = [
 # ======== ⚡ 爆发流 1~6 ========
 static var SKILLS: Array[Dictionary] = [
 	# 1 - 重击
-	{ "id": 1, "name": "重击", "icon": "⚔", "school": 0, "target": 0,
+	{ "id": 1, "name": "重击", "icon": "攻", "school": 0, "target": 0,
 	  "action_cd": 2, "price": 0, "desc": "攻击力×150% 单体伤害",
 	  "dmg_pct": 150.0, "hits": 1 },
 	# 2 - 猛力一击
@@ -76,15 +76,15 @@ static var SKILLS: Array[Dictionary] = [
 	  "action_cd": 3, "price": 1000, "desc": "攻击力×250% 单体重击",
 	  "dmg_pct": 250.0, "hits": 1 },
 	# 3 - 蓄力斩
-	{ "id": 3, "name": "蓄力斩", "icon": "⚡", "school": 0, "target": 0,
+	{ "id": 3, "name": "蓄力斩", "icon": "蓄", "school": 0, "target": 0,
 	  "action_cd": 4, "price": 10000, "desc": "攻击力×400% 蓄力一击",
 	  "dmg_pct": 400.0, "hits": 1 },
 	# 4 - 碎裂打击
-	{ "id": 4, "name": "碎裂打击", "icon": "🪨", "school": 0, "target": 5,
+	{ "id": 4, "name": "碎裂打击", "icon": "碎", "school": 0, "target": 5,
 	  "action_cd": 3, "price": 10000, "desc": "攻击力×180% 无视20%防御",
 	  "dmg_pct": 180.0, "hits": 1, "bonus": { "ignore_def_pct": 20 } },
 	# 5 - 致命一击
-	{ "id": 5, "name": "致命一击", "icon": "🗡", "school": 0, "target": 2,
+	{ "id": 5, "name": "致命一击", "icon": "致", "school": 0, "target": 2,
 	  "action_cd": 5, "price": 100000, "desc": "攻击力×500% HP<30%翻倍",
 	  "dmg_pct": 500.0, "hits": 1, "bonus": { "execute_threshold": 0.3, "execute_mult": 2.0 } },
 	# 6 - 终结技
@@ -93,7 +93,7 @@ static var SKILLS: Array[Dictionary] = [
 	  "dmg_pct": 300.0, "hits": 1, "bonus": { "missing_hp_scale": 1.0 } },
 
 	# ======== 🔥 持续流 7~12 ========
-	{ "id": 7, "name": "快速打击", "icon": "⚡", "school": 1, "target": 0,
+	{ "id": 7, "name": "快速打击", "icon": "快", "school": 1, "target": 0,
 	  "action_cd": 1, "price": 1000, "desc": "攻击力×110% 无视10%防御",
 	  "dmg_pct": 110.0, "hits": 1, "bonus": { "ignore_def_pct": 10 } },
 	{ "id": 8, "name": "连击", "icon": "💥", "school": 1, "target": 0,
@@ -105,7 +105,7 @@ static var SKILLS: Array[Dictionary] = [
 	{ "id": 10, "name": "连射", "icon": "🏹", "school": 1, "target": 0,
 	  "action_cd": 2, "price": 10000, "desc": "攻击力×40% ×3次",
 	  "dmg_pct": 40.0, "hits": 3 },
-	{ "id": 11, "name": "回旋镖", "icon": "🪃", "school": 1, "target": 7,
+	{ "id": 11, "name": "回旋镖", "icon": "回", "school": 1, "target": 7,
 	  "action_cd": 2, "price": 10000, "desc": "攻击力×110% 最多2目标",
 	  "dmg_pct": 110.0, "hits": 1, "bonus": { "max_targets": 2 } },
 	{ "id": 12, "name": "无尽打击", "icon": "♾", "school": 1, "target": 0,
@@ -113,19 +113,19 @@ static var SKILLS: Array[Dictionary] = [
 	  "dmg_pct": 90.0, "hits": 1, "bonus": { "stack_step_pct": 10.0, "max_stacks": 10 } },
 
 	# ======== 🧊 控制流 13~20 ========
-	{ "id": 13, "name": "冰冻射击", "icon": "❄", "school": 2, "target": 0,
+	{ "id": 13, "name": "冰冻射击", "icon": "冰", "school": 2, "target": 0,
 	  "action_cd": 3, "price": 10000, "desc": "攻击力×100% 冻结4秒",
 	  "dmg_pct": 100.0, "hits": 1,
 	  "control": ControlType.FREEZE, "control_dur": 4.0 },
-	{ "id": 14, "name": "冰霜新星", "icon": "🧊", "school": 2, "target": 7,
+	{ "id": 14, "name": "冰霜新星", "icon": "冰", "school": 2, "target": 7,
 	  "action_cd": 4, "price": 50000, "desc": "攻击力×80% 全体减速6秒",
 	  "dmg_pct": 80.0, "hits": 1,
 	  "control": ControlType.SLOW, "control_dur": 6.0 },
-	{ "id": 15, "name": "眩晕锤", "icon": "🔨", "school": 2, "target": 0,
+	{ "id": 15, "name": "眩晕锤", "icon": "晕", "school": 2, "target": 0,
 	  "action_cd": 4, "price": 10000, "desc": "攻击力×120% 眩晕4秒",
 	  "dmg_pct": 120.0, "hits": 1,
 	  "control": ControlType.STUN, "control_dur": 4.0 },
-	{ "id": 16, "name": "雷霆一击", "icon": "⚡", "school": 2, "target": 0,
+	{ "id": 16, "name": "雷霆一击", "icon": "雷", "school": 2, "target": 0,
 	  "action_cd": 3, "price": 10000, "desc": "攻击力×130% 麻痹6秒",
 	  "dmg_pct": 130.0, "hits": 1,
 	  "control": ControlType.PARALYSIS, "control_dur": 6.0 },
@@ -133,11 +133,11 @@ static var SKILLS: Array[Dictionary] = [
 	  "action_cd": 5, "price": 50000, "desc": "攻击力×60% 全体沉默5秒",
 	  "dmg_pct": 60.0, "hits": 1,
 	  "control": ControlType.SILENCE, "control_dur": 5.0 },
-	{ "id": 18, "name": "深度冻结", "icon": "❄️", "school": 2, "target": 0,
+	{ "id": 18, "name": "深度冻结", "icon": "冻", "school": 2, "target": 0,
 	  "action_cd": 6, "price": 100000, "desc": "攻击力×200% 冻结6秒",
 	  "dmg_pct": 200.0, "hits": 1,
 	  "control": ControlType.FREEZE, "control_dur": 6.0 },
-	{ "id": 19, "name": "腐蚀之触", "icon": "💀", "school": 2, "target": 4,
+	{ "id": 19, "name": "腐蚀之触", "icon": "蚀", "school": 2, "target": 4,
 	  "action_cd": 4, "price": 50000, "desc": "攻击力×100% 禁疗8秒",
 	  "dmg_pct": 100.0, "hits": 1,
 	  "control": ControlType.ANTI_HEAL, "control_dur": 8.0 },
@@ -147,7 +147,7 @@ static var SKILLS: Array[Dictionary] = [
 	  "control": ControlType.PARALYSIS, "control_dur": 6.0 },
 
 	# ======== 🛡 生存流 21~26 ========
-	{ "id": 21, "name": "护盾", "icon": "🛡", "school": 3, "target": TargetTag.SELF,
+	{ "id": 21, "name": "护盾", "icon": "盾", "school": 3, "target": TargetTag.SELF,
 	  "action_cd": 3, "price": 1000, "desc": "护盾=防御力×300% 持续5秒",
 	  "shield_pct": 300.0, "shield_stat": "def" },
 	{ "id": 22, "name": "治疗波", "icon": "💚", "school": 3, "target": TargetTag.SELF_HEAL,
@@ -162,31 +162,31 @@ static var SKILLS: Array[Dictionary] = [
 	{ "id": 25, "name": "生命绽放", "icon": "🌿", "school": 3, "target": TargetTag.SELF_HEAL,
 	  "action_cd": 5, "price": 50000, "desc": "立即及之后每秒恢复5%最大HP，共5次",
 	  "heal_pct": 5.0, "heal_stat": "max_hp_pct", "bonus": { "tick_interval": 1.0, "tick_count": 5 } },
-	{ "id": 26, "name": "不屈意志", "icon": "❤️‍🔥", "school": 3, "target": TargetTag.SELF,
+	{ "id": 26, "name": "不屈意志", "icon": "志", "school": 3, "target": TargetTag.SELF,
 	  "action_cd": 8, "price": 100000, "desc": "HP<20%自动触发 锁血4秒",
 	  "buff_effect": "undying", "buff_dur": 4.0, "bonus": { "trigger_hp_pct": 0.2 } },
 
 	# ======== ☠ Dot流 27~32 ========
-	{ "id": 27, "name": "毒刃", "icon": "🗡", "school": 4, "target": 0,
+	{ "id": 27, "name": "毒刃", "icon": "毒", "school": 4, "target": 0,
 	  "action_cd": 2, "price": 1000, "desc": "直伤80%+Dot30%×4次（立即首跳）",
 	  "dmg_pct": 80.0, "hits": 1,
 	  "dot_pct": 30.0, "dot_tick_interval": 2.0, "dot_tick_count": 4, "dot_type": "poison", "dot_mode": 0 },
-	{ "id": 28, "name": "烈焰灼烧", "icon": "🔥", "school": 4, "target": 7,
+	{ "id": 28, "name": "烈焰灼烧", "icon": "焰", "school": 4, "target": 7,
 	  "action_cd": 3, "price": 10000, "desc": "直伤60%+Dot30%×4次全体（立即首跳）",
 	  "dmg_pct": 60.0, "hits": 1,
 	  "dot_pct": 30.0, "dot_tick_interval": 2.0, "dot_tick_count": 4, "dot_type": "burn", "dot_mode": 0 },
-	{ "id": 29, "name": "撕裂", "icon": "🩸", "school": 4, "target": 0,
+	{ "id": 29, "name": "撕裂", "icon": "裂", "school": 4, "target": 0,
 	  "action_cd": 2, "price": 10000, "desc": "直伤120%+Dot20%×3次（立即首跳）",
 	  "dmg_pct": 120.0, "hits": 1,
 	  "dot_pct": 20.0, "dot_tick_interval": 2.0, "dot_tick_count": 3, "dot_type": "bleed", "dot_mode": 0 },
-	{ "id": 30, "name": "毒雾", "icon": "☁️", "school": 4, "target": 7,
+	{ "id": 30, "name": "毒雾", "icon": "雾", "school": 4, "target": 7,
 	  "action_cd": 4, "price": 50000, "desc": "直伤40%+Dot35%×5次全体（立即首跳）",
 	  "dmg_pct": 40.0, "hits": 1,
 	  "dot_pct": 35.0, "dot_tick_interval": 2.0, "dot_tick_count": 5, "dot_type": "poison", "dot_mode": 0 },
 	{ "id": 31, "name": "剧毒爆发", "icon": "💚", "school": 4, "target": 0,
 	  "action_cd": 5, "price": 50000, "desc": "结算目标所有Dot剩余伤害×1.5",
 	  "bonus": { "detonate_dot": 1.5 } },
-	{ "id": 32, "name": "瘟疫传播", "icon": "🦠", "school": 4, "target": 7,
+	{ "id": 32, "name": "瘟疫传播", "icon": "疫", "school": 4, "target": 7,
 	  "action_cd": 6, "price": 100000, "desc": "将目标Dot复制到所有敌人",
 	  "bonus": { "spread_dot": true } },
 
@@ -235,7 +235,7 @@ static func skill_name(id: int) -> String:
 # 获取技能图标
 static func skill_icon(id: int) -> String:
 	var s := get_skill(id)
-	return s.get("icon", "❓")
+	return s.get("icon", "技")
 
 
 static func is_melee_skill(id: int) -> bool:

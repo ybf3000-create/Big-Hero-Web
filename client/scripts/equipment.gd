@@ -73,7 +73,7 @@ func get_slot_display(slot_name: String) -> String:
 	var eqp: Dictionary = _equipped.get(slot_name, {})
 	if eqp.is_empty():
 		return "[ 空 ]"
-	var s: String = eqp.get("icon", "?") + " " + eqp.get("base_name", "???")
+	var s: String = UIUtils.safe_icon(str(eqp.get("icon", "")), "装") + " " + eqp.get("base_name", "???")
 	var enhance: int = get_slot_enhance(slot_name)
 	if enhance > 0:
 		s += " +" + str(enhance)

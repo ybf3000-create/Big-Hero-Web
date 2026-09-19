@@ -32,7 +32,7 @@ func _build_ui() -> void:
 
 	# 标题
 	var title := Label.new()
-	title.text = "⚔ 大 勇 者"
+	title.text = "大 勇 者"
 	title.add_theme_font_size_override("font_size", 48)
 	title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -239,7 +239,7 @@ func _show_create_dialog(slot: int) -> void:
 
 	# 角色预览
 	var preview := Label.new()
-	preview.text = "🚶"
+	preview.text = "勇者"
 	preview.add_theme_font_size_override("font_size", 64)
 	preview.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	preview.position = Vector2(240, 170)

@@ -105,12 +105,12 @@ func build() -> void:
 
 	var life_card := _card(bar, Vector2(566, 22), Vector2(102, 60))
 	_label(life_card, "LifeCaption", "复活次数", Vector2(37, 7), 9, MUTED)
-	_label(life_card, "LifeIcon", "♥", Vector2(10, 18), 22, PRIMARY)
+	_label(life_card, "LifeIcon", "生命", Vector2(10, 18), 15, PRIMARY)
 	_label(bar, "ReviveLabel", str(main_game.player_revive) + " / " + str(main_game.player_max_revive), Vector2(603, 46), 15, PRIMARY)
 
 	var reward_card := _card(bar, Vector2(676, 22), Vector2(104, 60))
 	_label(reward_card, "RewardCaption", "掷骰奖励", Vector2(36, 7), 9, MUTED)
-	_label(reward_card, "RewardIcon", "✦", Vector2(10, 19), 20, GOLD)
+	_label(reward_card, "RewardIcon", "奖励", Vector2(7, 19), 12, GOLD)
 	var reward_lbl := _label(bar, "DiceRewardLabel", "过起点 +50金", Vector2(710, 46), 11, GOOD)
 	reward_lbl.size = Vector2(68, 30)
 

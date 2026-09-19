@@ -50,7 +50,7 @@ func _test_web_ui_resources() -> void:
 	font_installer._enter_tree()
 	_expect(CjkFont.has_char("大".unicode_at(0)), "Web内置字体应包含常用汉字")
 	_expect(ThemeDB.fallback_font.fallbacks.size() == 2, "Web字体应安装符号和Emoji后备")
-	_expect(ThemeDB.fallback_font.has_char("⚔".unicode_at(0)), "Web后备字体应包含装备图标")
+	_expect(ThemeDB.fallback_font.has_char("中".unicode_at(0)), "Web后备字体应包含中文")
 	_expect(EmojiFont.has_char("📋".unicode_at(0)), "Web内置Emoji字体应包含界面图标")
 
 	var hint_button := HoverHintButtonCls.new()

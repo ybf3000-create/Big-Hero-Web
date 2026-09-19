@@ -127,14 +127,14 @@ static func _run_combat(battle_kind: String, ctx: Dictionary) -> Dictionary:
 		data["drops"] = result.get("drops", []).duplicate(true)
 		data["damage_total"] = int(result.get("damage_total", 0))
 		if battle_kind == "boss":
-			data["message"] = "👑 Boss战胜利! +%dEXP +%d金" % [data["exp_gain"], gold_gain]
+			data["message"] = "Boss战胜利! +%dEXP +%d金" % [data["exp_gain"], gold_gain]
 			data["boss_cleared"] = bool(result.get("boss_cleared", false))
 		elif battle_kind == "elite":
-			data["message"] = "⚔ 精英战胜利! +%dEXP +%d金" % [data["exp_gain"], gold_gain]
+			data["message"] = "精英战胜利! +%dEXP +%d金" % [data["exp_gain"], gold_gain]
 		elif battle_kind == "challenge":
-			data["message"] = "🏆 挑战完成! 造成%d伤害 +%d金" % [data["damage_total"], gold_gain]
+			data["message"] = "挑战完成! 造成%d伤害 +%d金" % [data["damage_total"], gold_gain]
 		else:
-			data["message"] = "⚔ 战斗胜利! +%dEXP +%d金" % [data["exp_gain"], gold_gain]
+			data["message"] = "战斗胜利! +%dEXP +%d金" % [data["exp_gain"], gold_gain]
 	else:
 		data["gold_gain"] = 0
 		data["exp_gain"] = 0
@@ -146,7 +146,7 @@ static func _run_combat(battle_kind: String, ctx: Dictionary) -> Dictionary:
 				ctx["player_hp"] = int(ctx.get("player_max_hp", ctx.get("player_hp", 1)))
 				result["player_hp"] = int(ctx["player_hp"])
 				data["revive_used"] = true
-				data["message"] = "💀 战败，消耗1复活币重新站起"
+				data["message"] = "战败，消耗1复活币重新站起"
 			else:
 				var penalty: int = int(floor(float(ctx.get("player_gold", 0)) * 0.15))
 				ctx["player_gold"] = max(0, int(ctx.get("player_gold", 0)) - penalty)
@@ -154,10 +154,10 @@ static func _run_combat(battle_kind: String, ctx: Dictionary) -> Dictionary:
 				result["player_hp"] = int(ctx["player_hp"])
 				data["force_home"] = true
 				data["gold_penalty"] = penalty
-				data["message"] = "💀 战败，强制回家并损失%d金币" % penalty
+				data["message"] = "战败，强制回家并损失%d金币" % penalty
 		else:
 			data["damage_total"] = int(result.get("damage_total", 0))
-			data["message"] = "🏆 挑战完成! 造成%d伤害" % data["damage_total"]
+			data["message"] = "挑战完成! 造成%d伤害" % data["damage_total"]
 
 	return {"event": battle_kind, "data": data}
 
@@ -215,7 +215,7 @@ static func _treasure_gem(_ctx: Dictionary) -> Dictionary:
 	else:
 		lv = 4
 	var gdef: Dictionary = EquipGenCls.EquipDataCls.GEM_DEFS.get(gid, {})
-	return {"event": "treasure", "data": {"type": "gem", "gem_id": gid, "level": lv, "message": "宝箱开出" + gdef.get("icon", "?") + " Lv." + str(lv)}}
+	return {"event": "treasure", "data": {"type": "gem", "gem_id": gid, "level": lv, "message": "宝箱开出" + UIUtils.safe_icon(str(gdef.get("icon", "")), "宝") + " Lv." + str(lv)}}
 
 
 static func _exec_forge(ctx: Dictionary) -> Dictionary:

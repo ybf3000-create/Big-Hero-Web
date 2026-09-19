@@ -18,6 +18,44 @@ static func suit_color(s: String) -> Color:
 	return SUIT_COLORS.get(s, Color(0.8, 0.8, 0.8))
 
 
+## Return a display-safe label for data that may contain emoji icons.
+## Godot Web renders Canvas text with the bundled CJK font; unknown emoji
+## glyphs must never be allowed to replace otherwise readable Chinese text.
+static func plain_text(value: String, fallback: String = "") -> String:
+	var result := ""
+	for i in range(value.length()):
+		var codepoint := value.unicode_at(i)
+		if _is_ignored_symbol(codepoint):
+			continue
+		if (codepoint >= 0x20 and codepoint <= 0x7E) or _is_cjk(codepoint):
+			result += value.substr(i, 1)
+	return result.strip_edges() if not result.strip_edges().is_empty() else fallback
+
+
+## Icons are decorative only. Keep them as a short Chinese/ASCII marker so a
+## missing emoji font can never produce a tofu square in the UI.
+static func safe_icon(value: String, fallback: String = "图") -> String:
+	var safe := plain_text(value, "")
+	if safe.is_empty():
+		return fallback
+	return safe.substr(0, 2)
+
+
+static func _is_cjk(codepoint: int) -> bool:
+	return (codepoint >= 0x3400 and codepoint <= 0x4DBF) \
+		or (codepoint >= 0x4E00 and codepoint <= 0x9FFF) \
+		or (codepoint >= 0xF900 and codepoint <= 0xFAFF)
+
+
+static func _is_ignored_symbol(codepoint: int) -> bool:
+	# Variation selectors, zero-width joiners and emoji/symbol blocks.
+	return codepoint == 0x200D \
+		or (codepoint >= 0xFE00 and codepoint <= 0xFE0F) \
+		or (codepoint >= 0x1F000 and codepoint <= 0x1FAFF) \
+		or (codepoint >= 0x2300 and codepoint <= 0x23FF) \
+		or (codepoint >= 0x2600 and codepoint <= 0x27BF)
+
+
 static func panel_style(node: Panel, clr: Color) -> void:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = clr

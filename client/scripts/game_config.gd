@@ -52,10 +52,10 @@ static var LEVEL_UP: Dictionary = {
 # 三、货币系统
 # ===================================================================
 static var CURRENCY: Dictionary = {
-	"gold":             { "name": "金币", "icon": "🪙", "desc": "通用货币，用于购买和强化" },
-	"revive_coin":      { "name": "复活币", "icon": "♻️", "desc": "战斗中复活一次" },
-	"lottery_ticket":   { "name": "彩票", "icon": "🎟️", "desc": "用于彩票格抽奖" },
-	"diamond":          { "name": "命中宝石", "icon": "💎", "desc": "宝石材料，不属于货币" },
+	"gold":             { "name": "金币", "icon": "金", "desc": "通用货币，用于购买和强化" },
+	"revive_coin":      { "name": "复活币", "icon": "复", "desc": "战斗中复活一次" },
+	"lottery_ticket":   { "name": "彩票", "icon": "彩", "desc": "用于彩票格抽奖" },
+	"diamond":          { "name": "命中宝石", "icon": "钻", "desc": "宝石材料，不属于货币" },
 }
 
 # ===================================================================
@@ -64,14 +64,14 @@ static var CURRENCY: Dictionary = {
 #    type_id 对应 item_db.gd 的物品类型编号
 # ===================================================================
 static var EQUIP_SLOTS: Array[Dictionary] = [
-	{ "key": "weapon",   "name": "武器",  "type_id": 1, "icon": "⚔️" },
-	{ "key": "armor",    "name": "防具",  "type_id": 2, "icon": "🛡️" },
-	{ "key": "shoes",    "name": "鞋子",  "type_id": 3, "icon": "👟" },
-	{ "key": "ring",     "name": "戒指",  "type_id": 4, "icon": "💍" },
-	{ "key": "necklace", "name": "项链",  "type_id": 5, "icon": "📿" },
-	{ "key": "cape",     "name": "披风",  "type_id": 6, "icon": "🧣" },
-	{ "key": "helmet",   "name": "头盔",  "type_id": 7, "icon": "⛑️" },
-	{ "key": "charm",    "name": "护符",  "type_id": 8, "icon": "🍀" },
+	{ "key": "weapon",   "name": "武器",  "type_id": 1, "icon": "武" },
+	{ "key": "armor",    "name": "防具",  "type_id": 2, "icon": "防" },
+	{ "key": "shoes",    "name": "鞋子",  "type_id": 3, "icon": "鞋" },
+	{ "key": "ring",     "name": "戒指",  "type_id": 4, "icon": "戒" },
+	{ "key": "necklace", "name": "项链",  "type_id": 5, "icon": "链" },
+	{ "key": "cape",     "name": "披风",  "type_id": 6, "icon": "披" },
+	{ "key": "helmet",   "name": "头盔",  "type_id": 7, "icon": "盔" },
+	{ "key": "charm",    "name": "护符",  "type_id": 8, "icon": "符" },
 ]
 
 # ===================================================================

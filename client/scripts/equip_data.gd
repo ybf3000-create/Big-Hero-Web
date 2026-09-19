@@ -38,14 +38,14 @@ static var TYPE_ID_TO_SLOT: Dictionary = {
 
 # 宝石数据 { id: { name, icon, desc } }
 static var GEM_DEFS: Dictionary = {
-	1: { "id": 1, "name": "红宝石", "icon": "🔴", "desc": "攻击力 +10/级" },
-	2: { "id": 2, "name": "蓝宝石", "icon": "🔵", "desc": "防御力 +10/级" },
-	3: { "id": 3, "name": "绿宝石", "icon": "🟢", "desc": "生命值 +50/级" },
-	4: { "id": 4, "name": "黄宝石", "icon": "🟡", "desc": "暴击率 +0.5%/级" },
-	5: { "id": 5, "name": "紫宝石", "icon": "🟣", "desc": "技能伤害 +0.5%/级" },
-	6: { "id": 6, "name": "钻石",   "icon": "💎", "desc": "命中率 +0.5%/级" },
-	7: { "id": 7, "name": "橙宝石", "icon": "🟠", "desc": "暴击伤害 +2%/级" },
-	8: { "id": 8, "name": "银宝石", "icon": "⚪", "desc": "格挡率 +0.5%/级" },
+	1: { "id": 1, "name": "红宝石", "icon": "红", "desc": "攻击力 +10/级" },
+	2: { "id": 2, "name": "蓝宝石", "icon": "蓝", "desc": "防御力 +10/级" },
+	3: { "id": 3, "name": "绿宝石", "icon": "绿", "desc": "生命值 +50/级" },
+	4: { "id": 4, "name": "黄宝石", "icon": "黄", "desc": "暴击率 +0.5%/级" },
+	5: { "id": 5, "name": "紫宝石", "icon": "紫", "desc": "技能伤害 +0.5%/级" },
+	6: { "id": 6, "name": "钻石",   "icon": "钻", "desc": "命中率 +0.5%/级" },
+	7: { "id": 7, "name": "橙宝石", "icon": "橙", "desc": "暴击伤害 +2%/级" },
+	8: { "id": 8, "name": "银宝石", "icon": "银", "desc": "格挡率 +0.5%/级" },
 }
 
 # 装备实例数据结构:
@@ -55,7 +55,7 @@ static var GEM_DEFS: Dictionary = {
 #   slot_type_id: int  -- type_id 1~8
 #   quality: int       -- 0~4
 #   base_name: String  -- 基础名（从图标配置随机）
-#   icon: String       -- emoji 图标
+	#   icon: String       -- 中文短标签（仅用于文字降级显示）
 #   main_stat: String  -- 主属性名
 #   main_value: float  -- 主属性值
 #   affixes: Array[{name, value}] -- 附加词条

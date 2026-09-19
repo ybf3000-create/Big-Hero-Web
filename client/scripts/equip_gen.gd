@@ -243,7 +243,7 @@ static func generate(slot_name: String, level: int = 1, options: Dictionary = {}
 		"quality": quality,
 		"quality_name": EquipDataCls.QUALITY_NAMES.get(quality, "???"),
 		"base_name": icon_info.get("name", "???"),
-		"icon": icon_info.get("icon", "❓"),
+		"icon": icon_info.get("icon", "装"),
 		"icon_path": icon_info.get("icon_path", ""),
 		"main_stat": main["name"],
 		"main_value": main_value,
