@@ -314,6 +314,29 @@ test("game HTTP endpoints expose state and roll result", async (context) => {
   await app.close();
 });
 
+test("deleted character can be recreated and immediately load authoritative game state", async (context) => {
+  const { directory, repository } = await setup();
+  context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
+  repository.insertInviteCode("recreate-flow-invite", hashSecret("RECREATEFLOWINVITE"));
+  const app = await buildApp({ repository, passwordHasher: new TestHasher() });
+  const register = await app.inject({ method: "POST", url: "/api/v1/auth/register", payload: { rules_version: "network-1", request_id: "recreate_register", invite_code: "RECREATE-FLOW-INVITE", username: "recreate_hero", password: "Good-password-2026", password_confirm: "Good-password-2026" } });
+  assert.equal(register.statusCode, 201);
+  const login = await app.inject({ method: "POST", url: "/api/v1/auth/login", payload: { rules_version: "network-1", username: "recreate_hero", password: "Good-password-2026" } });
+  const token = login.json().session.token as string;
+  const headers = { authorization: `Bearer ${token}` };
+  const first = await app.inject({ method: "POST", url: "/api/v1/characters", headers, payload: { rules_version: "network-1", request_id: "recreate_character_1", name: "重建勇者" } });
+  assert.equal(first.statusCode, 201);
+  const deleted = await app.inject({ method: "POST", url: "/api/v1/characters/delete", headers, payload: { rules_version: "network-1", confirm_name: "重建勇者" } });
+  assert.equal(deleted.statusCode, 200);
+  const recreated = await app.inject({ method: "POST", url: "/api/v1/characters", headers, payload: { rules_version: "network-1", request_id: "recreate_character_2", name: "重建勇者" } });
+  assert.equal(recreated.statusCode, 201);
+  const state = await app.inject({ method: "GET", url: "/api/v1/game/state", headers });
+  assert.equal(state.statusCode, 200);
+  assert.equal(state.json().character.id, recreated.json().character.id);
+  assert.equal(state.json().state.version, 1);
+  await app.close();
+});
+
 test("battle grids return a browser-playable combat timeline", () => {
   let state = createInitialGameState();
   state.mapGrids = state.mapGrids.map(() => 1);

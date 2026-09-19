@@ -284,6 +284,8 @@ func _on_character_action() -> void:
 			_show_response_error(response)
 			return
 		_show_character_entry()
+		_show_status("角色创建成功，正在同步并进入游戏…", false)
+		await _start_game(response.get("character", {}) as Dictionary)
 		return
 	await _start_game(NetworkClient.character as Dictionary)
 
