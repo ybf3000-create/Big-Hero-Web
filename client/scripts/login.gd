@@ -304,22 +304,56 @@ func _on_delete_character() -> void:
 		return
 	var current := NetworkClient.character as Dictionary
 	var character_name := str(current.get("name", ""))
-	var dialog := ConfirmationDialog.new()
-	dialog.title = "删除角色"
-	dialog.dialog_text = "此操作不可撤销。角色等级、装备、背包、拍卖记录都会被删除，账号会保留。\n请输入角色名后确认："
-	dialog.size = Vector2(460, 250)
+	var dialog := Panel.new()
+	dialog.name = "DeleteCharacterDialog"
+	dialog.size = Vector2(460, 270)
+	dialog.position = (get_viewport_rect().size - dialog.size) * 0.5
+	dialog.z_index = 100
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color("191d27")
+	panel_style.border_color = Color("6b4145")
+	panel_style.set_border_width_all(2)
+	panel_style.set_corner_radius_all(6)
+	dialog.add_theme_stylebox_override("panel", panel_style)
+	var title := Label.new()
+	title.text = "删除当前角色"
+	title.position = Vector2(24, 18)
+	title.size = Vector2(412, 32)
+	title.add_theme_font_size_override("font_size", 22)
+	title.add_theme_color_override("font_color", Color("ffaaa5"))
+	dialog.add_child(title)
+	var body := Label.new()
+	body.text = "此操作不可撤销。等级、装备、背包、拍卖记录都会被删除，账号会保留。\n请输入完整角色名后确认："
+	body.position = Vector2(24, 58)
+	body.size = Vector2(412, 48)
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_theme_font_size_override("font_size", 14)
+	body.add_theme_color_override("font_color", Color("d7ddea"))
+	dialog.add_child(body)
 	var input := LineEdit.new()
-	input.custom_minimum_size = Vector2(0, 38)
-	input.placeholder_text = character_name
-	dialog.get_vbox().add_child(input)
-	dialog.confirmed.connect(_confirm_delete_character.bind(dialog, input, character_name))
-	dialog.canceled.connect(dialog.queue_free)
+	input.position = Vector2(24, 122)
+	input.size = Vector2(412, 40)
+	input.placeholder_text = "请输入：" + character_name
+	input.add_theme_font_size_override("font_size", 16)
+	dialog.add_child(input)
+	var cancel := Button.new()
+	cancel.text = "取消"
+	cancel.position = Vector2(24, 194)
+	cancel.size = Vector2(190, 42)
+	cancel.pressed.connect(dialog.queue_free)
+	dialog.add_child(cancel)
+	var confirm := Button.new()
+	confirm.text = "确认删除"
+	confirm.position = Vector2(246, 194)
+	confirm.size = Vector2(190, 42)
+	_style_primary_button(confirm)
+	confirm.pressed.connect(_confirm_delete_character.bind(dialog, input, character_name))
+	dialog.add_child(confirm)
 	add_child(dialog)
-	dialog.popup_centered()
 	input.grab_focus()
 
 
-func _confirm_delete_character(dialog: ConfirmationDialog, input: LineEdit, character_name: String) -> void:
+func _confirm_delete_character(dialog: Control, input: LineEdit, character_name: String) -> void:
 	if input.text.strip_edges() != character_name:
 		_show_status("角色名不匹配，未执行删除", true)
 		dialog.queue_free()
@@ -490,6 +524,7 @@ func _set_busy(busy: bool) -> void:
 	_submit.disabled = busy
 	_enter_game.disabled = busy
 	_logout_account.disabled = busy
+	_delete_character.disabled = busy
 	_login_tab.disabled = busy
 	_register_tab.disabled = busy
 
