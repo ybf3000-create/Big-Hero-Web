@@ -1,6 +1,7 @@
 # Keep the web client, server, and game design documents in this repository.
 /*
 !/.gitignore
+!/.gitattributes
 !/.github/
 !/LICENSE
 !/README.md

@@ -37,7 +37,7 @@ npm run migrate
 npm run invite:create -- --count=5
 ```
 
-之后双击 `SERVER/start-server.bat`，保持窗口运行。服务器本机访问 `http://127.0.0.1:3000/game/`；同一 ZeroTier 网络中的其他电脑访问 `http://服务器的ZeroTier地址:3000/game/`。不需要安装 Godot、不需要启动前端开发服务器，也不需要输入端口转发命令。
+之后关闭旧服务器窗口，双击 `SERVER/update-and-start-server.bat` 并保持窗口运行。脚本会自动检测GitHub版本；有更新时先备份数据库，再安全更新、安装变化的依赖、迁移、编译并启动。GitHub暂时不可用时会启动当前版本，本地项目文件有改动时则跳过更新以免覆盖。服务器本机访问 `http://127.0.0.1:3000/game/`；同一 ZeroTier 网络中的其他电脑访问 `http://服务器的ZeroTier地址:3000/game/`。不需要安装 Godot、不需要启动前端开发服务器，也不需要输入端口转发命令。
 
 玩家页面由 Godot 4.4 无多线程Web导出生成，发布文件位于 `SERVER/public/game/`。Godot重新导出后，在 `SERVER` 目录执行 `npm run web:patch`，再执行 `npm run check`；兼容工具会保留HTTPS能力，同时允许无多线程版本通过 ZeroTier 私网HTTP启动。详细部署、测试和备份说明见[`SERVER/README.md`](SERVER/README.md)。
 
@@ -66,3 +66,4 @@ npm run invite:create -- --count=5
 | v0.5 | 2026-09-16 | 明确只维护Godot浏览器客户端与服务器；桌面端停止交付，原版表现与定案仍为还原基准 |
 | v0.6 | 2026-09-17 | 同步策划案与数值总表；接入服务端权威玩法、记住登录、聊天、拍卖行和本机浏览器验收 |
 | v0.7 | 2026-09-19 | 新增玩家删除角色功能：输入完整角色名确认，账号保留，服务端事务清理角色资产并重新导出Godot网页客户端 |
+| v0.8 | 2026-09-19 | 新增服务器自动检查版本、备份、更新并启动的双击脚本，减少日常维护命令 |
