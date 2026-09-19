@@ -69,7 +69,11 @@ if not defined LOCAL_FULL (
 
 echo Installed version: !LOCAL_SHORT!
 echo Checking GitHub for updates...
-git -c http.proxy= -c https.proxy= fetch --quiet origin main
+git fetch --quiet origin main
+if errorlevel 1 (
+  echo GitHub check through the configured network failed. Retrying without a proxy...
+  git -c http.proxy= -c https.proxy= fetch --quiet origin main
+)
 if errorlevel 1 (
   echo WARNING: GitHub is unavailable. Starting installed version !LOCAL_SHORT!.
   goto :start_server
