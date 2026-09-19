@@ -200,6 +200,8 @@ func _ready() -> void:
 			NetworkClient.realtime_authenticated.connect(_on_network_reconnected)
 		if not NetworkClient.realtime_disconnected.is_connected(_on_network_disconnected):
 			NetworkClient.realtime_disconnected.connect(_on_network_disconnected)
+		if not NetworkClient.session_invalidated.is_connected(_on_network_session_invalidated):
+			NetworkClient.session_invalidated.connect(_on_network_session_invalidated)
 		if not NetworkClient.kicked.is_connected(_on_network_kicked):
 			NetworkClient.kicked.connect(_on_network_kicked)
 	if not _pending_offline_reward.is_empty():
@@ -1851,6 +1853,12 @@ func _on_network_disconnected(message: String) -> void:
 
 
 func _on_network_kicked(message: String) -> void:
+	if not _is_network_game():
+		return
+	_return_to_network_login()
+
+
+func _on_network_session_invalidated(message: String) -> void:
 	if not _is_network_game():
 		return
 	_return_to_network_login()

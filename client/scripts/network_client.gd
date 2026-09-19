@@ -2,6 +2,7 @@ extends Node
 
 signal realtime_authenticated
 signal realtime_disconnected(message: String)
+signal session_invalidated(message: String)
 signal kicked(message: String)
 signal chat_history_received(messages: Array)
 signal chat_message_received(message: Dictionary)
@@ -270,6 +271,10 @@ func _request_json(path: String, method: HTTPClient.Method, payload: Dictionary,
 		return _error_response("INVALID_RESPONSE", "服务器返回了无法识别的数据")
 	var response := parsed as Dictionary
 	response["http_status"] = response_code
+	if authenticated and response_code == 401:
+		var response_error: Dictionary = response.get("error", {}) as Dictionary
+		if str(response_error.get("code", "")) == "SESSION_INVALID":
+			session_invalidated.emit(str(response_error.get("message", "登录已失效，请重新登录")))
 	return response
 
 
@@ -293,6 +298,12 @@ func _process(delta: float) -> void:
 				_heartbeat_elapsed = 0.0
 				_websocket.send_text(JSON.stringify({"type": "heartbeat"}))
 	elif state == WebSocketPeer.STATE_CLOSED and _should_reconnect and not session_token.is_empty():
+		var close_code := _websocket.get_close_code()
+		if close_code == 4001 or close_code == 4003:
+			_should_reconnect = false
+			_websocket_authenticated = false
+			session_invalidated.emit("登录已失效，请重新登录")
+			return
 		_websocket_authenticated = false
 		_authentication_sent = false
 		_reconnect_elapsed += delta

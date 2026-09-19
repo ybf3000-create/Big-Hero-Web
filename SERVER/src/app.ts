@@ -667,6 +667,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           try {
             identity = sessionManager.attachSocket(hashSecret(message.token), socket);
           } catch {
+            if (socket.readyState === 1) socket.send(JSON.stringify({
+              type: "error",
+              code: "SESSION_INVALID",
+              message: "登录已失效，请重新登录",
+            }));
             socket.close(4003, "SESSION_INVALID");
             return;
           }
