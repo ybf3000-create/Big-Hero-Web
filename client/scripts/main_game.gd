@@ -3243,6 +3243,24 @@ func _show_inventory_panel() -> void:
 	_build_inventory_panel()
 
 
+func _raise_ui_panel(panel: CanvasItem) -> void:
+	# Inventory and stats can be opened on top of each other. Use a dynamic
+	# sibling z-index so the latest panel, including its tab buttons, is always
+	# above the panel that was opened before it.
+	var highest := 0
+	for child in get_children():
+		if child == panel or not child is CanvasItem:
+			continue
+		var child_name := str(child.name)
+		if not child_name.ends_with("Panel"):
+			continue
+		var child_z := int((child as CanvasItem).z_index)
+		if child_z < 99:
+			highest = maxi(highest, child_z)
+	panel.z_index = mini(98, highest + 1)
+	panel.move_to_front()
+
+
 func _build_inventory_panel() -> void:
 
 	var panel: Panel = Panel.new()
@@ -3420,7 +3438,9 @@ func _build_inventory_panel() -> void:
 						slot_btn.accept_event()
 						if ev.double_click:
 							_cancel_pending_detail_click()
-							_on_unequip_instance(esn)
+							if is_instance_valid(panel):
+								panel.queue_free()
+							await _on_unequip_instance(esn)
 							_show_inventory_panel()
 						else:
 							_queue_detail_click(func():
@@ -3558,6 +3578,7 @@ func _build_inventory_panel() -> void:
 	panel.add_child(close_btn)
 
 	add_child(panel)
+	_raise_ui_panel(panel)
 
 
 func _slot_enhance_cost(slot_names: Array[String], levels: int) -> int:
@@ -4178,7 +4199,9 @@ func _build_equip_tab(area: Panel, main_panel: Panel) -> void:
 					btn.accept_event()
 					if ev.double_click:
 						_cancel_pending_detail_click()
-						_on_equip_instance(eidx)
+						if is_instance_valid(main_panel):
+							main_panel.queue_free()
+						await _on_equip_instance(eidx)
 						_show_inventory_panel()
 					else:
 						_queue_detail_click(func():
@@ -4380,8 +4403,8 @@ func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_pane
 		var eid: int = idx
 		equip_btn.pressed.connect(func():
 			_close_all_tooltips()
-			_on_equip_instance(eid)
 			main_panel.queue_free()
+			await _on_equip_instance(eid)
 			_show_inventory_panel()
 		)
 		tip.add_child(equip_btn)
@@ -4424,8 +4447,8 @@ func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_pane
 		var esn: String = slot_name
 		unequip_btn.pressed.connect(func():
 			_close_all_tooltips()
-			_on_unequip_instance(esn)
 			main_panel.queue_free()
+			await _on_unequip_instance(esn)
 			_show_inventory_panel()
 		)
 		tip.add_child(unequip_btn)
@@ -4658,7 +4681,7 @@ func _find_instance_idx(eqp: Dictionary) -> int:
 ## 卸下装备
 func _on_unequip_instance(slot_name: String) -> void:
 	if _is_network_game():
-		_run_network_game_command("equipment/unequip", {"slot": slot_name}, "装备已卸下")
+		await _run_network_game_command("equipment/unequip", {"slot": slot_name}, "装备已卸下")
 		return
 	print("[DEBUG] _on_unequip_instance called, slot=", slot_name)
 	var eqp: Dictionary = equipment.unequip(slot_name)
@@ -4688,7 +4711,7 @@ func _on_equip_instance(idx: int) -> void:
 		return
 	var eqp: Dictionary = equip_instances[idx]
 	if _is_network_game():
-		_run_network_game_command("equipment/equip", {"equipment_id": str(eqp.get("server_id", ""))}, "装备已穿戴")
+		await _run_network_game_command("equipment/equip", {"equipment_id": str(eqp.get("server_id", ""))}, "装备已穿戴")
 		return
 	print("[DEBUG] eqp keys: ", eqp.keys(), " slot: ", eqp.get("slot","?"))
 	var slot_name: String = eqp.get("slot", "")
@@ -5967,6 +5990,7 @@ func _show_stats_panel() -> void:
 	if _stats_tab == "skill":
 		_build_skill_tab(panel)
 		add_child(panel)
+		_raise_ui_panel(panel)
 		return
 
 	# ========== 属性面板内容 ==========
@@ -6158,6 +6182,7 @@ func _show_stats_panel() -> void:
 	panel.add_child(footer)
 
 	add_child(panel)
+	_raise_ui_panel(panel)
 
 
 ## 属性气泡说明
