@@ -558,6 +558,8 @@ test("server poker reward consumes exactly three records and auto dismantle is a
   const first = applyGameCommand(state, { level: 1, experience: 0, gold: 0 }, "roll", {});
   assert.deepEqual(first.state.pokerRecords, []);
   assert.equal(typeof (first.event.poker as Record<string, unknown>).matched, "boolean");
+  assert.equal((first.event.poker as Record<string, unknown>).records instanceof Array, true);
+  assert.equal(((first.event.poker as Record<string, unknown>).records as unknown[]).length, 3);
 });
 
 test("empty slots enhance atomically and skill priorities persist", async (context) => {

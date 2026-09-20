@@ -383,11 +383,11 @@ function pokerReward(state: GameState, character: CharacterProgress): Record<str
   const straight = values[1]! - values[0]! === 1 && values[2]! - values[1]! === 1;
   const maxCount = Math.max(...values.map((value) => values.filter((entry) => entry === value).length));
   const hand = flush && straight ? ["同花顺", 10] : maxCount === 3 ? ["三条", 6] : straight ? ["顺子", 4] : flush ? ["同花", 3] : maxCount === 2 ? ["一对", 2] : null;
-  if (!hand) return { matched: false };
+  if (!hand) return { matched: false, records };
   const base = Math.floor(Math.random() * 41) + 10;
   const gold = character.level * base * Number(hand[1]);
   const actualGold = grantMapGold(state, character, gold);
-  return { matched: true, hand: hand[0], multiplier: hand[1], base, gold: actualGold, message: `${hand[0]} ×${hand[1]}，+${actualGold}金币` };
+  return { matched: true, records, hand: hand[0], multiplier: hand[1], base, gold: actualGold, message: `${hand[0]} ×${hand[1]}，+${actualGold}金币` };
 }
 
 function weightedPick<T extends { weight: number }>(entries: T[]): T {

@@ -104,14 +104,21 @@ func build() -> void:
 	_label(bar, "GoldLabel", str(main_game.player_gold), Vector2(495, 46), 16, Color("a56f00"))
 
 	var life_card := _card(bar, Vector2(566, 22), Vector2(102, 60))
+	life_card.name = "LifeCard"
 	_label(life_card, "LifeCaption", "复活次数", Vector2(37, 7), 9, MUTED)
-	_label(life_card, "LifeIcon", "生命", Vector2(10, 18), 15, PRIMARY)
-	_label(bar, "ReviveLabel", str(main_game.player_revive) + " / " + str(main_game.player_max_revive), Vector2(603, 46), 15, PRIMARY)
+	var life_icon := _label(life_card, "LifeIcon", "生命", Vector2(9, 28), 14, PRIMARY)
+	life_icon.size = Vector2(35, 24)
+	life_icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	life_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var revive_lbl := _label(life_card, "ReviveLabel", str(main_game.player_revive) + " / " + str(main_game.player_max_revive), Vector2(44, 28), 14, PRIMARY)
+	revive_lbl.size = Vector2(52, 24)
+	revive_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	revive_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 	var reward_card := _card(bar, Vector2(676, 22), Vector2(104, 60))
-	_label(reward_card, "RewardCaption", "掷骰奖励", Vector2(36, 7), 9, MUTED)
-	_label(reward_card, "RewardIcon", "奖励", Vector2(7, 19), 12, GOLD)
-	var reward_lbl := _label(bar, "DiceRewardLabel", "过起点 +50金", Vector2(710, 46), 11, GOOD)
+	_label(reward_card, "RewardCaption", "已绕圈数", Vector2(32, 7), 9, MUTED)
+	_label(reward_card, "RewardIcon", "圈数", Vector2(8, 19), 12, GOLD)
+	var reward_lbl := _label(bar, "DiceRewardLabel", str(main_game.completed_laps) + " 圈", Vector2(710, 46), 11, GOOD)
 	reward_lbl.size = Vector2(68, 30)
 
 	# 保留逻辑引用，花色历史不再常驻展示。
@@ -145,9 +152,9 @@ func build() -> void:
 		poker_suit.size = Vector2(38, 36)
 		poker_suit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
-	var result_lbl := _label(bar, "PokerResultLabel", "", Vector2(1090, 6), 11, Color("a56f00"))
-	result_lbl.size = Vector2(160, 18)
-	result_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	var result_lbl := _label(bar, "PokerResultLabel", "", Vector2(916, 84), 10, Color("a56f00"))
+	result_lbl.size = Vector2(338, 14)
+	result_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 	# 朱红金边分隔线
 	var red_line := ColorRect.new()
@@ -179,9 +186,18 @@ func refresh() -> void:
 	var gold_lbl: Label = main_game.get_node_or_null("TopBar/GoldLabel") as Label
 	if gold_lbl:
 		gold_lbl.text = str(main_game.player_gold)
-	var rv_lbl: Label = main_game.get_node_or_null("TopBar/ReviveLabel") as Label
+	var rv_lbl: Label = main_game.get_node_or_null("TopBar/LifeCard/ReviveLabel") as Label
 	if rv_lbl:
 		rv_lbl.text = str(main_game.player_revive) + " / " + str(main_game.player_max_revive)
+	var laps_lbl: Label = main_game.get_node_or_null("TopBar/DiceRewardLabel") as Label
+	if laps_lbl:
+		laps_lbl.text = str(main_game.completed_laps) + " 圈"
+
+
+func set_poker_result(text: String) -> void:
+	var result_lbl: Label = main_game.get_node_or_null("TopBar/PokerResultLabel") as Label
+	if result_lbl:
+		result_lbl.text = text
 
 
 func refresh_compact_stats() -> void:
@@ -205,11 +221,12 @@ func refresh_poker_slots() -> void:
 		var suit_lbl: Label = main_game.get_node_or_null("TopBar/PokerSlotBg" + str(i) + "/PokerSuit" + str(i)) as Label
 		if i < main_game.poker_records.size():
 			var rec := main_game.poker_records[i] as Dictionary
+			var suit := _record_suit(rec)
 			if val_lbl:
-				val_lbl.text = str(rec["value"])
+				val_lbl.text = str(int(rec.get("value", 0)))
 			if suit_lbl:
-				suit_lbl.text = rec["suit"]
-				suit_lbl.add_theme_color_override("font_color", UIUtils.suit_color(main_game.last_dice_suit if rec["suit"] == "" else rec["suit"]))
+				suit_lbl.text = suit
+				suit_lbl.add_theme_color_override("font_color", UIUtils.suit_color(suit))
 		else:
 			if val_lbl:
 				val_lbl.text = "-"
@@ -217,14 +234,28 @@ func refresh_poker_slots() -> void:
 				suit_lbl.text = ""
 
 
+func _record_suit(record: Dictionary) -> String:
+	var raw: Variant = record.get("suit", "")
+	if raw is float or raw is int:
+		return main_game.SUITS[clampi(int(raw), 0, main_game.SUITS.size() - 1)]
+	var text := str(raw)
+	if text.is_valid_int():
+		return main_game.SUITS[clampi(text.to_int(), 0, main_game.SUITS.size() - 1)]
+	return text if main_game.SUITS.has(text) else ""
+
+
 func check_poker_hand() -> void:
 	if main_game.poker_records.size() < 3:
 		return
+	var records: Array[Dictionary] = []
+	for raw in main_game.poker_records.slice(-3):
+		if raw is Dictionary:
+			records.append(raw as Dictionary)
 	var vals: Array[int] = []
 	var suits_arr: Array[String] = []
-	for record in main_game.poker_records:
-		vals.append(record["value"] as int)
-		suits_arr.append(record["suit"] as String)
+	for record in records:
+		vals.append(int(record.get("value", 0)))
+		suits_arr.append(_record_suit(record))
 	var sorted: Array[int] = vals.duplicate()
 	sorted.sort()
 	var is_flush: bool = suits_arr[0] == suits_arr[1] and suits_arr[1] == suits_arr[2]
@@ -255,4 +286,6 @@ func check_poker_hand() -> void:
 			result_lbl.text = hand_name + " ×" + str(multiplier) + "  +" + str(bonus) + "金"
 	else:
 		if result_lbl:
-			result_lbl.text = ""
+			result_lbl.text = "未成牌"
+	main_game.poker_records.clear()
+	refresh_poker_slots()

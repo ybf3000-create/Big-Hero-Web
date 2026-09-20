@@ -128,6 +128,7 @@ var _network_roll_in_flight: bool = false
 var _network_action_in_flight: bool = false
 var _network_state_recovery_in_flight: bool = false
 var _pending_network_response: Dictionary = {}
+var _battle_active: bool = false
 var _move_step: int = 0
 var _move_total: int = 0
 var _move_timer: float = 0.0
@@ -625,7 +626,8 @@ func _load_from_save_data(data: Dictionary) -> void:
 		last_dice_history.append(int(item))
 	poker_records.clear()
 	for item in data.get("poker_records", []):
-		poker_records.append(item as Dictionary)
+		if item is Dictionary:
+			poker_records.append(_normalize_poker_record(item as Dictionary))
 	inventory.from_dict(data.get("inventory", []))
 	equipment.from_dict(data.get("equipment", {}))
 	equip_instances.clear()
@@ -677,6 +679,17 @@ func _load_from_save_data(data: Dictionary) -> void:
 ## ============================================================
 ## 构建存档数据
 ## ============================================================
+func _normalize_poker_record(raw: Dictionary) -> Dictionary:
+	var value := clampi(int(raw.get("value", 0)), 1, 6)
+	var suit_raw: Variant = raw.get("suit", "")
+	var suit_index := -1
+	if suit_raw is float or suit_raw is int:
+		suit_index = int(suit_raw)
+	else:
+		suit_index = SUITS.find(str(suit_raw))
+	return {"value": value, "suit": SUITS[clampi(suit_index, 0, SUITS.size() - 1)] if suit_index >= 0 else ""}
+
+
 func _build_save_data() -> Dictionary:
 	return {
 		"character_name": player_name,
@@ -730,7 +743,7 @@ func _build_save_data() -> Dictionary:
 ## 掷骰逻辑 — 使用 DiceRoller + 步进移动 + GridExecutor
 ## ============================================================
 func _on_dice_roll() -> void:
-	if _moving:
+	if _moving or _battle_active or get_node_or_null("MapArea/BattleView"):
 		return  # 移动中不能再次掷骰
 	if _is_network_game():
 		_on_network_dice_roll()
@@ -842,7 +855,7 @@ func _process(delta: float) -> void:
 			_check_lottery_draw()
 			var rl: Label = $TopBar/DiceRewardLabel as Label
 			if rl:
-				rl.text = "过起点 +50金!"
+				rl.text = str(completed_laps) + " 圈"
 			top_bar.refresh()
 
 		_refresh_grid_display()
@@ -985,11 +998,20 @@ func _apply_network_roll_response(response: Dictionary) -> void:
 	_load_from_save_data(data)
 	if completed_laps > previous_laps:
 		var reward_label: Label = $TopBar/DiceRewardLabel as Label
-		if reward_label: reward_label.text = "过起点 +50金!"
+		if reward_label: reward_label.text = str(completed_laps) + " 圈"
 	_refresh_grid_display()
 	top_bar.refresh()
 	top_bar.refresh_compact_stats()
 	top_bar.refresh_poker_slots()
+	var poker: Dictionary = event.get("poker", {}) as Dictionary
+	if not poker.is_empty():
+		var display_records: Array[Dictionary] = []
+		for raw_record in poker.get("records", []):
+			if raw_record is Dictionary:
+				display_records.append(_normalize_poker_record(raw_record as Dictionary))
+		poker_records = display_records
+		top_bar.refresh_poker_slots()
+		top_bar.set_poker_result(str(poker.get("message", "未成牌")))
 	if str(event.get("kind", "")) == "construction" and str(event.get("action", "")) == "choose":
 		_show_construction_choice(int(event.get("gridIndex", player_grid_index)), event)
 		return
@@ -1192,10 +1214,18 @@ func _show_battle_view(edata: Dictionary) -> void:
 	if not area or area.get_node_or_null("BattleView"):
 		return
 	_stop_auto_timer()
+	_battle_active = true
+	var roll_button := get_node_or_null("BottomBar/DiceRollBtn") as Button
+	if roll_button:
+		roll_button.disabled = true
 	var view: Control = BattleViewCls.new()
 	view.name = "BattleView"
 	area.add_child(view)
 	view.closed.connect(func():
+		_battle_active = false
+		var button := get_node_or_null("BottomBar/DiceRollBtn") as Button
+		if button:
+			button.disabled = false
 		if auto_play_enabled:
 			_start_auto_timer()
 	)
@@ -1706,7 +1736,7 @@ func _add_exp(amount: int) -> void:
 		player_free_points += 2
 		player_exp_max = int(100.0 * pow(1.12, player_level - 1))
 		_refresh_player_hp_bounds(false)
-		_show_float_text("🎉 升级! Lv." + str(player_level) + " 获得2点自由属性点", Color(0.3, 1.0, 0.6))
+		_show_float_text("升级! Lv." + str(player_level) + " 获得2点自由属性点", Color(0.3, 1.0, 0.6))
 	if player_level >= MAX_PLAYER_LEVEL:
 		player_level = MAX_PLAYER_LEVEL
 		player_exp = 0
@@ -2101,7 +2131,7 @@ func _show_lottery_popup(win_num: String, hit: bool) -> void:
 		return
 
 	if hit:
-		status_lbl.text = "🎉 恭喜中奖！"
+		status_lbl.text = "恭喜中奖！"
 		status_lbl.add_theme_font_size_override("font_size", 22)
 		status_lbl.add_theme_color_override("font_color", Color("c94a55"))
 
@@ -2303,7 +2333,9 @@ func _show_float_text(text: String, clr: Color = Color.WHITE) -> void:
 		add_child(layer)
 
 	var lbl: Label = Label.new()
-	lbl.text = text
+	# Strip emoji and unsupported pictographs instead of letting the web font
+	# render tofu boxes; all gameplay messages retain their Chinese/ASCII text.
+	lbl.text = UIUtils.plain_text(text, "提示")
 	lbl.add_theme_font_size_override("font_size", 26)
 	lbl.add_theme_color_override("font_color", clr)
 	lbl.add_theme_color_override("font_outline_color", Color.BLACK)
