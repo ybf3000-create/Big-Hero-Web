@@ -3,6 +3,9 @@ extends Control
 
 signal closed
 
+## 自动挂机战斗在结算页短暂展示后自动返回地图；手动模式由玩家确认。
+var auto_continue: bool = false
+
 const HERO_PATH := "res://assets/hreo.png"
 const BOSS_DIR := "res://assets/battle_characters/boss/"
 const MONSTER_DIR := "res://assets/battle_characters/monsters/"
@@ -44,6 +47,7 @@ var _challenge_dps: Label
 var _challenge_rank: Label
 var _challenge_total := 0.0
 var _challenge_elapsed := 0.0
+var _result_closed := false
 
 
 func setup(edata: Dictionary) -> void:
@@ -931,11 +935,18 @@ func _show_result() -> void:
 	confirm.add_theme_stylebox_override("normal", _box(SHRINE, SHRINE_DARK, 2, 5))
 	confirm.add_theme_stylebox_override("hover", _box(SHRINE.lightened(0.12), GOLD, 2, 5))
 	confirm.add_theme_color_override("font_color", Color.WHITE)
-	confirm.pressed.connect(func():
-		closed.emit()
-		queue_free()
-	)
+	confirm.pressed.connect(_close_result)
 	panel.add_child(confirm)
+	if auto_continue:
+		get_tree().create_timer(1.0).timeout.connect(_close_result)
+
+
+func _close_result() -> void:
+	if _result_closed:
+		return
+	_result_closed = true
+	closed.emit()
+	queue_free()
 
 
 func _enemy_texture_path(unit: Dictionary) -> String:

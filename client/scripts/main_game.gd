@@ -557,6 +557,9 @@ func _build_bottom_bar() -> void:
 ## ============================================================
 func _on_auto_play_toggled(pressed: bool) -> void:
 	auto_play_enabled = pressed
+	var battle_view := get_node_or_null("MapArea/BattleView")
+	if battle_view:
+		battle_view.auto_continue = pressed
 	if pressed:
 		# 启动自动掷骰计时器
 		_start_auto_timer()
@@ -1220,6 +1223,7 @@ func _show_battle_view(edata: Dictionary) -> void:
 		roll_button.disabled = true
 	var view: Control = BattleViewCls.new()
 	view.name = "BattleView"
+	view.auto_continue = auto_play_enabled
 	area.add_child(view)
 	view.closed.connect(func():
 		_battle_active = false
