@@ -34,6 +34,9 @@ var _skip := false
 var _kind := "battle"
 var _event_label: Label
 var _combat_log: RichTextLabel
+var _combat_lines: Array[String] = []
+var _combat_log_at_top: bool = true
+var _combat_log_updating: bool = false
 var _status_tip_overlay: Button
 var _status_tip: Panel
 var _status_tip_title: Label
@@ -376,11 +379,19 @@ func _build_footer() -> void:
 	_combat_log.size = Vector2(320, 86)
 	_combat_log.bbcode_enabled = true
 	_combat_log.fit_content = false
-	_combat_log.scroll_active = false
+	_combat_log.scroll_active = true
+	_combat_log.scroll_following = false
+	_combat_log.custom_minimum_size = Vector2(320, 86)
 	_combat_log.add_theme_font_size_override("normal_font_size", 10)
 	_combat_log.add_theme_color_override("default_color", Color("4b393d"))
 	_combat_log.add_theme_stylebox_override("normal", _box(Color(1, 0.98, 0.95, 0.88), SHRINE, 2, 2))
 	add_child(_combat_log)
+	var combat_scroll := _combat_log.get_v_scroll_bar()
+	combat_scroll.value_changed.connect(func(value: float):
+		if _combat_log_updating:
+			return
+		_combat_log_at_top = value <= 0.5
+	)
 	var hint := Label.new()
 	hint.text = "点击状态图标查看效果"
 	hint.position = Vector2(1040, 490)
@@ -881,12 +892,15 @@ func _update_challenge_values() -> void:
 func _log_line(text: String, color: String) -> void:
 	if not _combat_log:
 		return
-	_combat_log.append_text("[color=%s]%s[/color]\n" % [color, text])
-	while _combat_log.get_parsed_text().count("\n") > 4:
-		var raw := _combat_log.text
-		var cut := raw.find("\n")
-		if cut < 0: break
-		_combat_log.text = raw.substr(cut + 1)
+	var old_scroll := _combat_log.get_v_scroll_bar().value
+	_combat_lines.push_front("[color=%s]%s[/color]" % [color, text])
+	_combat_log_updating = true
+	_combat_log.text = "\n".join(_combat_lines)
+	if _combat_log_at_top:
+		_combat_log.get_v_scroll_bar().value = 0.0
+	else:
+		_combat_log.get_v_scroll_bar().value = old_scroll
+	_combat_log_updating = false
 
 
 func _show_result() -> void:

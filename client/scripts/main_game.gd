@@ -105,7 +105,7 @@ var auto_dismantle_rules: Dictionary = {}
 var gem_bag: Array[Dictionary] = []   # [{gem_id, level, count}]
 var lottery_tickets: Array[int] = []  # 3位数 000~999, 最多10张
 var _tooltip_nodes: Array[Node] = []  # 当前打开的 tooltip 列表
-var _float_text_node: Label             # 当前飘字
+var _float_text_node: Control           # 当前飘字
 var active_buffs: Array[Dictionary] = []  # [{name, turns_remaining}]
 var lottery_draw_at: int = 0           # 下次开奖圈数
 var completed_laps: int = 0
@@ -2336,10 +2336,22 @@ func _show_float_text(text: String, clr: Color = Color.WHITE) -> void:
 		layer.layer = 128  # 最高渲染层
 		add_child(layer)
 
+	var backdrop := Panel.new()
+	backdrop.name = "FloatText"
+	backdrop.position = Vector2(390, 270)
+	backdrop.size = Vector2(500, 54)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var backdrop_style := StyleBoxFlat.new()
+	backdrop_style.bg_color = Color(0.10, 0.11, 0.13, 0.92)
+	backdrop_style.border_color = Color(0.82, 0.70, 0.38, 0.85)
+	backdrop_style.set_border_width_all(1)
+	backdrop_style.set_corner_radius_all(5)
+	backdrop.add_theme_stylebox_override("panel", backdrop_style)
 	var lbl: Label = Label.new()
 	# Strip emoji and unsupported pictographs instead of letting the web font
 	# render tofu boxes; all gameplay messages retain their Chinese/ASCII text.
 	lbl.text = UIUtils.plain_text(text, "提示")
+	lbl.add_theme_font_override("font", ThemeDB.fallback_font)
 	lbl.add_theme_font_size_override("font_size", 26)
 	lbl.add_theme_color_override("font_color", clr)
 	lbl.add_theme_color_override("font_outline_color", Color.BLACK)
@@ -2350,22 +2362,23 @@ func _show_float_text(text: String, clr: Color = Color.WHITE) -> void:
 	lbl.add_theme_constant_override("shadow_outline_size", 2)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.position = Vector2(390, 270)
-	lbl.size = Vector2(500, 44)
-	lbl.modulate.a = 0.0
-	layer.add_child(lbl)
-	_float_text_node = lbl
+	lbl.position = Vector2(10, 5)
+	lbl.size = Vector2(480, 44)
+	lbl.modulate.a = 1.0
+	backdrop.add_child(lbl)
+	layer.add_child(backdrop)
+	_float_text_node = backdrop
 
 	var tw := create_tween()
 	tw.set_parallel(false)
-	tw.tween_property(lbl, "modulate:a", 1.0, 0.2)
-	tw.tween_property(lbl, "position:y", 225, 1.8)
-	tw.parallel().tween_property(lbl, "modulate:a", 0.0, 1.8)
+	tw.tween_property(backdrop, "modulate:a", 1.0, 0.2)
+	tw.tween_property(backdrop, "position:y", 225, 1.8)
+	tw.parallel().tween_property(backdrop, "modulate:a", 0.0, 1.8)
 	tw.tween_callback(func():
-		if _float_text_node == lbl:
+		if _float_text_node == backdrop:
 			_float_text_node = null
-		if is_instance_valid(lbl):
-			lbl.queue_free()
+		if is_instance_valid(backdrop):
+			backdrop.queue_free()
 	)
 
 
@@ -2536,7 +2549,7 @@ func _build_lottery_tab(area: Panel, _main_panel: Panel) -> void:
 	var sy: float = gap
 
 	var title: Label = Label.new()
-	title.text = "🎫 彩票 (" + str(lottery_tickets.size()) + "/10)"
+	title.text = "彩票 (" + str(lottery_tickets.size()) + "/10)"
 	title.add_theme_font_size_override("font_size", 16)
 	title.add_theme_color_override("font_color", Color(1.0, 0.8, 0.3))
 	title.position = Vector2(gap, sy)
@@ -2548,8 +2561,9 @@ func _build_lottery_tab(area: Panel, _main_panel: Panel) -> void:
 		empty_lbl.text = "暂无彩票，走到彩票格可获取"
 		empty_lbl.add_theme_font_size_override("font_size", 12)
 		empty_lbl.add_theme_color_override("font_color", Color(0.4, 0.45, 0.5))
-		empty_lbl.position = Vector2(gap, sy + 20)
+		empty_lbl.position = Vector2(gap, sy + 8)
 		area.add_child(empty_lbl)
+		sy += 38
 
 	for tx in range(lottery_tickets.size()):
 		var row_y: float = sy + tx * 44
@@ -2591,7 +2605,7 @@ func _build_lottery_tab(area: Panel, _main_panel: Panel) -> void:
 	var rounds_left: int = 10 - (player_grid_index / map_total_grids) % 10
 	rounds_left = maxi(1, rounds_left)
 	var footer: Label = Label.new()
-	footer.text = "🔄 还有 " + str(rounds_left) + " 圈开奖  |  中奖号码 = 开奖时随机生成的3位数字"
+	footer.text = "还有 " + str(rounds_left) + " 圈开奖  |  中奖号码为开奖时生成的3位数字"
 	footer.add_theme_font_size_override("font_size", 11)
 	footer.add_theme_color_override("font_color", Color(0.5, 0.55, 0.6))
 	footer.position = Vector2(gap, sy)
@@ -2622,23 +2636,33 @@ func _build_gem_tab(area: Panel, main_panel: Panel) -> void:
 		var col := i % 3
 		var row := i / 3
 		var x := 12.0 + col * 216.0
-		var y := 42.0 + row * 92.0
-		if y > 285.0: break
+		var y := 42.0 + row * 102.0
+		if y > 300.0: break
 		var card := Panel.new()
 		card.position = Vector2(x, y)
-		card.size = Vector2(204, 82)
+		card.size = Vector2(204, 94)
 		UIUtils.shrine_panel_style(card, Color("fffdfb"), Color("d6b8b3"), 1)
 		area.add_child(card)
 		var defn: Dictionary = EquipData.GEM_DEFS.get(int(gem.get("id", 0)), {})
 		var icon := Label.new(); icon.text = UIUtils.safe_icon(str(defn.get("icon", "")), "宝"); icon.position = Vector2(10, 9); icon.add_theme_font_size_override("font_size", 24); card.add_child(icon)
 		var name := Label.new(); name.text = "%s  Lv.%d" % [defn.get("name", "宝石"), int(gem.get("level", 1))]; name.position = Vector2(46, 8); name.add_theme_font_size_override("font_size", 13); name.add_theme_color_override("font_color", Color("352e38")); card.add_child(name)
 		var count := Label.new(); count.text = "持有 ×%d" % int(gem.get("count", 0)); count.position = Vector2(46, 29); count.add_theme_color_override("font_color", Color("6f6264")); card.add_child(count)
+		var detail := Button.new()
+		detail.text = "详情"
+		detail.position = Vector2(46, 62)
+		detail.size = Vector2(44, 24)
+		UIUtils.btn_style_mini(detail, Color("6f4a72"))
+		detail.add_theme_font_size_override("font_size", 11)
+		detail.pressed.connect(func():
+			_show_gem_detail(gem, defn)
+		)
+		card.add_child(detail)
 		var synth := Button.new()
 		var level := int(gem.get("level", 1))
 		var gid := int(gem.get("id", 0))
 		var cost := (level + 1) * 500
 		synth.text = "3合1  %d金" % cost if level < 10 else "已满级"
-		synth.position = Vector2(92, 52); synth.size = Vector2(102, 24)
+		synth.position = Vector2(94, 62); synth.size = Vector2(102, 24)
 		synth.disabled = int(gem.get("count", 0)) < 3 or level >= 10 or player_gold < cost
 		UIUtils.shrine_button_style(synth, false)
 		synth.pressed.connect(func():
@@ -2647,6 +2671,41 @@ func _build_gem_tab(area: Panel, main_panel: Panel) -> void:
 			call_deferred("_show_inventory_panel")
 		)
 		card.add_child(synth)
+
+
+func _show_gem_detail(gem: Dictionary, defn: Dictionary) -> void:
+	_close_all_tooltips()
+	_ensure_overlay()
+	var panel := Panel.new()
+	panel.name = "GemDetail"
+	panel.position = Vector2(430, 205)
+	panel.size = Vector2(420, 230)
+	panel.z_index = 101
+	UIUtils.shrine_panel_style(panel, Color("fff9f5"), Color("b88d89"), 2)
+	_tooltip_nodes.append(panel)
+	var title := Label.new()
+	title.text = "%s  Lv.%d" % [str(defn.get("name", "宝石")), int(gem.get("level", 1))]
+	title.position = Vector2(18, 16)
+	title.size = Vector2(384, 28)
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color("96353e"))
+	panel.add_child(title)
+	var body := Label.new()
+	body.text = "用途：镶嵌到装备的宝石孔，提供对应属性。\n效果：%s\n当前持有：%d 颗\n合成：3颗同种同等级宝石 + %d 金币，合成为 Lv.%d。" % [str(defn.get("desc", "暂无说明")), int(gem.get("count", 0)), (int(gem.get("level", 1)) + 1) * 500, int(gem.get("level", 1)) + 1]
+	body.position = Vector2(18, 55)
+	body.size = Vector2(384, 105)
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_theme_font_size_override("font_size", 14)
+	body.add_theme_color_override("font_color", Color("4f454d"))
+	panel.add_child(body)
+	var close := Button.new()
+	close.text = "关闭"
+	close.position = Vector2(165, 177)
+	close.size = Vector2(90, 32)
+	UIUtils.shrine_button_style(close, false)
+	close.pressed.connect(_close_all_tooltips)
+	panel.add_child(close)
+	add_child(panel)
 
 
 func _on_bag_pressed() -> void:
