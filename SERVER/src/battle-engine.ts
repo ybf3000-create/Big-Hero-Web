@@ -1,4 +1,4 @@
-import { MELEE_SKILL_IDS, TargetTag, ControlType, battleSkillById, type BattleSkill } from "./battle-catalog.js";
+import { MELEE_SKILL_IDS, MONSTERS, TargetTag, ControlType, battleSkillById, type BattleSkill } from "./battle-catalog.js";
 import type { BattleEncounter, EncounterUnit, RandomSource } from "./monster-generator.js";
 
 type Data = Record<string, any>;
@@ -134,11 +134,17 @@ function buildInitialState(playerState: BattlePlayerState, encounter: BattleEnco
   const enemies = encounter.units.map(actorFromEncounter);
   applyBossStartEffects(player, enemies);
   applyWeatherStart([player, ...enemies], encounter.weather);
-  return {
+  const state: Data = {
     actors: { player, enemies }, elapsed: 0, rounds: 0, log: [], events: [], damageTotal: 0,
     playerStartHp: player.currentHp, outcome: -1, battleKind: encounter.battle_kind, templateId: encounter.template_id,
     templateName: encounter.template_name, weather: encounter.weather, weatherTimer: weatherInterval(encounter.weather), random: Math.random,
   };
+  for (const boss of enemies) {
+    if (["command", "vampire", "storm_field", "rock"].includes(String(boss.bossMechanic?.id ?? ""))) {
+      emitMechanic(state, boss, `${boss.bossMechanic.name}·生效`);
+    }
+  }
+  return state;
 }
 
 function resolveActor(state: Data, key: string): Data | null {
@@ -736,16 +742,30 @@ function applyBossStartEffects(player: Data, enemies: Data[]): void {
   }
 }
 
-function emitMechanic(state: Data, boss: Data, label: string): void {
-  state.events.push({ type: "status", target: actorRef(boss), status: label, duration: 0 });
+function mechanicVisual(id: string): string {
+  if (["web", "charm"].includes(id)) return "control";
+  if (id === "poison_aura") return "poison";
+  if (id === "earthquake") return "thunder";
+  if (id === "dragon_breath") return "fire";
+  if (["nature_guard", "life_seed"].includes(id)) return "heal";
+  return "control";
+}
+
+function emitMechanic(state: Data, boss: Data, label: string, statusTarget: Data | null = boss, targets: Data[] = []): void {
+  const mechanicId = String(boss.bossMechanic?.id ?? "");
+  state.events.push({ type: "cast", source: actorRef(boss), targets: targets.map(actorRef), skill_id: 0, label, visual: mechanicVisual(mechanicId), mechanic: mechanicId });
+  if (statusTarget) state.events.push({ type: "status", target: actorRef(statusTarget), status: label, duration: 0, mechanic: mechanicId });
   state.log.push(`${boss.name} 触发 ${label}`);
 }
 
 function summon(state: Data, boss: Data, name: string, hpMultiplier: number, maximum: number, ignoreBossAlive = false): void {
-  if ((!ignoreBossAlive && !boss.alive) || boss.summonCount >= maximum) return;
+  if ((!ignoreBossAlive && !boss.alive) || boss.summonCount >= maximum || state.actors.enemies.filter((enemy: Data) => enemy.alive).length >= 6) return;
   const id = state.actors.enemies.reduce((value: number, enemy: Data) => Math.max(value, enemy.id + 1), 1);
   const maxHp = Math.max(1, Math.round(boss.maxHp * Math.max(hpMultiplier, .01)));
+  const summonSkillId = MONSTERS[name]?.skillId ?? 0;
   state.actors.enemies.push({ side: "enemy", id, name, displayName: name, row: "front", level: boss.level, maxHp, currentHp: maxHp, attack: boss.baseAttack * .45, baseAttack: boss.baseAttack * .45, defense: boss.baseDefense * .6, baseDefense: boss.baseDefense * .6, speedPoints: 20, actionCooldown: actionCooldown(20), timeToAct: actionCooldown(20), crit: 0, critDamage: 150, hit: 100, dodge: 0, block: 0, skillDamage: 0, cooldownReduction: 0, lifesteal: 0, freeAttackPct: 0, freeDefensePct: 0, incomingDamageMultiplier: 1, skillIds: [], passives: [], shield: 0, shieldTime: 0, buffs: {}, controls: {}, dots: [], hots: [], cooldowns: {}, alive: true, isBoss: false, isElite: false, infiniteHp: false, regenTimer: REGEN_INTERVAL, setCounts: {}, setAffixes: [], setActionCount: 0, battleDamageMultiplier: 1 });
+  state.actors.enemies.at(-1)!.skillIds = summonSkillId > 0 ? [summonSkillId] : [];
+  state.events.push({ type: "summon", source: actorRef(boss), unit: { side: "enemy", id, name, display_name: name, row: "front", level: boss.level, max_hp: maxHp, current_hp: maxHp, skill_ids: summonSkillId > 0 ? [summonSkillId] : [], is_boss: false, is_elite: false } });
   boss.summonCount += 1;
   emitMechanic(state, boss, `${boss.bossMechanic.name ?? "召唤"}·召唤${name}`);
 }
@@ -773,14 +793,19 @@ function tickBossMechanics(state: Data, delta: number): void {
     while (boss.mechanicTimer <= 0 && boss.alive) {
       boss.mechanicTimer += mechanic.interval;
       if (["web", "charm"].includes(mechanic.id)) {
-        if (!player.buffs.tenacity) player.controls.stun = n(mechanic.stun, 3);
-        emitMechanic(state, boss, String(mechanic.name));
+        const immune = Boolean(player.buffs.tenacity);
+        if (!immune) player.controls.stun = n(mechanic.stun, 3);
+        emitMechanic(state, boss, String(mechanic.name), immune ? null : player, [player]);
       }
-      else if (mechanic.id === "nature_guard") for (const ally of state.actors.enemies) if (ally.alive) applyHeal(state, ally, ally.maxHp * n(mechanic.healPct, 15) / 100, "自然守护");
+      else if (mechanic.id === "nature_guard") {
+        const livingAllies = state.actors.enemies.filter((ally: Data) => ally.alive);
+        emitMechanic(state, boss, String(mechanic.name), boss, livingAllies);
+        for (const ally of livingAllies) applyHeal(state, ally, ally.maxHp * n(mechanic.healPct, 15) / 100, "自然守护");
+      }
       else if (mechanic.id === "death_summon" && boss.currentHp / boss.maxHp < n(mechanic.threshold, .5)) summon(state, boss, "骷髅·战士", 1, n(mechanic.maxSummons, 3));
       else if (mechanic.id === "shadow_clone") summon(state, boss, "暗影分身", n(mechanic.hpMultiplier, .5), n(mechanic.maxSummons, 2));
-      else if (mechanic.id === "poison_aura") mechanicDamage(state, boss, player, boss.attack * n(mechanic.damagePct, 10) / 100, "剧毒光环");
-      else if (["earthquake", "dragon_breath"].includes(mechanic.id)) mechanicDamage(state, boss, player, boss.attack * n(mechanic.damageMultiplier, 1.5), String(mechanic.name));
+      else if (mechanic.id === "poison_aura") { emitMechanic(state, boss, String(mechanic.name), player, [player]); mechanicDamage(state, boss, player, boss.attack * n(mechanic.damagePct, 10) / 100, "剧毒光环"); }
+      else if (["earthquake", "dragon_breath"].includes(mechanic.id)) { emitMechanic(state, boss, String(mechanic.name), player, [player]); mechanicDamage(state, boss, player, boss.attack * n(mechanic.damageMultiplier, 1.5), String(mechanic.name)); }
       else if (mechanic.id === "wolf_summon") summon(state, boss, "狼·盗贼", .35, n(mechanic.maxSummons, 4));
       else if (mechanic.id === "chaos_field") {
         const choice = randomInt(0, 2, state.random);
@@ -800,7 +825,7 @@ function tickBossMechanics(state: Data, delta: number): void {
 }
 
 function handleBossHpTriggers(state: Data, target: Data): void {
-  if (!target.isBoss || !target.alive) return;
+  if (!target.isBoss) return;
   const mechanic = target.bossMechanic ?? {};
   const ratio = target.currentHp / target.maxHp;
   if (mechanic.id === "split" && target.mechanicTriggers === 0 && ratio < n(mechanic.threshold, .3)) {
@@ -809,7 +834,7 @@ function handleBossHpTriggers(state: Data, target: Data): void {
     target.alive = false; target.currentHp = 0;
     for (let count = 0; count < n(mechanic.count, 3); count += 1) summon(state, target, "史莱姆·战士", sharedRatio, 3, true);
     emitMechanic(state, target, "分裂");
-  } else if (["blood_rage", "shadow_rule"].includes(mechanic.id)) {
+  } else if (target.alive && ["blood_rage", "shadow_rule"].includes(mechanic.id)) {
     const expected = Math.min(Math.floor((1 - ratio) / n(mechanic.thresholdStep, .3)), n(mechanic.maxSummons, 99));
     while (target.mechanicTriggers < expected) {
       target.mechanicTriggers += 1;

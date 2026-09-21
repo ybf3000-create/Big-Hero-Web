@@ -64,8 +64,23 @@ test("all 200 boss tiers generate valid server-owned encounters and battles", ()
     const boss = encounter.units.find((unit) => unit.is_boss);
     assert.equal(boss?.boss_index, bossIndex);
     assert.equal(encounter.template_name, encounter.units.find((unit) => unit.is_boss)?.name);
+    assert.match(boss?.asset ?? "", /\.png$/);
+    assert.ok(boss?.boss_mechanic?.id, `boss ${bossIndex} is missing its authoritative mechanic`);
     validate(runBattle(player([5, 18, 25, 36]), encounter, random));
   }
+});
+
+test("lethal damage still triggers the Slime King's split and summoned minions keep their skills", () => {
+  const random = seeded(20_260_921);
+  const encounter = generateEncounter("boss", 60, 0, 1, "sunny", random);
+  const boss = encounter.units.find((unit) => unit.is_boss)!;
+  boss.max_hp = 100;
+  boss.current_hp = 100;
+  const result = runBattle({ ...player([]), attack: 10_000, currentHp: 200_000 }, encounter, random);
+  const summons = result.events.filter((event) => event.type === "summon");
+  assert.equal(summons.length, 3);
+  assert.ok(result.events.some((event) => event.type === "cast" && event.mechanic === "split"));
+  for (const event of summons) assert.deepEqual(event.unit?.skill_ids, [21]);
 });
 
 test("all weather types and battle modes produce browser-playable events", () => {

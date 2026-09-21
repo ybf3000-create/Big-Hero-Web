@@ -2,6 +2,7 @@ class_name BattleEngine
 extends RefCounted
 
 const SkillDataRef = preload("res://scripts/skill_data.gd")
+const SUMMON_SKILL_IDS: Dictionary = {"史莱姆·战士": 21, "骷髅·战士": 8, "暗影·盗贼": 36, "狼·盗贼": 29}
 
 const BASE_ACTION_CD: float = 3.0
 const CHALLENGE_DURATION: float = 60.0
@@ -1151,21 +1152,28 @@ static func _tick_boss_mechanics(state: Dictionary, delta: float) -> void:
 			match mechanic_id:
 				"web", "charm":
 					var duration := float(mechanic.get("stun", 3.0))
-					if not player.get("buffs", {}).has("tenacity"):
+					var immune: bool = player.get("buffs", {}).has("tenacity")
+					if not immune:
 						player["controls"]["stun"] = duration
-					_emit_mechanic(state, boss, str(mechanic.get("name", "控制")))
+					_emit_mechanic(state, boss, str(mechanic.get("name", "控制")), {} if immune else player, [player])
 				"nature_guard":
+					var living_allies: Array = []
 					for ally in enemies:
 						if ally.get("alive", false):
-							_apply_heal(state, ally, float(ally.get("max_hp", 1.0)) * float(mechanic.get("heal_pct", 15.0)) / 100.0, "自然守护")
+							living_allies.append(ally)
+					_emit_mechanic(state, boss, str(mechanic.get("name", "自然守护")), boss, living_allies)
+					for ally in living_allies:
+						_apply_heal(state, ally, float(ally.get("max_hp", 1.0)) * float(mechanic.get("heal_pct", 15.0)) / 100.0, "自然守护")
 				"death_summon":
 					if float(boss.get("current_hp", 1.0)) / maxf(float(boss.get("max_hp", 1.0)), 1.0) < float(mechanic.get("threshold", 0.5)):
 						_summon_boss_minion(state, boss, "骷髅·战士", 1.0, int(mechanic.get("max_summons", 3)))
 				"shadow_clone":
 					_summon_boss_minion(state, boss, "暗影分身", float(mechanic.get("hp_mult", 0.5)), int(mechanic.get("max_summons", 2)))
 				"poison_aura":
+					_emit_mechanic(state, boss, str(mechanic.get("name", "剧毒光环")), player, [player])
 					_deal_mechanic_damage(state, boss, player, float(boss.get("atk", 0.0)) * float(mechanic.get("damage_pct", 10.0)) / 100.0, "剧毒光环")
 				"earthquake", "dragon_breath":
+					_emit_mechanic(state, boss, str(mechanic.get("name", "Boss技能")), player, [player])
 					_deal_mechanic_damage(state, boss, player, float(boss.get("atk", 0.0)) * float(mechanic.get("damage_mult", 1.5)), str(mechanic.get("name", "Boss技能")))
 				"wolf_summon":
 					_summon_boss_minion(state, boss, "狼·盗贼", 0.35, int(mechanic.get("max_summons", 4)))
@@ -1192,7 +1200,7 @@ static func _tick_boss_mechanics(state: Dictionary, delta: float) -> void:
 
 
 static func _handle_boss_hp_triggers(state: Dictionary, target: Dictionary) -> void:
-	if not target.get("is_boss", false) or not target.get("alive", false):
+	if not target.get("is_boss", false):
 		return
 	var mechanic: Dictionary = target.get("boss_mechanic", {})
 	var hp_ratio := float(target.get("current_hp", 0.0)) / maxf(float(target.get("max_hp", 1.0)), 1.0)
@@ -1205,7 +1213,7 @@ static func _handle_boss_hp_triggers(state: Dictionary, target: Dictionary) -> v
 		for _i in range(int(mechanic.get("count", 3))):
 			_summon_boss_minion(state, target, "史莱姆·战士", shared_hp / maxf(float(target.get("max_hp", 1.0)), 1.0), 3, true)
 		_emit_mechanic(state, target, "分裂")
-	elif mechanic_id in ["blood_rage", "shadow_rule"]:
+	elif target.get("alive", false) and mechanic_id in ["blood_rage", "shadow_rule"]:
 		var step := float(mechanic.get("threshold_step", 0.30))
 		var expected := mini(int(floor((1.0 - hp_ratio) / step)), int(mechanic.get("max_summons", 99)))
 		var current := int(target.get("mechanic_triggers", 0))
@@ -1221,7 +1229,11 @@ static func _handle_boss_hp_triggers(state: Dictionary, target: Dictionary) -> v
 
 
 static func _summon_boss_minion(state: Dictionary, boss: Dictionary, summon_name: String, hp_mult: float, max_summons: int, ignore_boss_alive: bool = false) -> void:
-	if (not ignore_boss_alive and not boss.get("alive", false)) or int(boss.get("summon_count", 0)) >= max_summons:
+	var living_count := 0
+	for existing in state["actors"]["enemies"]:
+		if existing.get("alive", false):
+			living_count += 1
+	if (not ignore_boss_alive and not boss.get("alive", false)) or int(boss.get("summon_count", 0)) >= max_summons or living_count >= 6:
 		return
 	var enemies: Array = state["actors"]["enemies"]
 	var next_id := 1
@@ -1235,10 +1247,11 @@ static func _summon_boss_minion(state: Dictionary, boss: Dictionary, summon_name
 		"base_atk": float(boss.get("base_atk", boss.get("atk", 1.0))) * 0.45, "base_def": float(boss.get("base_def", boss.get("def", 0.0))) * 0.60,
 		"speed_points": 20, "action_cd": _calc_action_cd(20), "base_action_cd": _calc_action_cd(20), "time_to_act": _calc_action_cd(20),
 		"crit": 0.0, "critdmg": 150.0, "hit": 100.0, "dodge": 0.0, "block": 0.0,
-		"skill_ids": [], "passives": [], "shield": 0.0, "shield_time": 0.0, "buffs": {}, "controls": {}, "dots": [], "hots": [], "cooldowns": {},
+		"skill_ids": [int(SUMMON_SKILL_IDS.get(summon_name, 0))] if int(SUMMON_SKILL_IDS.get(summon_name, 0)) > 0 else [], "passives": [], "shield": 0.0, "shield_time": 0.0, "buffs": {}, "controls": {}, "dots": [], "hots": [], "cooldowns": {},
 		"alive": true, "is_boss": false, "is_elite": false, "infinite_hp": false, "regen_timer": REPLY_TICK_INTERVAL,
 	}
 	enemies.append(unit)
+	state["events"].append({"type": "summon", "source": _actor_ref(boss), "unit": {"side": "enemy", "id": next_id, "name": summon_name, "display_name": summon_name, "row": "front", "level": boss.get("level", 1), "max_hp": max_hp, "current_hp": max_hp, "is_boss": false, "is_elite": false}})
 	boss["summon_count"] = int(boss.get("summon_count", 0)) + 1
 	_emit_mechanic(state, boss, "%s·召唤%s" % [boss.get("boss_mechanic", {}).get("name", "召唤"), summon_name])
 
@@ -1252,8 +1265,16 @@ static func _deal_mechanic_damage(state: Dictionary, source: Dictionary, target:
 	state["events"].append({"type": "damage", "source": _actor_ref(source), "target": _actor_ref(target), "amount": int(round(dealt)), "hp": int(round(float(target.get("current_hp", 0.0)))), "max_hp": int(target.get("max_hp", 1)), "shield": int(round(float(target.get("shield", 0.0)))), "crit": false, "block": false, "dot": false, "label": label})
 
 
-static func _emit_mechanic(state: Dictionary, boss: Dictionary, label: String) -> void:
-	state["events"].append({"type": "status", "target": _actor_ref(boss), "status": label, "duration": 0.0})
+static func _emit_mechanic(state: Dictionary, boss: Dictionary, label: String, status_target: Dictionary = {}, targets: Array = []) -> void:
+	var target_refs: Array = []
+	for target in targets:
+		target_refs.append(_actor_ref(target))
+	state["events"].append({"type": "cast", "source": _actor_ref(boss), "targets": target_refs, "skill_id": 0, "label": label, "visual": "control", "mechanic": str(boss.get("boss_mechanic", {}).get("id", ""))})
+	var effect_target := boss if status_target.is_empty() else status_target
+	if not status_target.is_empty():
+		state["events"].append({"type": "status", "target": _actor_ref(effect_target), "status": label, "duration": 0.0})
+	else:
+		state["events"].append({"type": "status", "target": _actor_ref(boss), "status": label, "duration": 0.0})
 	state["log"].append("%s 触发 %s" % [boss.get("name", "Boss"), label])
 
 

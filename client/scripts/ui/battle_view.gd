@@ -296,6 +296,8 @@ func _create_unit(data: Dictionary, side: String, pos: Vector2, texture_path: St
 	var key := _key(side, int(data.get("id", 0)))
 	_units[key] = root
 	_unit_data[key] = {"max_hp": max_hp, "current_hp": current_hp, "shield": 0.0, "name": name_label.text, "is_boss": bool(data.get("is_boss", false))}
+	_unit_data[key]["row"] = str(data.get("row", "front"))
+	_unit_data[key]["alive"] = true
 	if bool(data.get("is_boss", false)):
 		_boss_key = key
 
@@ -466,6 +468,8 @@ func _play_event(event: Dictionary) -> void:
 				_add_status(status_target, status_name, float(event.get("duration", 0.0)))
 			_log_line("%s 获得状态：%s" % [str(event.get("target", {}).get("name", "单位")), status_name], "#7250a0")
 			await get_tree().create_timer(0.16 / _speed).timeout
+		"summon":
+			await _play_summon(event)
 		"miss":
 			var target := _find_unit(event.get("target", {}))
 			if target:
@@ -506,7 +510,44 @@ func _play_cast(event: Dictionary) -> void:
 			var ranged_target := _find_unit(target_ref)
 			if ranged_target:
 				_spawn_projectile(source, ranged_target, _visual_color(visual), visual)
+	elif visual == "heal":
+		for target_ref in event.get("targets", []):
+			var heal_target := _find_unit(target_ref)
+			if heal_target:
+				_spawn_heal_lines(heal_target)
 	await tween.finished
+
+
+func _play_summon(event: Dictionary) -> void:
+	var raw_unit: Dictionary = event.get("unit", {}) as Dictionary
+	var unit_id := int(raw_unit.get("id", 0))
+	if unit_id <= 0:
+		return
+	var key := _key("enemy", unit_id)
+	if _units.has(key):
+		return
+	var slot := _next_enemy_slot(str(raw_unit.get("row", "front")))
+	raw_unit["row"] = slot["row"]
+	_create_unit(raw_unit, "enemy", slot["position"], _enemy_texture_path(raw_unit), _enemy_size(raw_unit))
+	var unit := _units.get(key, null) as Control
+	if unit:
+		unit.modulate.a = 0.0
+		var tween := create_tween()
+		tween.tween_property(unit, "modulate:a", 1.0, 0.24 / _speed)
+	_log_line("%s 被召唤入场" % str(raw_unit.get("name", "召唤物")), "#8b5aa8")
+	await get_tree().create_timer(0.24 / _speed).timeout
+
+
+func _next_enemy_slot(preferred_row: String) -> Dictionary:
+	var rows: Array[String] = [preferred_row, "back" if preferred_row == "front" else "front"]
+	for row in rows:
+		var occupied := 0
+		for info in _unit_data.values():
+			if bool(info.get("alive", true)) and str(info.get("row", "front")) == row:
+				occupied += 1
+		if occupied < 3:
+			return {"row": row, "position": Vector2(700, 165 + occupied * 115) if row == "front" else Vector2(945, 165 + occupied * 115)}
+	return {"row": "back", "position": Vector2(945, 165)}
 
 
 func _play_damage(event: Dictionary) -> void:
@@ -590,6 +631,11 @@ func _update_unit_hp(target: Control, hp_value: float, max_hp: float) -> void:
 	if not key.is_empty():
 		_unit_data[key]["max_hp"] = maxf(max_hp, 1.0)
 		_unit_data[key]["current_hp"] = hp_value
+		_unit_data[key]["alive"] = hp_value > 0.0
+		if hp_value <= 0.0:
+			target.visible = false
+		elif not target.visible:
+			target.visible = true
 	create_tween().tween_property(hp, "size:x", 164.0 * clampf(hp_value / maxf(max_hp, 1.0), 0.0, 1.0), 0.18 / _speed)
 	var text := target.get_node_or_null("HPText") as Label
 	if text:
