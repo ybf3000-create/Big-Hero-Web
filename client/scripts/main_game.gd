@@ -3639,6 +3639,10 @@ func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
 	dialog.name = "SlotEnhancePanel"
 	dialog.position = Vector2(315, 135)
 	dialog.size = Vector2(650, 450)
+	# The tooltip overlay is a full-screen z=100 input shield. Keep this dialog
+	# above it so the enhancement controls remain visible and clickable.
+	dialog.z_index = 101
+	dialog.mouse_filter = Control.MOUSE_FILTER_STOP
 	UIUtils.shrine_panel_style(dialog, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(dialog)
 	var title := Label.new()
