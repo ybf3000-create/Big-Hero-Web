@@ -285,7 +285,7 @@ func _build_map_area() -> void:
 
 	var pos_lbl := Label.new()
 	pos_lbl.name = "GridPosLabel"
-	pos_lbl.text = "格子 1 / " + str(map_total_grids) + "  ·  Boss 0 / 200"
+	pos_lbl.text = "当前格 1 / " + str(map_total_grids) + "  ·  已击败 Boss 0 / 200"
 	pos_lbl.add_theme_font_size_override("font_size", 13)
 	pos_lbl.add_theme_color_override("font_color", Color("352e38"))
 	pos_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -591,10 +591,15 @@ func _on_auto_dice_roll() -> void:
 	_on_dice_roll()
 
 
-func _refresh_player_hp_bounds(_fill_if_empty: bool = false) -> void:
+func _refresh_player_hp_bounds(fill_if_empty: bool = false) -> void:
 	var ps: Dictionary = _calc_player_stats()
 	player_max_hp = maxi(int(ps.get("hp", 500)), 1)
-	player_hp = player_max_hp
+	if fill_if_empty:
+		player_hp = player_max_hp
+	else:
+		# Refreshing equipment/stats must not heal a network character. HP is
+		# authoritative state and is only changed by a server snapshot or battle.
+		player_hp = clampi(player_hp, 0, player_max_hp)
 
 
 ## ============================================================
@@ -1006,6 +1011,7 @@ func _apply_network_roll_response(response: Dictionary) -> void:
 	top_bar.refresh()
 	top_bar.refresh_compact_stats()
 	top_bar.refresh_poker_slots()
+	_refresh_visible_inventory_panel()
 	var poker: Dictionary = event.get("poker", {}) as Dictionary
 	if not poker.is_empty():
 		var display_records: Array[Dictionary] = []
@@ -1099,6 +1105,10 @@ func _choose_construction(grid_index: int, direction: String, panel: Panel) -> v
 	if is_instance_valid(panel): panel.queue_free()
 	var response: Dictionary = await NetworkClient.execute_game_command("construction/choose", {"grid_index": grid_index, "type": direction})
 	if not response.get("ok", false):
+		if _is_transport_failure(response):
+			await _recover_network_state("建设操作结果已重新同步")
+		elif _is_session_failure(response):
+			_return_to_network_login()
 		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
 		return
 	var server_character: Dictionary = response.get("character", {}) as Dictionary
@@ -1106,6 +1116,7 @@ func _choose_construction(grid_index: int, direction: String, panel: Panel) -> v
 	_load_from_save_data(LoginScriptRef.server_state_to_save_data(server_character, server_state))
 	_refresh_grid_display()
 	top_bar.refresh()
+	_refresh_visible_inventory_panel()
 	_show_float_text(str((response.get("event", {}) as Dictionary).get("message", "建设完成")), Color(0.4, 1.0, 0.6))
 	if auto_play_enabled:
 		_start_auto_timer()
@@ -1115,12 +1126,17 @@ func _resolve_construction_timeout(panel: Panel) -> void:
 	if is_instance_valid(panel): panel.queue_free()
 	var response: Dictionary = await NetworkClient.execute_game_command("construction/resolve")
 	if not response.get("ok", false):
+		if _is_transport_failure(response):
+			await _recover_network_state("建设操作结果已重新同步")
+		elif _is_session_failure(response):
+			_return_to_network_login()
 		return
 	var server_character: Dictionary = response.get("character", {}) as Dictionary
 	var server_state: Dictionary = response.get("state", {}) as Dictionary
 	_load_from_save_data(LoginScriptRef.server_state_to_save_data(server_character, server_state))
 	_refresh_grid_display()
 	top_bar.refresh()
+	_refresh_visible_inventory_panel()
 	_show_float_text(str((response.get("event", {}) as Dictionary).get("message", "建设已自动完成")), Color(1.0, 0.85, 0.3))
 	if auto_play_enabled:
 		_start_auto_timer()
@@ -1169,6 +1185,10 @@ func _manage_construction(path: String, grid_index: int, panel: Panel) -> void:
 	if is_instance_valid(panel): panel.queue_free()
 	var response: Dictionary = await NetworkClient.execute_game_command(path, {"grid_index": grid_index})
 	if not response.get("ok", false):
+		if _is_transport_failure(response):
+			await _recover_network_state("建设操作结果已重新同步")
+		elif _is_session_failure(response):
+			_return_to_network_login()
 		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
 		return
 	var server_character: Dictionary = response.get("character", {}) as Dictionary
@@ -1176,6 +1196,7 @@ func _manage_construction(path: String, grid_index: int, panel: Panel) -> void:
 	_load_from_save_data(LoginScriptRef.server_state_to_save_data(server_character, server_state))
 	_refresh_grid_display()
 	top_bar.refresh()
+	_refresh_visible_inventory_panel()
 	_show_float_text(str((response.get("event", {}) as Dictionary).get("message", "建设格已更新")), Color(0.4, 1.0, 0.6))
 
 
@@ -1826,6 +1847,7 @@ func _run_network_game_command(path: String, payload: Dictionary = {}, success_m
 	top_bar.refresh_poker_slots()
 	top_bar.refresh_compact_stats()
 	_refresh_all_stats_panels()
+	_refresh_visible_inventory_panel()
 	var event: Dictionary = response.get("event", {}) as Dictionary
 	var display_message := success_message if not success_message.is_empty() else str(event.get("message", "操作完成"))
 	_show_float_text(display_message, Color(0.45, 1.0, 0.65))
@@ -1869,6 +1891,7 @@ func _recover_network_state(message := "服务器状态已重新同步") -> bool
 	top_bar.refresh_poker_slots()
 	top_bar.refresh_compact_stats()
 	_refresh_all_stats_panels()
+	_refresh_visible_inventory_panel()
 	_show_float_text(message, Color(0.35, 0.85, 1.0))
 	return true
 
@@ -1915,8 +1938,8 @@ func _skill_slots_payload(priority_override_slot: int = -1, remove_slot: int = -
 	return payload
 
 
-func _sync_network_skill_slots(priority_override_slot: int = -1, remove_slot: int = -1, add_skill_id: int = 0) -> void:
-	await _run_network_game_command("skill/slot", {"slots": _skill_slots_payload(priority_override_slot, remove_slot, add_skill_id)}, "技能设置已保存")
+func _sync_network_skill_slots(priority_override_slot: int = -1, remove_slot: int = -1, add_skill_id: int = 0) -> bool:
+	return await _run_network_game_command("skill/slot", {"slots": _skill_slots_payload(priority_override_slot, remove_slot, add_skill_id)}, "技能设置已保存")
 
 
 func _apply_network_attribute_response(response: Dictionary) -> void:
@@ -1941,37 +1964,16 @@ func _add_network_free_stat(stat_name: String) -> void:
 		_show_float_text("没有可用属性点", Color(0.6, 0.6, 0.7))
 		return
 	_attribute_request_in_flight = true
-	var network_client := get_node_or_null("/root/NetworkClient")
-	var response: Dictionary = await network_client.call("allocate_attribute", stat_name) if network_client else {
-		"ok": false,
-		"error": {"message": "网络服务不可用，请重新登录"},
-	}
+	await _run_network_game_command("attributes/allocate", {"attribute": stat_name}, "属性已分配")
 	_attribute_request_in_flight = false
-	if not response.get("ok", false):
-		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
-		return
-	_apply_network_attribute_response(response)
 
 
 func _reset_network_stats() -> void:
 	if _attribute_request_in_flight:
 		return
 	_attribute_request_in_flight = true
-	var network_client := get_node_or_null("/root/NetworkClient")
-	var response: Dictionary = await network_client.call("reset_attributes") if network_client else {
-		"ok": false,
-		"error": {"message": "网络服务不可用，请重新登录"},
-	}
+	await _run_network_game_command("attributes/reset", {}, "属性已重置")
 	_attribute_request_in_flight = false
-	if not response.get("ok", false):
-		_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
-		return
-	var event: Dictionary = response.get("event", {}) as Dictionary
-	_apply_network_attribute_response(response)
-	_show_float_text(
-		"洗点成功！消耗 %d 金币，归还 %d 自由属性点" % [int(event.get("price", 0)), int(event.get("returnedPoints", 0))],
-		Color(0.3, 1.0, 0.6)
-	)
 
 
 ## ============ 闪电跳跃 ============
@@ -2215,6 +2217,12 @@ func _refresh_all_stats_panels() -> void:
 		_refresh_stats_panel()
 
 
+func _refresh_visible_inventory_panel() -> void:
+	var inventory_panel := get_node_or_null("InventoryPanel") as Panel
+	if inventory_panel:
+		_refresh_item_area(inventory_panel)
+
+
 func _refresh_grid_display() -> void:
 	var area := get_node_or_null("MapArea")
 	if not area:
@@ -2249,7 +2257,7 @@ func _refresh_grid_display() -> void:
 
 	var pos_lbl: Label = area.get_node("MapStatusPanel/GridPosLabel") as Label
 	if pos_lbl:
-		pos_lbl.text = "格子 " + str(idx + 1) + " / " + str(map_total_grids) + "  ·  Boss " + str(player_boss_index - 1) + " / 200"
+		pos_lbl.text = "当前格 " + str(idx + 1) + " / " + str(map_total_grids) + "  ·  已击败 Boss " + str(player_boss_index - 1) + " / 200"
 
 
 func _get_grid_info(index: int) -> Dictionary:
@@ -2499,13 +2507,12 @@ func _add_gem(gid: int, lv: int, cnt: int) -> void:
 
 
 ## 宝石合成：使用宝石卡片上的“3合1”按钮
-func _synthesize_gem(gid: int, lv: int) -> void:
+func _synthesize_gem(gid: int, lv: int) -> bool:
 	if _is_network_game():
-		_run_network_game_command("gem/synthesize", {"gem_id": gid, "level": lv}, "宝石合成完成")
-		return
+		return await _run_network_game_command("gem/synthesize", {"gem_id": gid, "level": lv}, "宝石合成完成")
 	if lv >= 10:
 		_show_float_text("宝石已达到最高等级", Color(0.65, 0.45, 0.35))
-		return
+		return false
 	var idx: int = -1
 	for i in range(gem_bag.size()):
 		if gem_bag[i]["id"] == gid and gem_bag[i]["level"] == lv:
@@ -2513,11 +2520,11 @@ func _synthesize_gem(gid: int, lv: int) -> void:
 			break
 	if idx < 0 or gem_bag[idx]["count"] < 3:
 		_show_float_text("需要3颗同等级宝石才能合成", Color(1, 0.4, 0.4))
-		return
+		return false
 	var synth_cost: int = (lv + 1) * 500
 	if player_gold < synth_cost:
 		_show_float_text("金币不足，需要%d金" % synth_cost, Color(1, 0.4, 0.4))
-		return
+		return false
 	player_gold -= synth_cost
 	gem_bag[idx]["count"] -= 3
 	if gem_bag[idx]["count"] <= 0:
@@ -2527,6 +2534,7 @@ func _synthesize_gem(gid: int, lv: int) -> void:
 	top_bar.refresh()
 	var gdef: Dictionary = EquipData.GEM_DEFS.get(gid, {})
 	_show_float_text(UIUtils.safe_icon(str(gdef.get("icon", "")), "宝") + " 合成 → Lv." + str(lv + 1), Color(0.3, 1.0, 0.6))
+	return true
 
 
 func _on_test_generate_lottery() -> void:
@@ -2666,7 +2674,7 @@ func _build_gem_tab(area: Panel, main_panel: Panel) -> void:
 		synth.disabled = int(gem.get("count", 0)) < 3 or level >= 10 or player_gold < cost
 		UIUtils.shrine_button_style(synth, false)
 		synth.pressed.connect(func():
-			_synthesize_gem(gid, level)
+			await _synthesize_gem(gid, level)
 			if is_instance_valid(main_panel): main_panel.queue_free()
 			call_deferred("_show_inventory_panel")
 		)
@@ -3814,14 +3822,16 @@ func _show_auto_dismantle_panel() -> void:
 			var list: ItemList = lists[defn["key"]]
 			for selected_idx in list.get_selected_items(): selected.append(defn["values"][selected_idx])
 			next_rules[defn["key"]] = selected
-		auto_dismantle_rules = next_rules
-		auto_dismantle_enabled = enabled.button_pressed
 		if _is_network_game():
-			_run_network_game_command("equipment/auto-dismantle", {"enabled": auto_dismantle_enabled, "rules": auto_dismantle_rules}, "自动分解设置已保存")
+			var saved := await _run_network_game_command("equipment/auto-dismantle", {"enabled": enabled.button_pressed, "rules": next_rules}, "自动分解设置已保存")
+			if saved:
+				_close_all_tooltips()
 		else:
+			auto_dismantle_rules = next_rules
+			auto_dismantle_enabled = enabled.button_pressed
 			_auto_save()
-		_close_all_tooltips()
-		_show_float_text("自动分解设置已保存", Color(0.45, 1.0, 0.65))
+			_close_all_tooltips()
+			_show_float_text("自动分解设置已保存", Color(0.45, 1.0, 0.65))
 	)
 	dialog.add_child(save_btn)
 	var cancel := Button.new(); cancel.text = "取消"; cancel.position = Vector2(510, 465); cancel.size = Vector2(100, 40)
@@ -3997,7 +4007,7 @@ func _show_expansion_confirm(main_panel: Panel) -> void:
 		if _is_network_game():
 			_close_all_tooltips()
 			if is_instance_valid(main_panel): main_panel.queue_free()
-			_run_network_game_command("equipment/expand" if is_equip else "inventory/expand", {}, "背包扩容成功")
+			await _run_network_game_command("equipment/expand" if is_equip else "inventory/expand", {}, "背包扩容成功")
 			return
 		# 点击确认时才检查金币
 		var cost2: int = inventory.get_next_expansion_cost()
@@ -4107,7 +4117,7 @@ func _build_consume_tab(area: Panel, main_panel: Panel) -> void:
 			UIUtils.btn_transparent2(btn)
 			var si: int = i
 			btn.pressed.connect(func():
-				_on_item_action(si)
+				await _on_item_action(si)
 				main_panel.queue_free()
 				_show_inventory_panel()
 			)
@@ -4417,7 +4427,7 @@ func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_pane
 		lock_btn.pressed.connect(func():
 			var next_locked := not bool(eqp.get("locked", false))
 			if _is_network_game():
-				_run_network_game_command("equipment/lock", {"equipment_id": str(eqp.get("server_id", "")), "locked": next_locked}, "装备已锁定" if next_locked else "装备已解锁")
+				await _run_network_game_command("equipment/lock", {"equipment_id": str(eqp.get("server_id", "")), "locked": next_locked}, "装备已锁定" if next_locked else "装备已解锁")
 			else:
 				eqp["locked"] = next_locked
 			_close_all_tooltips()
@@ -4460,7 +4470,7 @@ func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_pane
 		worn_lock_btn.pressed.connect(func():
 			var next_locked := not bool(eqp.get("locked", false))
 			if _is_network_game():
-				_run_network_game_command("equipment/lock", {"equipment_id": str(eqp.get("server_id", "")), "locked": next_locked}, "装备已锁定" if next_locked else "装备已解锁")
+				await _run_network_game_command("equipment/lock", {"equipment_id": str(eqp.get("server_id", "")), "locked": next_locked}, "装备已锁定" if next_locked else "装备已解锁")
 			else:
 				eqp["locked"] = next_locked
 				var original_idx := _find_instance_idx(eqp)
@@ -4611,7 +4621,7 @@ func _socket_gem(eqp: Dictionary, socket_index: int, gid: int, level: int, main_
 	if _is_network_game():
 		_close_all_tooltips()
 		if is_instance_valid(main_panel): main_panel.queue_free()
-		_run_network_game_command("equipment/gem-socket", {"equipment_id": str(eqp.get("server_id", "")), "socket_index": socket_index, "gem_id": gid, "level": level}, "宝石已镶嵌")
+		await _run_network_game_command("equipment/gem-socket", {"equipment_id": str(eqp.get("server_id", "")), "socket_index": socket_index, "gem_id": gid, "level": level}, "宝石已镶嵌")
 		return
 	var bag_index := -1
 	for i in range(gem_bag.size()):
@@ -4640,7 +4650,7 @@ func _remove_socketed_gem(eqp: Dictionary, socket_index: int, main_panel: Panel)
 	if _is_network_game():
 		_close_all_tooltips()
 		if is_instance_valid(main_panel): main_panel.queue_free()
-		_run_network_game_command("equipment/gem-unsocket", {"equipment_id": str(eqp.get("server_id", "")), "socket_index": socket_index}, "宝石已拆卸")
+		await _run_network_game_command("equipment/gem-unsocket", {"equipment_id": str(eqp.get("server_id", "")), "socket_index": socket_index}, "宝石已拆卸")
 		return
 	var gems: Array = eqp.get("gems", []).duplicate(true)
 	if socket_index < 0 or socket_index >= gems.size():
@@ -4916,7 +4926,7 @@ func _show_dismantle_panel(main_panel: Panel) -> void:
 					server_ids.append(str(equip_instances[target_index].get("server_id", "")))
 			dp.queue_free()
 			if is_instance_valid(main_panel): main_panel.queue_free()
-			_run_network_game_command("equipment/dismantle-many", {"equipment_ids": server_ids}, "装备分解完成")
+			await _run_network_game_command("equipment/dismantle-many", {"equipment_ids": server_ids}, "装备分解完成")
 			return
 		var total_essence: int = 0
 		var removed: Array[int] = []
@@ -4983,7 +4993,7 @@ func _show_socket_select_panel(item_slot_idx: int) -> void:
 			return
 		if _is_network_game():
 			_close_all_tooltips()
-			_run_network_game_command("item/use", {"item_id": 6, "equipment_id": str(target.get("server_id", ""))}, "装备打孔成功")
+			await _run_network_game_command("item/use", {"item_id": 6, "equipment_id": str(target.get("server_id", ""))}, "装备打孔成功")
 			return
 		target["gem_slots"] = int(target.get("gem_slots", 0)) + 1
 		inventory.remove_item(item_slot_idx, 1)
@@ -5069,7 +5079,7 @@ func _show_reroll_panel(equip_idx: int, main_panel: Panel) -> void:
 		if _is_network_game():
 			_close_all_tooltips()
 			if is_instance_valid(main_panel): main_panel.queue_free()
-			_run_network_game_command("equipment/reroll", {"equipment_id": str(eqp.get("server_id", "")), "locked_indices": locked}, "词缀重铸完成")
+			await _run_network_game_command("equipment/reroll", {"equipment_id": str(eqp.get("server_id", "")), "locked_indices": locked}, "词缀重铸完成")
 			return
 		if dismantle_essence < int(cost["essence"]) or player_gold < gold_cost:
 			_show_float_text("金币或分解精华不足", Color(1.0, 0.45, 0.35))
@@ -5138,7 +5148,7 @@ func _on_item_action(slot_idx: int) -> void:
 					return
 				_show_socket_select_panel(slot_idx)
 				return
-			_run_network_game_command("item/use", {"item_id": int(slot.get("item_id", 0))}, "")
+			await _run_network_game_command("item/use", {"item_id": int(slot.get("item_id", 0))}, "")
 			return
 		if int(stats.get("fate_event", 0)) > 0:
 			inventory.remove_item(slot_idx, 1)
@@ -5485,7 +5495,7 @@ func _build_skill_tab(panel: Panel) -> void:
 			var si: int = i
 			prio_btn.pressed.connect(func():
 				if _is_network_game():
-					_sync_network_skill_slots(si)
+					await _sync_network_skill_slots(si)
 				else:
 					skill_system.toggle_priority(si)
 					_stats_tab = "skill"
@@ -5507,7 +5517,7 @@ func _build_skill_tab(panel: Panel) -> void:
 					if ev.double_click:
 						_cancel_pending_detail_click()
 						if _is_network_game():
-							_sync_network_skill_slots(-1, si)
+							await _sync_network_skill_slots(-1, si)
 						else:
 							skill_system.unequip_skill(si)
 							_refresh_stats_panel()
@@ -5822,7 +5832,11 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 				_show_float_text("金币不足，需要 " + str(price) + " 金币", Color(1.0, 0.4, 0.3))
 				return
 			if _is_network_game():
-				_run_network_game_command("skill/unlock", {"skill_id": sid_buy}, "技能已解锁")
+				var unlocked_now := await _run_network_game_command("skill/unlock", {"skill_id": sid_buy}, "技能已解锁")
+				if unlocked_now:
+					_close_all_tooltips()
+					_refresh_stats_panel()
+				return
 			else:
 				player_gold -= price
 				skill_system.unlock_skill(sid_buy)
@@ -5842,7 +5856,9 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 		var slot_idx: int = equipped_slot
 		unequip_btn.pressed.connect(func():
 			if _is_network_game():
-				_sync_network_skill_slots(-1, slot_idx)
+				await _sync_network_skill_slots(-1, slot_idx)
+				_close_all_tooltips()
+				return
 			else:
 				skill_system.unequip_skill(slot_idx)
 			_close_all_tooltips()
@@ -5861,7 +5877,7 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 		equip_btn.pressed.connect(func():
 			var ok: bool = skill_system.get_slot_skill_id(skill_system.get_unlocked_slots() - 1) == null
 			if _is_network_game() and ok:
-				_sync_network_skill_slots(-1, -1, sid_v)
+				ok = await _sync_network_skill_slots(-1, -1, sid_v)
 			elif ok:
 				ok = skill_system.equip_skill(sid_v)
 			if ok:

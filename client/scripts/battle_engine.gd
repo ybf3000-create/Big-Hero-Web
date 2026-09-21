@@ -5,7 +5,7 @@ const SkillDataRef = preload("res://scripts/skill_data.gd")
 
 const BASE_ACTION_CD: float = 3.0
 const CHALLENGE_DURATION: float = 60.0
-const MAX_ROUNDS: int = 50
+const MAX_ACTIONS: int = 50
 const SHIELD_DURATION: float = 5.0
 const HOT_TICK_INTERVAL: float = 1.0
 const REPLY_TICK_INTERVAL: float = 5.0
@@ -25,7 +25,7 @@ static func run_battle(player_state: Dictionary, encounter: Dictionary) -> Dicti
 		if state["battle_kind"] == "challenge" and state["elapsed"] >= float(encounter.get("duration_limit", CHALLENGE_DURATION)):
 			state["outcome"] = Outcome.CHALLENGE_DONE
 			break
-		if state["rounds"] >= MAX_ROUNDS:
+		if state["rounds"] >= MAX_ACTIONS:
 			state["outcome"] = Outcome.DRAW
 			break
 		var actor_key: String = _pick_next_actor(state)
@@ -72,6 +72,7 @@ static func _build_initial_state(player_state: Dictionary, encounter: Dictionary
 		"free_def_pct": float(player_state.get("free_def_pct", 0.0)),
 		"gold_bonus": float(player_state.get("gold_bonus", 0.0)),
 		"exp_bonus": float(player_state.get("exp_bonus", 0.0)),
+		"luck": float(player_state.get("luk", player_state.get("luck", 0.0))),
 		"skill_slots": player_state.get("skill_slots", []).duplicate(true),
 		"cooldowns": {},
 		"shield": 0.0,
@@ -82,6 +83,7 @@ static func _build_initial_state(player_state: Dictionary, encounter: Dictionary
 		"hots": [],
 		"alive": true,
 		"action_cd": _calc_action_cd(player_speed),
+		"base_action_cd": _calc_action_cd(player_speed),
 		"time_to_act": _calc_action_cd(player_speed),
 		"undying_used": false,
 		"battle_damage_mult": float(player_state.get("battle_damage_mult", 1.0)),
@@ -91,18 +93,14 @@ static func _build_initial_state(player_state: Dictionary, encounter: Dictionary
 		"set_counts": player_state.get("set_counts", {}).duplicate(true),
 		"set_affixes": player_state.get("set_affixes", []).duplicate(true),
 		"battle_gold": int(player_state.get("battle_gold", 0)),
+		"luxury_timer": 10.0,
+		"luxury_gold_spent": 0.0,
+		"healing_multiplier": 1.2 if int(player_state.get("set_counts", {}).get("自然", 0)) >= 3 else 1.0,
 		"set_action_count": 0,
 	}
 	if _set_count(player, "暗影") >= 3:
 		player["buffs"]["shadow_stealth"] = 5.0 + (2.0 if _has_set_affix(player, "【暗影】潜伏") else 0.0)
-	if _set_count(player, "奢侈") >= 3 and int(player.get("battle_gold", 0)) >= 1000:
-		var luxury_mult := 1.6 if _set_count(player, "奢侈") >= 4 else 1.3
-		if _has_set_affix(player, "【奢侈】镀金"): luxury_mult += 0.10
-		if int(player.get("battle_gold", 0)) < 5000 and _has_set_affix(player, "【奢侈】挥霍"): luxury_mult += 0.20
-		if int(player.get("battle_gold", 0)) > 10000 and _has_set_affix(player, "【奢侈】豪赌"): luxury_mult += 0.15
-		if int(player.get("battle_gold", 0)) < 500 and _has_set_affix(player, "【奢侈】破产"): luxury_mult += 0.40
-		player["atk"] = float(player["atk"]) * luxury_mult
-		player["base_atk"] = player["atk"]
+	_apply_luxury_attack(player)
 	player["thunder_timer"] = 8.0
 	for slot in player["skill_slots"]:
 		if slot == null:
@@ -125,6 +123,7 @@ static func _build_initial_state(player_state: Dictionary, encounter: Dictionary
 		unit["alive"] = true
 		unit["undying_used"] = false
 		unit["battle_damage_mult"] = float(unit.get("battle_damage_mult", 1.0))
+		unit["healing_multiplier"] = 1.2 if int(unit.get("set_counts", {}).get("自然", 0)) >= 3 else 1.0
 		unit["base_atk"] = float(unit.get("atk", 0.0))
 		unit["base_def"] = float(unit.get("def", 0.0))
 		unit["regen_timer"] = REPLY_TICK_INTERVAL
@@ -138,6 +137,7 @@ static func _build_initial_state(player_state: Dictionary, encounter: Dictionary
 			unit["revives_left"] = int(mechanic.get("revives", 0))
 		var speed_points: float = float(unit.get("speed_points", 0.0))
 		unit["action_cd"] = _calc_action_cd(speed_points)
+		unit["base_action_cd"] = unit["action_cd"]
 		unit["time_to_act"] = unit["action_cd"]
 		for sid in unit.get("skill_ids", []):
 			var skill_id: int = int(sid)
@@ -204,6 +204,23 @@ static func _advance_time(state: Dictionary, delta: float) -> void:
 
 
 static func _tick_actor_timers(state: Dictionary, actor: Dictionary, delta: float) -> void:
+	var actor_buffs: Dictionary = actor.get("buffs", {})
+	if actor_buffs.has("chaos_attack") and float(actor_buffs["chaos_attack"]) <= delta:
+		actor["atk"] = float(actor.get("base_atk", actor.get("atk", 0.0)))
+	if actor_buffs.has("chaos_defense") and float(actor_buffs["chaos_defense"]) <= delta:
+		actor["def"] = float(actor.get("base_def", actor.get("def", 0.0)))
+	if actor_buffs.has("chaos_speed") and float(actor_buffs["chaos_speed"]) <= delta:
+		actor["action_cd"] = float(actor.get("base_action_cd", actor.get("action_cd", BASE_ACTION_CD)))
+	if actor.get("side", "") == "player" and _set_count(actor, "奢侈") >= 3:
+		actor["luxury_timer"] = float(actor.get("luxury_timer", 10.0)) - delta
+		while float(actor.get("luxury_timer", 0.0)) <= 0.0:
+			actor["luxury_timer"] = float(actor.get("luxury_timer", 0.0)) + 10.0
+			var configured_cost := int(actor.get("level", 1)) * (100 if _set_count(actor, "奢侈") >= 4 else 50)
+			var cost := mini(maxi(0, int(actor.get("battle_gold", 0))), maxi(0, configured_cost))
+			actor["battle_gold"] = maxi(0, int(actor.get("battle_gold", 0)) - cost)
+			actor["luxury_gold_spent"] = float(actor.get("luxury_gold_spent", 0.0)) + cost
+			_apply_luxury_attack(actor)
+
 	if _set_count(actor, "雷霆") >= 4:
 		actor["thunder_timer"] = float(actor.get("thunder_timer", 8.0)) - delta
 		if float(actor["thunder_timer"]) <= 0.0:
@@ -213,6 +230,13 @@ static func _tick_actor_timers(state: Dictionary, actor: Dictionary, delta: floa
 		actor["shield_time"] = maxf(0.0, float(actor.get("shield_time", 0.0)) - delta)
 		if float(actor.get("shield_time", 0.0)) <= 0.0:
 			actor["shield"] = 0.0
+	if actor.has("set_burn_spread_timer"):
+		actor["set_burn_spread_timer"] = maxf(0.0, float(actor.get("set_burn_spread_timer", 0.0)) - delta)
+		if float(actor.get("set_burn_spread_timer", 0.0)) <= 0.0 and actor.has("set_burn_spread_source") and actor.get("alive", false):
+			var source: Dictionary = actor.get("set_burn_spread_source", {})
+			actor["set_burn_spread_timer"] = 3.0
+			if source.get("alive", false):
+				_spread_set_burn(state, actor, source)
 
 	var buffs: Dictionary = actor.get("buffs", {})
 	for key in buffs.keys():
@@ -261,13 +285,40 @@ static func _tick_actor_timers(state: Dictionary, actor: Dictionary, delta: floa
 			_apply_heal(state, actor, float(actor.get("max_hp", 0.0)) * regen_ratio, "自然护盾")
 
 
+static func _apply_luxury_attack(actor: Dictionary) -> void:
+	if _set_count(actor, "奢侈") < 3:
+		return
+	actor["atk"] = float(actor.get("base_atk", actor.get("atk", 0.0)))
+	if int(actor.get("battle_gold", 0)) < 1000:
+		return
+	var multiplier := 1.6 if _set_count(actor, "奢侈") >= 4 else 1.3
+	if _has_set_affix(actor, "【奢侈】镀金"): multiplier += 0.1
+	if int(actor.get("battle_gold", 0)) < 5000 and _has_set_affix(actor, "【奢侈】挥霍"): multiplier += 0.2
+	if int(actor.get("battle_gold", 0)) > 10000 and _has_set_affix(actor, "【奢侈】豪赌"): multiplier += 0.15
+	if int(actor.get("battle_gold", 0)) < 500 and _has_set_affix(actor, "【奢侈】破产"): multiplier += 0.4
+	actor["atk"] = float(actor.get("base_atk", 0.0)) * multiplier
+
+
+static func _spread_set_burn(state: Dictionary, source_target: Dictionary, actor: Dictionary) -> void:
+	var spread_count := 0
+	for candidate in _opponents(state, actor):
+		if candidate != source_target and candidate.get("alive", false):
+			_apply_set_burn(state, candidate, actor)
+			spread_count += 1
+			if spread_count >= 2:
+				break
+
+
 static func _process_actor_turn(state: Dictionary, actor_key: String) -> void:
 	var actor: Dictionary = _resolve_actor(state, actor_key)
 	if actor.is_empty() or not actor.get("alive", false):
 		return
 	if _has_hard_control(actor):
 		state["log"].append("%s 受硬控，跳过行动" % actor.get("name", "单位"))
-		_reset_after_turn(actor)
+		# 硬控导致的是一次“到点但不能行动”，不减少技能行动冷却，
+		# 也不触发疾风/套装行动计数；下一次行动时间取控制剩余时间。
+		var controls: Dictionary = actor.get("controls", {})
+		actor["time_to_act"] = maxf(maxf(float(controls.get("freeze", 0.0)), float(controls.get("stun", 0.0))), 0.01)
 		return
 	_tick_action_cooldowns(actor)
 	var action: Dictionary = _choose_action(actor)
@@ -318,7 +369,7 @@ static func _choose_action(actor: Dictionary) -> Dictionary:
 			if slot == null:
 				continue
 			var sid: int = int(slot.get("skill_id", 0))
-			if sid > 0 and float(cooldowns.get(sid, 0.0)) <= 0.0:
+			if sid > 0 and sid != 26 and float(cooldowns.get(sid, 0.0)) <= 0.0:
 				available.append({"priority": int(slot.get("priority", 1)), "slot": i, "skill_id": sid})
 	else:
 		for sid in actor.get("skill_ids", []):
@@ -440,7 +491,7 @@ static func _set_skill_cooldown(actor: Dictionary, skill_id: int, base_cd: float
 	var extra_mult: float = 1.0
 	if actor.get("controls", {}).has("paralysis"):
 		extra_mult = 1.3
-	actor["cooldowns"][skill_id] = base_cd * (1.0 - cd_reduce) * extra_mult
+	actor["cooldowns"][skill_id] = maxf(1.0, base_cd * (1.0 - cd_reduce) * extra_mult)
 
 
 static func _reset_after_turn(actor: Dictionary) -> void:
@@ -493,6 +544,7 @@ static func _apply_set_burn(state: Dictionary, target: Dictionary, actor: Dictio
 		"ticks_remaining": 3, "tick_interval": 1.0, "tick_timer": 1.0,
 		"dot_type": "set_burn", "source_id": -100, "source_side": actor.get("side", "enemy"),
 	}
+	target["set_burn_damage_taken"] = true
 	target["dots"].append(entry)
 	_tick_dot(state, target, entry)
 	entry["ticks_remaining"] = int(entry["ticks_remaining"]) - 1
@@ -621,11 +673,10 @@ static func _apply_attack_instance(state: Dictionary, actor: Dictionary, target:
 		raw_damage *= 1.30
 	if actor.get("side", "") == "player":
 		raw_damage *= 1.0 + float(actor.get("free_atk_pct", 0.0))
-	raw_damage *= float(actor.get("battle_damage_mult", 1.0))
+	if bool(meta.get("is_basic", false)) and actor.get("controls", {}).has("silence"):
+		raw_damage *= 1.2
 	if _has_passive(actor, "狂暴") and float(actor.get("current_hp", 0.0)) / maxf(float(actor.get("max_hp", 1.0)), 1.0) < 0.5:
 		raw_damage *= 1.5
-	if not skill.is_empty():
-		raw_damage *= 1.0 + float(actor.get("skill_dmg", 0.0)) / 100.0
 
 	var hits: int = int(skill.get("hits", 1)) if not skill.is_empty() else 1
 	for _i in range(hits):
@@ -640,15 +691,14 @@ static func _apply_attack_instance(state: Dictionary, actor: Dictionary, target:
 					target["buffs"]["phantom_step"] = 4.0 if _has_set_affix(target, "【幻影】迷踪") else 3.0
 			continue
 		var damage: float = raw_damage
-		if actor.get("buffs", {}).has("phantom_next"):
-			damage *= 1.7 if _has_set_affix(actor, "【幻影】步法") else 1.5
+		var phantom_bonus: bool = actor.get("buffs", {}).has("phantom_next")
+		if phantom_bonus:
 			actor["buffs"].erase("phantom_next")
 		if actor.get("buffs", {}).has("wind_second"):
 			if _has_set_affix(actor, "【疾风】连击"):
 				damage *= 1.30
 			actor["buffs"].erase("wind_second")
-		if actor.get("buffs", {}).has("shadow_strike"):
-			damage *= 2.5
+		var shadow_strike_bonus: bool = actor.get("buffs", {}).has("shadow_strike")
 		var ignore_def_pct: float = float(skill.get("bonus", {}).get("ignore_def_pct", 0.0))
 		damage = _apply_defense_damage(actor, target, damage, ignore_def_pct)
 		if result.get("crit", false):
@@ -663,6 +713,14 @@ static func _apply_attack_instance(state: Dictionary, actor: Dictionary, target:
 			if _has_set_affix(target, "【铁壁】堡垒"):
 				block_mult = maxf(0.0, block_mult - 0.10)
 			damage *= block_mult
+		if phantom_bonus:
+			damage *= 1.7 if _has_set_affix(actor, "【幻影】步法") else 1.5
+		if shadow_strike_bonus:
+			damage *= 2.5
+		# 这两项是最终伤害倍率，必须在防御、暴击、格挡之后计算。
+		damage *= float(actor.get("battle_damage_mult", 1.0))
+		if not skill.is_empty():
+			damage *= 1.0 + float(actor.get("skill_dmg", 0.0)) / 100.0
 		if target.get("controls", {}).has("freeze"):
 			damage *= 1.70 if _has_set_affix(actor, "【冰霜】寒甲") else 1.5
 			target["controls"].erase("freeze")
@@ -707,11 +765,10 @@ static func _apply_attack_instance(state: Dictionary, actor: Dictionary, target:
 				for burn_target in _opponents(state, actor):
 					if burn_target.get("alive", false):
 						_apply_final_damage(state, burn_target, float(actor.get("atk", 0.0)) * 0.80, {"source": "烈焰引爆", "owner": actor})
-			if _has_set_affix(actor, "【烈焰】燎原"):
-				for spread_target in _opponents(state, actor):
-					if spread_target != target and spread_target.get("alive", false):
-						_apply_set_burn(state, spread_target, actor)
-						break
+			if _has_set_affix(actor, "【烈焰】燎原") and burn_count + 1 >= 3:
+				target["set_burn_spread_source"] = actor
+				if float(target.get("set_burn_spread_timer", 0.0)) <= 0.0:
+					target["set_burn_spread_timer"] = 3.0
 		if dealt > 0.0 and _set_count(actor, "冰霜") >= 3 and target.get("alive", false):
 			var freeze_chance := 0.075 if target.get("is_boss", false) else 0.15
 			if randf() < freeze_chance:
@@ -730,7 +787,7 @@ static func _apply_attack_instance(state: Dictionary, actor: Dictionary, target:
 		if result.get("crit", false) and _set_count(actor, "雷霆") >= 3:
 			_trigger_chain_lightning(state, actor, target, 2)
 		if result.get("block", false) and _has_set_affix(target, "【铁壁】反击") and actor.get("alive", false):
-			_apply_final_damage(state, actor, float(target.get("atk", 0.0)) * 0.50, {"source": "铁壁反击", "owner": target})
+			_apply_final_damage(state, actor, float(target.get("atk", 0.0)) * 0.30, {"source": "铁壁反击", "owner": target})
 		if result.get("block", false) and _set_count(target, "铁壁") >= 4:
 			target["set_block_count"] = int(target.get("set_block_count", 0)) + 1
 			if int(target["set_block_count"]) % 3 == 0:
@@ -776,8 +833,8 @@ static func _apply_defense_damage(_actor: Dictionary, target: Dictionary, damage
 	if target.get("buffs", {}).has("def_x2"):
 		effective_def *= 2.0
 	effective_def *= (1.0 - ignore_def_pct / 100.0)
-	var dr: float = effective_def / (effective_def + 400.0)
-	var result: float = damage * (1.0 - dr)
+	var attacker_level: float = maxf(float(_actor.get("level", 1)), 1.0)
+	var result: float = damage * maxf(0.05, 1.0 - effective_def / (effective_def + 85.0 * attacker_level + 400.0))
 	if target.get("side", "") == "player":
 		result *= (1.0 - minf(float(target.get("free_def_pct", 0.0)), 0.50))
 		result *= float(target.get("incoming_damage_mult", 1.0))
@@ -785,6 +842,8 @@ static func _apply_defense_damage(_actor: Dictionary, target: Dictionary, damage
 		result *= 0.6
 	if target.get("buffs", {}).has("dragon_guard"):
 		result *= 0.7
+	if target.get("controls", {}).has("paralysis"):
+		result *= 1.2
 	var boss_mechanic: Dictionary = target.get("boss_mechanic", {})
 	if str(boss_mechanic.get("id", "")) == "rock":
 		result *= 1.0 - float(boss_mechanic.get("damage_reduce", 0.30))
@@ -829,8 +888,8 @@ static func _apply_final_damage(state: Dictionary, target: Dictionary, damage: f
 	if meta.has("owner"):
 		var owner2: Dictionary = meta["owner"]
 		var ls: float = float(owner2.get("lifesteal", 0.0)) / 100.0
-		if ls > 0.0 and dealt_hp > 0.0:
-			_apply_heal(state, owner2, dealt_hp * ls, "吸血")
+		if ls > 0.0 and total_dealt > 0.0:
+			_apply_heal(state, owner2, total_dealt * ls, "吸血")
 	_handle_boss_hp_triggers(state, target)
 	return total_dealt
 
@@ -838,6 +897,7 @@ static func _apply_final_damage(state: Dictionary, target: Dictionary, damage: f
 static func _apply_heal(state: Dictionary, actor: Dictionary, heal_amount: float, label: String) -> void:
 	var actual: float = heal_amount
 	actual *= float(actor.get("weather_heal_mult", 1.0))
+	actual *= float(actor.get("healing_multiplier", 1.0))
 	if actor.get("controls", {}).has("anti_heal"):
 		actual *= 0.5
 	var before: float = float(actor.get("current_hp", 0.0))
@@ -1091,7 +1151,8 @@ static func _tick_boss_mechanics(state: Dictionary, delta: float) -> void:
 			match mechanic_id:
 				"web", "charm":
 					var duration := float(mechanic.get("stun", 3.0))
-					player["controls"]["stun"] = duration
+					if not player.get("buffs", {}).has("tenacity"):
+						player["controls"]["stun"] = duration
 					_emit_mechanic(state, boss, str(mechanic.get("name", "控制")))
 				"nature_guard":
 					for ally in enemies:
@@ -1110,12 +1171,23 @@ static func _tick_boss_mechanics(state: Dictionary, delta: float) -> void:
 					_summon_boss_minion(state, boss, "狼·盗贼", 0.35, int(mechanic.get("max_summons", 4)))
 				"chaos_field":
 					var choice := randi() % 3
+					boss["buffs"].erase("chaos_attack")
+					boss["buffs"].erase("chaos_defense")
+					boss["buffs"].erase("chaos_speed")
+					boss["atk"] = float(boss.get("base_atk", boss.get("atk", 1.0)))
+					boss["def"] = float(boss.get("base_def", boss.get("def", 1.0)))
+					boss["action_cd"] = float(boss.get("base_action_cd", boss.get("action_cd", BASE_ACTION_CD)))
+					var chaos_mult := float(mechanic.get("buff_mult", 1.5))
 					if choice == 0:
-						boss["atk"] = float(boss.get("base_atk", boss.get("atk", 1.0))) * float(mechanic.get("buff_mult", 1.5))
+						boss["atk"] = float(boss.get("base_atk", boss.get("atk", 1.0))) * chaos_mult
+						boss["buffs"]["chaos_attack"] = 10.0
 					elif choice == 1:
-						boss["def"] = float(boss.get("base_def", boss.get("def", 1.0))) * float(mechanic.get("buff_mult", 1.5))
+						boss["def"] = float(boss.get("base_def", boss.get("def", 1.0))) * chaos_mult
+						boss["buffs"]["chaos_defense"] = 10.0
 					else:
-						boss["time_to_act"] = minf(float(boss.get("time_to_act", 1.0)), float(boss.get("action_cd", 1.0)) / float(mechanic.get("buff_mult", 1.5)))
+						boss["action_cd"] = float(boss.get("base_action_cd", boss.get("action_cd", 1.0))) / chaos_mult
+						boss["time_to_act"] = minf(float(boss.get("time_to_act", 1.0)), float(boss.get("action_cd", 1.0)))
+						boss["buffs"]["chaos_speed"] = 10.0
 					_emit_mechanic(state, boss, "混沌领域")
 
 
@@ -1161,7 +1233,7 @@ static func _summon_boss_minion(state: Dictionary, boss: Dictionary, summon_name
 		"row": "front", "level": boss.get("level", 1), "max_hp": max_hp, "current_hp": max_hp,
 		"atk": float(boss.get("base_atk", boss.get("atk", 1.0))) * 0.45, "def": float(boss.get("base_def", boss.get("def", 0.0))) * 0.60,
 		"base_atk": float(boss.get("base_atk", boss.get("atk", 1.0))) * 0.45, "base_def": float(boss.get("base_def", boss.get("def", 0.0))) * 0.60,
-		"speed_points": 20, "action_cd": _calc_action_cd(20), "time_to_act": _calc_action_cd(20),
+		"speed_points": 20, "action_cd": _calc_action_cd(20), "base_action_cd": _calc_action_cd(20), "time_to_act": _calc_action_cd(20),
 		"crit": 0.0, "critdmg": 150.0, "hit": 100.0, "dodge": 0.0, "block": 0.0,
 		"skill_ids": [], "passives": [], "shield": 0.0, "shield_time": 0.0, "buffs": {}, "controls": {}, "dots": [], "hots": [], "cooldowns": {},
 		"alive": true, "is_boss": false, "is_elite": false, "infinite_hp": false, "regen_timer": REPLY_TICK_INTERVAL,
@@ -1175,7 +1247,8 @@ static func _deal_mechanic_damage(state: Dictionary, source: Dictionary, target:
 	if not target.get("alive", false):
 		return
 	var final_amount := amount if absolute else _apply_defense_damage(source, target, amount, 0.0)
-	var dealt := _apply_final_damage(state, target, final_amount, {"source": label, "owner": source, "ignore_shield": absolute})
+	# 绝对伤害只绕过防御，仍由护盾吸收，和服务器最终伤害管道一致。
+	var dealt := _apply_final_damage(state, target, final_amount, {"source": label, "owner": source})
 	state["events"].append({"type": "damage", "source": _actor_ref(source), "target": _actor_ref(target), "amount": int(round(dealt)), "hp": int(round(float(target.get("current_hp", 0.0)))), "max_hp": int(target.get("max_hp", 1)), "shield": int(round(float(target.get("shield", 0.0)))), "crit": false, "block": false, "dot": false, "label": label})
 
 
@@ -1279,8 +1352,8 @@ static func _build_result(state: Dictionary, encounter: Dictionary) -> Dictionar
 		"luxury_gold_spent": 0,
 	}
 	if _set_count(player, "奢侈") >= 3:
-		var cost_per_tick := int(player.get("level", 1)) * (100 if _set_count(player, "奢侈") >= 4 else 50)
-		result["luxury_gold_spent"] = mini(int(player.get("battle_gold", 0)), int(floor(float(result["elapsed"]) / 10.0)) * cost_per_tick)
+		# 服务器在每个 10 秒计时点实际扣款；使用累计值可覆盖金币不足和中途扣款。
+		result["luxury_gold_spent"] = int(floor(float(player.get("luxury_gold_spent", 0.0))))
 
 	if encounter.get("battle_kind", "") == "challenge" and outcome == Outcome.CHALLENGE_DONE:
 		var challenge_rewards: Dictionary = _calc_challenge_rewards(int(result["damage_total"]), int(player.get("level", 1)))

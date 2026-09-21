@@ -351,6 +351,37 @@ test("battle grids return a browser-playable combat timeline", () => {
   assert.match(encounter.units[0]?.asset ?? "", /\.png$/);
 });
 
+test("boss battle triggers only when the final landing grid is the boss grid", () => {
+  const originalRandom = Math.random;
+  try {
+    // Roll 2: the path passes through index 1 (Boss), but ends on index 2.
+    Math.random = () => 0.2;
+    const passedState = createInitialGameState();
+    passedState.mapTotalGrids = 3;
+    passedState.mapGrids = [0, 11, 0];
+    passedState.gridIndex = 0;
+    const passed = applyGameCommand(passedState, { level: 1, experience: 0, gold: 0 }, "roll", {});
+    assert.equal(passed.state.gridIndex, 2);
+    assert.equal(passed.event.gridType, 0);
+    assert.equal(passed.event.kind, "home");
+    assert.notEqual(passed.event.battleKind, "boss");
+
+    // Roll 1: the final landing grid is index 1, so the Boss battle starts.
+    let randomCalls = 0;
+    Math.random = () => randomCalls++ === 0 ? 0 : 0.5;
+    const landedState = createInitialGameState();
+    landedState.mapTotalGrids = 3;
+    landedState.mapGrids = [0, 11, 0];
+    landedState.gridIndex = 0;
+    const landed = applyGameCommand(landedState, { level: 1, experience: 0, gold: 0 }, "roll", {});
+    assert.equal(landed.state.gridIndex, 1);
+    assert.equal(landed.event.gridType, 11);
+    assert.equal(landed.event.battleKind, "boss");
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
 test("boss progression and formulas use the confirmed 200-tier rules", () => {
   const originalRandom = Math.random;
   Math.random = () => 0.5;
