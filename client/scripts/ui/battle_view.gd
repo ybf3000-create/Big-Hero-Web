@@ -1013,8 +1013,13 @@ func _enemy_texture_path(unit: Dictionary) -> String:
 	if bool(unit.get("is_boss", false)):
 		var boss_path := BOSS_DIR + str(unit.get("name", "")) + ".png"
 		if ResourceLoader.exists(boss_path): return boss_path
+	var asset_name := str(unit.get("asset", ""))
+	if not asset_name.is_empty():
+		var explicit_path := MONSTER_DIR + asset_name
+		if ResourceLoader.exists(explicit_path): return explicit_path
 	var idx: int = int(abs(str(unit.get("name", "怪物")).hash()) % SMALL_ASSETS.size())
-	return MONSTER_DIR + SMALL_ASSETS[idx]
+	var fallback := MONSTER_DIR + SMALL_ASSETS[idx]
+	return fallback if ResourceLoader.exists(fallback) else MONSTER_DIR + "char_0001.png"
 
 
 func _enemy_size(unit: Dictionary) -> Vector2:

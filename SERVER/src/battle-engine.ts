@@ -65,6 +65,9 @@ const REGEN_INTERVAL = 5;
 const n = (value: unknown, fallback = 0): number => typeof value === "number" && Number.isFinite(value) ? value : fallback;
 const b = (value: unknown): boolean => value === true;
 const randomInt = (minimum: number, maximum: number, random: RandomSource): number => minimum + Math.floor(random() * (maximum - minimum + 1));
+const summonAsset = (name: string): string => ({
+  "史莱姆·战士": "char_0001.png", "骷髅·战士": "char_0007.png", "暗影·盗贼": "char_0016.png", "狼·盗贼": "char_0031.png",
+}[name] ?? "char_0001.png");
 const pick = <T>(values: readonly T[], random: RandomSource): T => values[Math.min(values.length - 1, Math.floor(random() * values.length))]!;
 
 function actorRef(actor: Data): Data {
@@ -765,7 +768,7 @@ function summon(state: Data, boss: Data, name: string, hpMultiplier: number, max
   const summonSkillId = MONSTERS[name]?.skillId ?? 0;
   state.actors.enemies.push({ side: "enemy", id, name, displayName: name, row: "front", level: boss.level, maxHp, currentHp: maxHp, attack: boss.baseAttack * .45, baseAttack: boss.baseAttack * .45, defense: boss.baseDefense * .6, baseDefense: boss.baseDefense * .6, speedPoints: 20, actionCooldown: actionCooldown(20), timeToAct: actionCooldown(20), crit: 0, critDamage: 150, hit: 100, dodge: 0, block: 0, skillDamage: 0, cooldownReduction: 0, lifesteal: 0, freeAttackPct: 0, freeDefensePct: 0, incomingDamageMultiplier: 1, skillIds: [], passives: [], shield: 0, shieldTime: 0, buffs: {}, controls: {}, dots: [], hots: [], cooldowns: {}, alive: true, isBoss: false, isElite: false, infiniteHp: false, regenTimer: REGEN_INTERVAL, setCounts: {}, setAffixes: [], setActionCount: 0, battleDamageMultiplier: 1 });
   state.actors.enemies.at(-1)!.skillIds = summonSkillId > 0 ? [summonSkillId] : [];
-  state.events.push({ type: "summon", source: actorRef(boss), unit: { side: "enemy", id, name, display_name: name, row: "front", level: boss.level, max_hp: maxHp, current_hp: maxHp, skill_ids: summonSkillId > 0 ? [summonSkillId] : [], is_boss: false, is_elite: false } });
+  state.events.push({ type: "summon", source: actorRef(boss), unit: { side: "enemy", id, name, display_name: name, row: "front", level: boss.level, max_hp: maxHp, current_hp: maxHp, skill_ids: summonSkillId > 0 ? [summonSkillId] : [], asset: summonAsset(name), is_boss: false, is_elite: false } });
   boss.summonCount += 1;
   emitMechanic(state, boss, `${boss.bossMechanic.name ?? "召唤"}·召唤${name}`);
 }

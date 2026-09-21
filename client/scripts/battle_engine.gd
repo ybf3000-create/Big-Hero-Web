@@ -3,6 +3,7 @@ extends RefCounted
 
 const SkillDataRef = preload("res://scripts/skill_data.gd")
 const SUMMON_SKILL_IDS: Dictionary = {"史莱姆·战士": 21, "骷髅·战士": 8, "暗影·盗贼": 36, "狼·盗贼": 29}
+const SUMMON_ASSETS: Dictionary = {"史莱姆·战士": "char_0001.png", "骷髅·战士": "char_0007.png", "暗影·盗贼": "char_0016.png", "狼·盗贼": "char_0031.png"}
 
 const BASE_ACTION_CD: float = 3.0
 const CHALLENGE_DURATION: float = 60.0
@@ -1251,7 +1252,7 @@ static func _summon_boss_minion(state: Dictionary, boss: Dictionary, summon_name
 		"alive": true, "is_boss": false, "is_elite": false, "infinite_hp": false, "regen_timer": REPLY_TICK_INTERVAL,
 	}
 	enemies.append(unit)
-	state["events"].append({"type": "summon", "source": _actor_ref(boss), "unit": {"side": "enemy", "id": next_id, "name": summon_name, "display_name": summon_name, "row": "front", "level": boss.get("level", 1), "max_hp": max_hp, "current_hp": max_hp, "is_boss": false, "is_elite": false}})
+	state["events"].append({"type": "summon", "source": _actor_ref(boss), "unit": {"side": "enemy", "id": next_id, "name": summon_name, "display_name": summon_name, "row": "front", "level": boss.get("level", 1), "max_hp": max_hp, "current_hp": max_hp, "asset": str(SUMMON_ASSETS.get(summon_name, "char_0001.png")), "is_boss": false, "is_elite": false}})
 	boss["summon_count"] = int(boss.get("summon_count", 0)) + 1
 	_emit_mechanic(state, boss, "%s·召唤%s" % [boss.get("boss_mechanic", {}).get("name", "召唤"), summon_name])
 
