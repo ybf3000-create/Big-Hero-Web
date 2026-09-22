@@ -303,8 +303,8 @@ function returnEquipmentGems(state: GameState, item: EquipmentItem): void {
   }
 }
 
-function equipmentMatchesRules(item: EquipmentItem, rules: Record<string, unknown>): boolean {
-  const listKeys = ["qualities", "slots", "affix_types", "initial_sockets", "suits"];
+function equipmentMatchesRule(item: EquipmentItem, rules: Record<string, unknown>): boolean {
+  const listKeys = ["qualities", "slots", "affix_types", "affix_names", "initial_sockets", "suits"];
   const hasConstraint = listKeys.some((key) => Array.isArray(rules[key]) && (rules[key] as unknown[]).length > 0)
     || numberValue(rules.affix_min, 0) > 0
     || numberValue(rules.affix_max, 8) < 8;
@@ -320,13 +320,25 @@ function equipmentMatchesRules(item: EquipmentItem, rules: Record<string, unknow
   if (affixCount < numberValue(rules.affix_min, 0) || affixCount > numberValue(rules.affix_max, 8)) return false;
   const types = Array.isArray(rules.affix_types) ? rules.affix_types : [];
   if (types.length > 0 && ![...(item.affixes ?? []), ...(item.setAffixes ?? [])].some((affix) => types.includes(affix.type))) return false;
+  const names = Array.isArray(rules.affix_names) ? rules.affix_names : [];
+  if (names.length > 0 && ![...(item.affixes ?? []), ...(item.setAffixes ?? [])].some((affix) => names.includes(affix.name))) return false;
   if (!includesOrAll("initial_sockets", item.initialGemSlots ?? item.gemSlots ?? 0)) return false;
   if (!includesOrAll("suits", item.suitName || "none")) return false;
   return true;
 }
 
+function shouldAutoDismantle(item: EquipmentItem, rules: Record<string, unknown>): boolean {
+  // New format: any matching rule in the list dismantles the item.
+  if (Array.isArray(rules.rules)) {
+    return (rules.rules as unknown[]).some((rule) => rule && typeof rule === "object" && !Array.isArray(rule) && equipmentMatchesRule(item, rule as Record<string, unknown>));
+  }
+  // Legacy saves used one keep-rule. Preserve that behavior until the player
+  // saves the new rule-list format.
+  return !equipmentMatchesRule(item, rules);
+}
+
 function receiveEquipment(state: GameState, item: EquipmentItem): { accepted: boolean; essence: number } {
-  if (state.autoDismantleEnabled && !item.locked && !equipmentMatchesRules(item, state.autoDismantleRules)) {
+  if (state.autoDismantleEnabled && !item.locked && shouldAutoDismantle(item, state.autoDismantleRules)) {
     const essence = ESSENCE_BY_QUALITY[Math.max(0, Math.min(4, item.quality))] ?? 1;
     state.dismantleEssence += essence;
     return { accepted: false, essence };
@@ -1309,12 +1321,20 @@ export function applyGameCommand(
     const validValues: Record<string, unknown[]> = {
       qualities: [0, 1, 2, 3, 4], slots: [1, 2, 3, 4, 5, 6, 7, 8],
       affix_types: ["attack", "defense", "universal", "set"],
+      affix_names: [...AFFIX_POOL.map(([name]) => name), ...Object.values(SET_AFFIXES).flat()],
       initial_sockets: [0, 1, 2, 3], suits: ["none", ...SET_NAMES],
     };
-    for (const [key, allowed] of Object.entries(validValues)) {
-      if (rules[key] !== undefined && (!Array.isArray(rules[key]) || (rules[key] as unknown[]).some((value) => !allowed.includes(value)))) throw new Error("自动分解规则不正确");
+    const ruleList = Array.isArray(rules.rules) ? rules.rules : null;
+    if (ruleList && ruleList.length > 10) throw new Error("自动分解规则最多10条");
+    const candidates = ruleList ?? [rules];
+    for (const candidate of candidates) {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("自动分解规则不正确");
+      const rule = candidate as Record<string, unknown>;
+      for (const [key, allowed] of Object.entries(validValues)) {
+        if (rule[key] !== undefined && (!Array.isArray(rule[key]) || (rule[key] as unknown[]).some((value) => !allowed.includes(value)))) throw new Error("自动分解规则不正确");
+      }
+      if (!Number.isInteger(rule.affix_min) || !Number.isInteger(rule.affix_max) || Number(rule.affix_min) < 0 || Number(rule.affix_max) > 8 || Number(rule.affix_min) > Number(rule.affix_max)) throw new Error("词缀数量范围不正确");
     }
-    if (!Number.isInteger(rules.affix_min) || !Number.isInteger(rules.affix_max) || Number(rules.affix_min) < 0 || Number(rules.affix_max) > 8 || Number(rules.affix_min) > Number(rules.affix_max)) throw new Error("词缀数量范围不正确");
     state.autoDismantleEnabled = enabled;
     state.autoDismantleRules = structuredClone(rules);
     event = { kind: "equipment", action: "auto_dismantle", enabled, rules: state.autoDismantleRules };

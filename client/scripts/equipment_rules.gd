@@ -106,6 +106,20 @@ static func matches_six_dimensions(eqp: Dictionary, rules: Dictionary) -> bool:
 				break
 		if not has_type:
 			return false
+	var names: Array = rules.get("affix_names", [])
+	if not names.is_empty():
+		var has_name := false
+		for affix in eqp.get("affixes", []):
+			if names.has(str(affix.get("name", ""))):
+				has_name = true
+				break
+		if not has_name:
+			for affix in eqp.get("set_affixes", []):
+				if names.has(str(affix.get("name", ""))):
+					has_name = true
+					break
+		if not has_name:
+			return false
 	var sockets: Array = rules.get("initial_sockets", [])
 	if not sockets.is_empty() and not sockets.has(int(eqp.get("initial_gem_slots", eqp.get("gem_slots", 0)))):
 		return false
@@ -115,6 +129,23 @@ static func matches_six_dimensions(eqp: Dictionary, rules: Dictionary) -> bool:
 	if not suits.is_empty() and not suits.has(suit_key):
 		return false
 	return true
+
+
+static func should_auto_dismantle(eqp: Dictionary, rules: Variant) -> bool:
+	# New format: {"rules": [{...}, {...}]}; any matching rule dismantles.
+	if rules is Dictionary and (rules as Dictionary).has("rules"):
+		var rule_list: Variant = (rules as Dictionary).get("rules", [])
+		if not (rule_list is Array):
+			return false
+		for rule in rule_list:
+			if rule is Dictionary and matches_six_dimensions(eqp, rule as Dictionary):
+				return true
+		return false
+	# Legacy format was a keep-list. Preserve its behavior for old saves until
+	# the player saves the new rule-list format.
+	if rules is Dictionary:
+		return not matches_six_dimensions(eqp, rules as Dictionary)
+	return false
 
 static func reroll_affixes(eqp: Dictionary, locked_indices: Array[int], affix_pool: Array[Dictionary]) -> bool:
 	if int(eqp.get("quality", 0)) < 3 or locked_indices.size() > 2:

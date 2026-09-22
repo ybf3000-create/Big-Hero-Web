@@ -120,8 +120,10 @@ static func btn_style_mini(btn: Button, clr: Color) -> void:
 	d.border_color = Color("c9b7b4")
 	btn.add_theme_stylebox_override("disabled", d)
 	btn.add_theme_color_override("font_color", Color.WHITE)
-	btn.add_theme_color_override("font_hover_color", Color.WHITE)
-	btn.add_theme_color_override("font_pressed_color", Color.WHITE)
+	btn.add_theme_color_override("font_hover_color", Color("4f454d"))
+	btn.add_theme_color_override("font_pressed_color", Color("352e38"))
+	btn.add_theme_color_override("font_hover_pressed_color", Color("352e38"))
+	btn.add_theme_color_override("font_focus_color", Color("4f454d"))
 	btn.add_theme_color_override("font_disabled_color", Color("7d7072"))
 	btn.flat = false
 
@@ -150,7 +152,10 @@ static func btn_style(btn: Button, clr: Color) -> void:
 	var p: StyleBoxFlat = n.duplicate() as StyleBoxFlat
 	p.bg_color = clr.darkened(0.15)
 	btn.add_theme_stylebox_override("pressed", p)
-	btn.add_theme_color_override("font_color", Color.WHITE)
+	btn.add_theme_color_override("font_color", Color("352e38"))
+	btn.add_theme_color_override("font_hover_color", Color("4f454d"))
+	btn.add_theme_color_override("font_pressed_color", Color("352e38"))
+	btn.add_theme_color_override("font_focus_color", Color("4f454d"))
 
 
 static func set_button_text_color(btn: Button, color: Color) -> void:
@@ -162,7 +167,7 @@ static func set_button_text_color(btn: Button, color: Color) -> void:
 
 static func shrine_button_style(btn: Button, primary: bool = false) -> void:
 	var base := Color("c94a55") if primary else Color("f4e8e7")
-	var ink := Color.WHITE if primary else Color("352e38")
+	var ink := Color("352e38")
 	var border := Color("96353e") if primary else Color("b88d89")
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = base

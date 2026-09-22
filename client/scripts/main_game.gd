@@ -101,7 +101,7 @@ var equip_capacity: int = EquipmentRulesCls.EQUIP_CAPACITY_BASE
 var equip_expansion_count: int = 0
 var dismantle_essence: int = 0
 var auto_dismantle_enabled: bool = false
-var auto_dismantle_rules: Dictionary = {}
+var auto_dismantle_rules: Array[Dictionary] = []
 var gem_bag: Array[Dictionary] = []   # [{gem_id, level, count}]
 var lottery_tickets: Array[int] = []  # 3位数 000~999, 最多10张
 var _tooltip_nodes: Array[Node] = []  # 当前打开的 tooltip 列表
@@ -215,6 +215,17 @@ func _sm():
 
 func _is_valid_equipment(eqp: Dictionary, expected_slot: String = "") -> bool:
 	return EquipmentRulesCls.is_valid_equipment(eqp, expected_slot)
+
+
+func _normalize_auto_dismantle_rules(raw: Variant) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if raw is Dictionary:
+		var saved_rules: Variant = (raw as Dictionary).get("rules", [])
+		if saved_rules is Array:
+			for item in saved_rules:
+				if item is Dictionary:
+					result.append((item as Dictionary).duplicate(true))
+	return result.slice(0, 10)
 
 
 ## ============================================================
@@ -651,7 +662,7 @@ func _load_from_save_data(data: Dictionary) -> void:
 	equip_expansion_count = clampi(int(data.get("equip_expansion_count", (equip_capacity - EquipmentRulesCls.EQUIP_CAPACITY_BASE) / EquipmentRulesCls.EQUIP_EXPAND_SIZE)), 0, EquipmentRulesCls.EQUIP_EXPANSION_COSTS.size())
 	dismantle_essence = maxi(0, int(data.get("dismantle_essence", 0)))
 	auto_dismantle_enabled = bool(data.get("auto_dismantle_enabled", false))
-	auto_dismantle_rules = data.get("auto_dismantle_rules", {}).duplicate(true)
+	auto_dismantle_rules = _normalize_auto_dismantle_rules(data.get("auto_dismantle_rules", {}))
 	skill_system.update_max_slots(player_level)
 	skill_system.from_dict(data.get("skill_system", {}))
 	skill_system.update_max_slots(player_level)
@@ -732,7 +743,7 @@ func _build_save_data() -> Dictionary:
 		"equip_expansion_count": equip_expansion_count,
 		"dismantle_essence": dismantle_essence,
 		"auto_dismantle_enabled": auto_dismantle_enabled,
-		"auto_dismantle_rules": auto_dismantle_rules,
+		"auto_dismantle_rules": {"rules": auto_dismantle_rules.duplicate(true)},
 		"skill_system": skill_system.to_dict(),
 		"gem_bag": gem_bag,
 		"lottery_tickets": lottery_tickets,
@@ -1314,7 +1325,7 @@ func _grant_battle_drops(drops: Array) -> Array[String]:
 
 func _add_equipment_instance(raw_equip: Dictionary) -> bool:
 	var eqp := EquipmentRulesCls.normalize_equipment(raw_equip)
-	if auto_dismantle_enabled and not bool(eqp.get("locked", false)) and not EquipmentRulesCls.matches_six_dimensions(eqp, auto_dismantle_rules):
+	if auto_dismantle_enabled and not bool(eqp.get("locked", false)) and EquipmentRulesCls.should_auto_dismantle(eqp, {"rules": auto_dismantle_rules}):
 		dismantle_essence += EquipmentRulesCls.essence_value(eqp)
 		_return_equipment_gems(eqp)
 		return false
@@ -3760,98 +3771,270 @@ func _show_auto_dismantle_panel() -> void:
 	UIUtils.shrine_panel_style(dialog, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(dialog)
 	var title := Label.new()
-	title.text = "自动分解 - 六维保留条件取交集"
+	title.text = "自动分解规则"
 	title.position = Vector2(20, 14)
 	title.add_theme_font_size_override("font_size", 20)
 	title.add_theme_color_override("font_color", Color("96353e"))
 	dialog.add_child(title)
 	var hint := Label.new()
-	hint.text = "符合全部所选条件的装备会保留，其余自动分解；列内取任一、列间取交集。锁定装备永不分解。"
+	hint.text = "任意一条规则命中就自动分解；规则内各项取交集。锁定装备永不分解。"
 	hint.position = Vector2(20, 45)
 	hint.add_theme_color_override("font_color", Color("6f6264"))
 	dialog.add_child(hint)
 	var enabled := CheckBox.new()
-	enabled.text = ("☑ " if auto_dismantle_enabled else "☐ ") + "启用自动分解"
+	enabled.text = "启用自动分解"
 	enabled.button_pressed = auto_dismantle_enabled
 	enabled.position = Vector2(780, 14)
 	enabled.add_theme_font_size_override("font_size", 14)
 	enabled.add_theme_color_override("font_color", Color("352e38"))
-	enabled.toggled.connect(func(pressed: bool): enabled.text = ("☑ " if pressed else "☐ ") + "启用自动分解")
 	dialog.add_child(enabled)
+	var list_area := VBoxContainer.new()
+	list_area.position = Vector2(20, 84)
+	list_area.size = Vector2(930, 330)
+	list_area.add_theme_constant_override("separation", 8)
+	dialog.add_child(list_area)
+	if auto_dismantle_rules.is_empty():
+		var empty := Label.new()
+		empty.text = "暂无分解规则"
+		empty.add_theme_font_size_override("font_size", 16)
+		empty.add_theme_color_override("font_color", Color("74676b"))
+		list_area.add_child(empty)
+	else:
+		for index in range(auto_dismantle_rules.size()):
+			var row := HBoxContainer.new()
+			row.custom_minimum_size = Vector2(900, 38)
+			row.add_theme_constant_override("separation", 8)
+			var rule_label := Label.new()
+			rule_label.text = "%d. %s" % [index + 1, _auto_rule_summary(auto_dismantle_rules[index])]
+			rule_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			rule_label.add_theme_color_override("font_color", Color("352e38"))
+			row.add_child(rule_label)
+			var edit_btn := Button.new()
+			edit_btn.text = "编辑"
+			edit_btn.custom_minimum_size = Vector2(68, 30)
+			UIUtils.btn_style_mini(edit_btn, Color(0.18, 0.30, 0.42))
+			var edit_index := index
+			edit_btn.pressed.connect(func():
+				_close_all_tooltips()
+				_show_auto_dismantle_rule_editor(edit_index)
+			)
+			row.add_child(edit_btn)
+			var delete_btn := Button.new()
+			delete_btn.text = "删除"
+			delete_btn.custom_minimum_size = Vector2(68, 30)
+			UIUtils.btn_style_mini(delete_btn, Color(0.35, 0.16, 0.18))
+			delete_btn.pressed.connect(func():
+				var next_rules: Array[Dictionary] = auto_dismantle_rules.duplicate(true)
+				next_rules.remove_at(edit_index)
+				await _save_auto_dismantle_rules(next_rules, enabled.button_pressed)
+				_close_all_tooltips()
+				_show_auto_dismantle_panel()
+			)
+			row.add_child(delete_btn)
+			list_area.add_child(row)
+	var add_btn := Button.new()
+	add_btn.text = "添加规则 (%d/10)" % auto_dismantle_rules.size()
+	add_btn.position = Vector2(20, 430)
+	add_btn.size = Vector2(150, 38)
+	add_btn.disabled = auto_dismantle_rules.size() >= 10
+	UIUtils.btn_style_mini(add_btn, Color(0.12, 0.35, 0.25))
+	add_btn.pressed.connect(func():
+		_close_all_tooltips()
+		_show_auto_dismantle_rule_editor(-1)
+	)
+	dialog.add_child(add_btn)
+	var save_btn := Button.new()
+	save_btn.text = "保存并关闭"
+	save_btn.position = Vector2(690, 430)
+	save_btn.size = Vector2(120, 38)
+	UIUtils.btn_style_mini(save_btn, Color(0.12, 0.35, 0.25))
+	save_btn.pressed.connect(func():
+		await _save_auto_dismantle_rules(auto_dismantle_rules, enabled.button_pressed)
+		_close_all_tooltips()
+	)
+	dialog.add_child(save_btn)
+	var cancel := Button.new()
+	cancel.text = "取消"
+	cancel.position = Vector2(825, 430)
+	cancel.size = Vector2(100, 38)
+	UIUtils.btn_style_mini(cancel, Color(0.25, 0.18, 0.2))
+	cancel.pressed.connect(_close_all_tooltips)
+	dialog.add_child(cancel)
+	add_child(dialog)
 
-	var defs := [
+
+func _auto_rule_summary(rule: Dictionary) -> String:
+	var parts: Array[String] = []
+	var quality_names := ["普通", "精良", "稀有", "史诗", "传说"]
+	var slot_names := ["武器", "防具", "鞋子", "戒指", "项链", "披风", "头盔", "护符"]
+	var socket_names := ["0孔", "1孔", "2孔", "3孔"]
+	var suit_names := ["非套装", "龙鳞", "烈焰", "冰霜", "雷霆", "疾风", "铁壁", "暗影", "自然", "引力", "星辰", "幻影", "口才", "奢侈"]
+	var quality_values: Array = rule.get("qualities", [])
+	if not quality_values.is_empty(): parts.append("品质=" + _auto_rule_names(quality_values, quality_names))
+	var slot_values: Array = rule.get("slots", [])
+	if not slot_values.is_empty():
+		var names: Array[String] = []
+		for value in slot_values:
+			var slot_index := int(value) - 1
+			if slot_index >= 0 and slot_index < slot_names.size(): names.append(slot_names[slot_index])
+		parts.append("部位=" + ",".join(names))
+	var affix_values: Array = rule.get("affix_names", [])
+	if not affix_values.is_empty(): parts.append("词缀=" + (str(affix_values[0]) if affix_values.size() == 1 else "%d项" % affix_values.size()))
+	var socket_values: Array = rule.get("initial_sockets", [])
+	if not socket_values.is_empty(): parts.append("孔数=" + _auto_rule_names(socket_values, socket_names))
+	var suit_values: Array = rule.get("suits", [])
+	if not suit_values.is_empty(): parts.append("套装=" + _auto_rule_names(suit_values, suit_names))
+	var min_count := int(rule.get("affix_min", 0))
+	var max_count := int(rule.get("affix_max", 8))
+	if min_count > 0 or max_count < 8: parts.append("词缀数量=%d-%d" % [min_count, max_count])
+	return "；".join(parts) if not parts.is_empty() else "无条件"
+
+
+func _auto_rule_names(values: Array, names: Array[String]) -> String:
+	var result: Array[String] = []
+	for value in values:
+		if value is int or value is float:
+			var index := int(value)
+			if index >= 0 and index < names.size(): result.append(names[index])
+		else:
+			result.append(str(value))
+	return ",".join(result)
+
+
+func _save_auto_dismantle_rules(next_rules: Array[Dictionary], enabled: bool) -> bool:
+	if _is_network_game():
+		return await _run_network_game_command("equipment/auto-dismantle", {"enabled": enabled, "rules": {"rules": next_rules}}, "自动分解设置已保存")
+	auto_dismantle_rules = next_rules.duplicate(true)
+	auto_dismantle_enabled = enabled
+	_auto_save()
+	_show_float_text("自动分解设置已保存", Color(0.45, 1.0, 0.65))
+	return true
+
+
+func _show_auto_dismantle_rule_editor(edit_index: int = -1) -> void:
+	_close_all_tooltips()
+	_ensure_overlay()
+	var dialog := Panel.new()
+	dialog.name = "AutoDismantleRuleEditor"
+	dialog.position = Vector2(120, 52)
+	dialog.size = Vector2(1040, 620)
+	_prepare_modal_panel(dialog)
+	UIUtils.shrine_panel_style(dialog, Color("fff9f5"), Color("b88d89"), 2)
+	_tooltip_nodes.append(dialog)
+	var title := Label.new()
+	title.text = "添加分解规则" if edit_index < 0 else "编辑分解规则"
+	title.position = Vector2(20, 14)
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color("96353e"))
+	dialog.add_child(title)
+	var hint := Label.new()
+	hint.text = "勾选的项目同时满足时命中；未勾选的项目视为全部。随机词缀按名称匹配。"
+	hint.position = Vector2(20, 45)
+	hint.add_theme_color_override("font_color", Color("6f6264"))
+	dialog.add_child(hint)
+	var saved: Dictionary = {}
+	if edit_index >= 0 and edit_index < auto_dismantle_rules.size(): saved = auto_dismantle_rules[edit_index].duplicate(true)
+	var affix_names: Array[String] = []
+	for affix in EquipGenCls.AFFIX_POOL:
+		var affix_name := str(affix.get("name", ""))
+		if not affix_name.is_empty(): affix_names.append(affix_name)
+	var defs: Array[Dictionary] = [
 		{"key":"qualities", "title":"品质", "labels":["普通","精良","稀有","史诗","传说"], "values":[0,1,2,3,4]},
 		{"key":"slots", "title":"部位", "labels":["武器","防具","鞋子","戒指","项链","披风","头盔","护符"], "values":[1,2,3,4,5,6,7,8]},
-		{"key":"affix_types", "title":"词缀类型", "labels":["攻击","防御","通用","套装"], "values":["attack","defense","universal","set"]},
+		{"key":"affix_names", "title":"随机词缀", "labels":affix_names, "values":affix_names},
 		{"key":"initial_sockets", "title":"初始孔数", "labels":["0孔","1孔","2孔","3孔"], "values":[0,1,2,3]},
 		{"key":"suits", "title":"套装", "labels":["非套装","龙鳞","烈焰","冰霜","雷霆","疾风","铁壁","暗影","自然","引力","星辰","幻影","口才","奢侈"], "values":["none","龙鳞","烈焰","冰霜","雷霆","疾风","铁壁","暗影","自然","引力","星辰","幻影","口才","奢侈"]},
 	]
-	var lists: Dictionary = {}
-	for di in range(defs.size()):
-		var defn: Dictionary = defs[di]
-		var lbl := Label.new()
-		lbl.text = str(defn["title"]) + "（空=全部）"
-		lbl.position = Vector2(20 + di * 188, 82)
-		lbl.add_theme_color_override("font_color", Color("4f454d"))
-		dialog.add_child(lbl)
-		var list := ItemList.new()
-		list.position = Vector2(20 + di * 188, 108)
-		list.size = Vector2(172, 260)
-		list.select_mode = ItemList.SELECT_MULTI
-		list.add_theme_color_override("font_color", Color("352e38"))
-		list.add_theme_color_override("font_selected_color", Color("5f5557"))
-		var list_panel := StyleBoxFlat.new(); list_panel.bg_color = Color("fffdfb"); list_panel.border_width_left = 1; list_panel.border_width_right = 1; list_panel.border_width_top = 1; list_panel.border_width_bottom = 1; list_panel.border_color = Color("d6b8b3"); list.add_theme_stylebox_override("panel", list_panel)
-		var selected_style := StyleBoxFlat.new(); selected_style.bg_color = Color("c94a55"); selected_style.set_corner_radius_all(3); list.add_theme_stylebox_override("selected", selected_style); list.add_theme_stylebox_override("selected_focus", selected_style)
-		for item_label in defn["labels"]:
-			list.add_item(str(item_label))
-		var saved: Array = auto_dismantle_rules.get(defn["key"], [])
-		for i in range(defn["values"].size()):
-			if saved.has(defn["values"][i]): list.select(i, false)
-		dialog.add_child(list)
-		lists[defn["key"]] = list
+	var scroll := ScrollContainer.new()
+	scroll.position = Vector2(20, 78)
+	scroll.size = Vector2(1000, 405)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	dialog.add_child(scroll)
+	var columns := HBoxContainer.new()
+	columns.add_theme_constant_override("separation", 12)
+	columns.custom_minimum_size = Vector2(980, 0)
+	scroll.add_child(columns)
+	var checks: Dictionary = {}
+	for defn in defs:
+		var column := VBoxContainer.new()
+		column.custom_minimum_size = Vector2(184, 0)
+		column.add_theme_constant_override("separation", 2)
+		columns.add_child(column)
+		var header := Label.new()
+		header.text = str(defn["title"]) + "（不选=全部）"
+		header.add_theme_color_override("font_color", Color("4f454d"))
+		column.add_child(header)
+		var values: Array = defn["values"]
+		var labels: Array = defn["labels"]
+		var field_checks: Array[CheckBox] = []
+		for oi in range(values.size()):
+			var check := CheckBox.new()
+			check.text = str(labels[oi])
+			check.button_pressed = (values[oi] in (saved.get(defn["key"], []) as Array))
+			check.add_theme_color_override("font_color", Color("352e38"))
+			check.add_theme_color_override("font_hover_color", Color("4f454d"))
+			check.add_theme_color_override("font_pressed_color", Color("4f454d"))
+			check.add_theme_color_override("font_focus_color", Color("4f454d"))
+			field_checks.append(check)
+			column.add_child(check)
+		checks[defn["key"]] = field_checks
+	# 部位单独提供“全部”，勾选后写入全部部位值。
+	var slot_all := CheckBox.new()
+	slot_all.text = "全部部位"
+	slot_all.button_pressed = (checks["slots"].size() > 0 and checks["slots"].all(func(item: CheckBox): return item.button_pressed))
+	slot_all.add_theme_color_override("font_color", Color("16804d"))
+	slot_all.toggled.connect(func(pressed: bool):
+		for item in checks["slots"]: item.button_pressed = pressed
+	)
+	var slot_column: Node = columns.get_child(1)
+	slot_column.add_child(slot_all)
 	var count_lbl := Label.new()
-	count_lbl.text = "词缀数量范围"
-	count_lbl.position = Vector2(20, 390)
+	count_lbl.text = "词缀数量范围（含套装词条）"
+	count_lbl.position = Vector2(22, 500)
 	count_lbl.add_theme_color_override("font_color", Color("4f454d"))
 	dialog.add_child(count_lbl)
 	var min_box := SpinBox.new()
-	min_box.min_value = 0; min_box.max_value = 8; min_box.value = int(auto_dismantle_rules.get("affix_min", 0))
-	min_box.position = Vector2(145, 382); min_box.size = Vector2(80, 36)
+	min_box.min_value = 0; min_box.max_value = 8; min_box.value = int(saved.get("affix_min", 0))
+	min_box.position = Vector2(220, 492); min_box.size = Vector2(80, 32)
 	dialog.add_child(min_box)
-	var range_lbl := Label.new(); range_lbl.text = "至"; range_lbl.position = Vector2(238, 390); range_lbl.add_theme_color_override("font_color", Color("4f454d")); dialog.add_child(range_lbl)
+	var range_lbl := Label.new(); range_lbl.text = "至"; range_lbl.position = Vector2(312, 500); range_lbl.add_theme_color_override("font_color", Color("4f454d")); dialog.add_child(range_lbl)
 	var max_box := SpinBox.new()
-	max_box.min_value = 0; max_box.max_value = 8; max_box.value = int(auto_dismantle_rules.get("affix_max", 8))
-	max_box.position = Vector2(270, 382); max_box.size = Vector2(80, 36)
+	max_box.min_value = 0; max_box.max_value = 8; max_box.value = int(saved.get("affix_max", 8))
+	max_box.position = Vector2(340, 492); max_box.size = Vector2(80, 32)
 	dialog.add_child(max_box)
 	var save_btn := Button.new()
-	save_btn.text = "保存设置"
-	save_btn.position = Vector2(360, 465); save_btn.size = Vector2(120, 40)
+	save_btn.text = "保存规则"
+	save_btn.position = Vector2(690, 530); save_btn.size = Vector2(120, 38)
 	UIUtils.btn_style_mini(save_btn, Color(0.12, 0.35, 0.25))
 	save_btn.pressed.connect(func():
 		if int(min_box.value) > int(max_box.value):
 			_show_float_text("词缀数量下限不能大于上限", Color(1.0, 0.45, 0.35)); return
-		var next_rules := {"affix_min": int(min_box.value), "affix_max": int(max_box.value)}
-		for def_raw in defs:
-			var defn: Dictionary = def_raw
+		var next_rule: Dictionary = {"affix_min": int(min_box.value), "affix_max": int(max_box.value)}
+		for defn in defs:
 			var selected: Array = []
-			var list: ItemList = lists[defn["key"]]
-			for selected_idx in list.get_selected_items(): selected.append(defn["values"][selected_idx])
-			next_rules[defn["key"]] = selected
-		if _is_network_game():
-			var saved := await _run_network_game_command("equipment/auto-dismantle", {"enabled": enabled.button_pressed, "rules": next_rules}, "自动分解设置已保存")
-			if saved:
-				_close_all_tooltips()
-		else:
-			auto_dismantle_rules = next_rules
-			auto_dismantle_enabled = enabled.button_pressed
-			_auto_save()
-			_close_all_tooltips()
-			_show_float_text("自动分解设置已保存", Color(0.45, 1.0, 0.65))
+			for i in range((checks[defn["key"]] as Array).size()):
+				var check: CheckBox = checks[defn["key"]][i]
+				if check.button_pressed: selected.append(defn["values"][i])
+			next_rule[defn["key"]] = selected
+		if _auto_rule_is_empty(next_rule):
+			_show_float_text("请至少选择一项分解条件", Color(1.0, 0.45, 0.35)); return
+		var next_rules: Array[Dictionary] = auto_dismantle_rules.duplicate(true)
+		if edit_index >= 0 and edit_index < next_rules.size(): next_rules[edit_index] = next_rule
+		else: next_rules.append(next_rule)
+		_close_all_tooltips()
+		if await _save_auto_dismantle_rules(next_rules, auto_dismantle_enabled):
+			_show_auto_dismantle_panel()
 	)
 	dialog.add_child(save_btn)
-	var cancel := Button.new(); cancel.text = "取消"; cancel.position = Vector2(510, 465); cancel.size = Vector2(100, 40)
+	var cancel := Button.new(); cancel.text = "取消"; cancel.position = Vector2(825, 530); cancel.size = Vector2(100, 38)
 	UIUtils.btn_style_mini(cancel, Color(0.25, 0.18, 0.2)); cancel.pressed.connect(_close_all_tooltips); dialog.add_child(cancel)
 	add_child(dialog)
+
+
+func _auto_rule_is_empty(rule: Dictionary) -> bool:
+	for key in ["qualities", "slots", "affix_names", "initial_sockets", "suits"]:
+		if not (rule.get(key, []) as Array).is_empty(): return false
+	return int(rule.get("affix_min", 0)) <= 0 and int(rule.get("affix_max", 8)) >= 8
 
 
 ## 刷新物品区域（不关面板）
@@ -3863,7 +4046,7 @@ func _restyle_tab(tb: Button, active: bool) -> void:
 		ta.border_width_bottom = 3
 		ta.border_color = Color(0.3, 0.6, 1.0)
 		tb.add_theme_stylebox_override("normal", ta)
-		tb.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
+		tb.add_theme_color_override("font_color", Color("4f454d"))
 	else:
 		var ta2 := StyleBoxFlat.new()
 		ta2.bg_color = Color(0.08, 0.09, 0.15)
@@ -5403,6 +5586,12 @@ func _apply_deity_buff(buff_data: Dictionary) -> void:
 ## ============ 技能面板 ============
 func _build_skill_tab(panel: Panel) -> void:
 	var sec_y: float = 50.0
+	var gold_lbl := Label.new()
+	gold_lbl.text = "金币：%d" % player_gold
+	gold_lbl.position = Vector2(420, 14)
+	gold_lbl.add_theme_font_size_override("font_size", 14)
+	gold_lbl.add_theme_color_override("font_color", Color("8a5a12"))
+	panel.add_child(gold_lbl)
 
 	# 装备技能槽位
 	var eq_title: Label = Label.new()
@@ -5496,7 +5685,7 @@ func _build_skill_tab(panel: Panel) -> void:
 			panel.add_child(name_lbl)
 
 			var cd_lbl: Label = Label.new()
-			cd_lbl.text = "间隔 " + SkillDataRef.action_cd_text(sdata)
+			cd_lbl.text = "行动冷却 " + SkillDataRef.action_cd_text(sdata)
 			cd_lbl.add_theme_font_size_override("font_size", 11)
 			cd_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
 			cd_lbl.position = Vector2(sx + 52, sy + 32)
@@ -5602,12 +5791,12 @@ func _build_skill_tab(panel: Panel) -> void:
 		qb.add_theme_font_size_override("font_size", 11)
 		var selected: bool = (_skill_filter == qi - 1 and qi > 0) or (qi == 0 and _skill_filter < 0)
 		if selected:
-			# 选中：亮背景 + 白色边框
+			# 选中：亮背景 + 深色文字，避免焦点状态变成白字。
 			var sel_s := StyleBoxFlat.new()
 			sel_s.bg_color = school_colors[qi].lightened(0.2)
 			sel_s.border_width_left = 2; sel_s.border_width_right = 2
 			sel_s.border_width_top = 2; sel_s.border_width_bottom = 2
-			sel_s.border_color = Color(1.0, 1.0, 1.0, 0.85)
+			sel_s.border_color = Color("8e7679")
 			sel_s.set_corner_radius_all(3)
 			qb.add_theme_stylebox_override("normal", sel_s)
 		else:
@@ -5704,13 +5893,14 @@ func _build_skill_tab(panel: Panel) -> void:
 
 		var pool_info: Label = Label.new()
 		if equipped:
-			pool_info.text = "已装备 · " + SkillDataRef.action_cd_text(sdata)
+			pool_info.text = "已装备 · 行动冷却 " + SkillDataRef.action_cd_text(sdata)
 		elif is_unlocked:
-			pool_info.text = SkillDataRef.action_cd_text(sdata) + " · 已解锁"
+			pool_info.text = "行动冷却 " + SkillDataRef.action_cd_text(sdata) + " · 已解锁"
 		else:
-			pool_info.text = "🔒 " + str(sdata.get("price", 0)) + " 金币"
+			pool_info.text = "解锁 " + str(sdata.get("price", 0)) + " 金币"
 		pool_info.add_theme_font_size_override("font_size", 10)
-		pool_info.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
+		var skill_price: int = int(sdata.get("price", 0))
+		pool_info.add_theme_color_override("font_color", Color("17633f") if not is_unlocked and player_gold >= skill_price else Color("7d7072"))
 		pool_info.position = Vector2(cx + 34, cy + 24)
 		content.add_child(pool_info)
 
@@ -5781,7 +5971,7 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 		9: target_str = "贯穿"
 		10: target_str = "自身"
 		11: target_str = "自身治疗"
-	school_lbl.text = SkillDataRef.school_name(sdata.get("school", 0)) + "  |  间隔 " + SkillDataRef.action_cd_text(sdata) + ("  |  " + target_str if not target_str.is_empty() else "")
+	school_lbl.text = SkillDataRef.school_name(sdata.get("school", 0)) + "  |  行动冷却 " + SkillDataRef.action_cd_text(sdata) + ("  |  " + target_str if not target_str.is_empty() else "")
 	school_lbl.add_theme_font_size_override("font_size", 12)
 	school_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
 	school_lbl.position = Vector2(16, 34)
@@ -5921,7 +6111,7 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 func _skill_hover_text(skill: Dictionary) -> String:
 	var lines: Array[String] = [
 		UIUtils.safe_icon(str(skill.get("icon", "")), "技") + " " + str(skill.get("name", "???")),
-		SkillDataRef.school_name(int(skill.get("school", 0))) + "  |  间隔 " + SkillDataRef.action_cd_text(skill),
+		SkillDataRef.school_name(int(skill.get("school", 0))) + "  |  行动冷却 " + SkillDataRef.action_cd_text(skill),
 	]
 	var description := str(skill.get("desc", ""))
 	if not description.is_empty():

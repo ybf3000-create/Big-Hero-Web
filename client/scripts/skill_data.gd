@@ -217,7 +217,7 @@ static func get_skill(id: int) -> Dictionary:
 
 static func action_cd_text(skill: Dictionary) -> String:
 	var turns := int(skill.get("action_cd", 1))
-	return "%d次行动" % turns
+	return "%d次自身行动" % turns
 
 # 按流派筛选
 static func get_skills_by_school(school: int) -> Array[Dictionary]:
