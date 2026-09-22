@@ -2439,22 +2439,24 @@ func _add_equipment_icon(parent: Control, eqp: Dictionary, pos: Vector2, icon_si
 	fallback.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(fallback)
 
+func _remove_ui_node_now(node: Node) -> void:
+	if not is_instance_valid(node):
+		return
+	var parent := node.get_parent()
+	if parent:
+		parent.remove_child(node)
+	node.queue_free()
+
+
 func _close_all_tooltips() -> void:
-	for t in _tooltip_nodes:
-		if is_instance_valid(t):
-			t.queue_free()
+	_cancel_pending_detail_click()
+	for node in _tooltip_nodes:
+		_remove_ui_node_now(node)
 	_tooltip_nodes.clear()
-	# 移除遮罩层
-	var ov: Node = get_node_or_null("TooltipOverlay")
-	if ov:
-		ov.queue_free()
-	# 也清理确认对话框（可能因遮罩点击而触发）
-	var d1: Node = get_node_or_null("ExpansionConfirm")
-	if d1:
-		d1.queue_free()
-	var d2: Node = get_node_or_null("ResetConfirmDialog")
-	if d2:
-		d2.queue_free()
+	_remove_ui_node_now(get_node_or_null("TooltipOverlay"))
+	# Compatibility cleanup for dialogs created before they were registered.
+	for node_name in ["ExpansionConfirm", "ResetConfirmDialog"]:
+		_remove_ui_node_now(get_node_or_null(node_name))
 
 
 func _queue_detail_click(action: Callable) -> void:
@@ -2688,7 +2690,7 @@ func _show_gem_detail(gem: Dictionary, defn: Dictionary) -> void:
 	panel.name = "GemDetail"
 	panel.position = Vector2(430, 205)
 	panel.size = Vector2(420, 230)
-	panel.z_index = 101
+	_prepare_modal_panel(panel)
 	UIUtils.shrine_panel_style(panel, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(panel)
 	var title := Label.new()
@@ -2737,9 +2739,9 @@ func _build_world_chat_panel() -> void:
 	panel.name = "WorldChatPanel"
 	panel.position = Vector2(820, 118)
 	panel.size = Vector2(440, 490)
-	panel.z_index = 80
 	UIUtils.shrine_panel_style(panel, Color("fff9f5"), Color("b88d89"), 2)
 	add_child(panel)
+	_raise_ui_panel(panel)
 
 	var title := Label.new()
 	title.text = "世界聊天"
@@ -2826,9 +2828,9 @@ func _build_auction_panel(initial_tab: String = "market") -> void:
 	panel.name = "AuctionPanel"
 	panel.position = Vector2(145, 92)
 	panel.size = Vector2(990, 550)
-	panel.z_index = 90
 	UIUtils.shrine_panel_style(panel, Color("fff9f5"), Color("b88d89"), 2)
 	add_child(panel)
+	_raise_ui_panel(panel)
 
 	var title := Label.new()
 	title.text = "拍卖行"
@@ -3193,8 +3195,9 @@ func _show_reset_confirm() -> void:
 	dialog.name = "ResetConfirmDialog"
 	dialog.position = Vector2(340, 280)
 	dialog.size = Vector2(360, 180)
-	dialog.z_index = 101
+	_prepare_modal_panel(dialog)
 	UIUtils.shrine_panel_style(dialog, Color("fff9f5"), Color("b88d89"), 2)
+	_tooltip_nodes.append(dialog)
 
 	var title: Label = Label.new()
 	title.text = "🔄 洗点确认"
@@ -3217,8 +3220,6 @@ func _show_reset_confirm() -> void:
 	UIUtils.shrine_button_style(confirm_btn, true)
 	confirm_btn.pressed.connect(func():
 		_reset_stats()
-		var d3 := get_node_or_null("ResetConfirmDialog")
-		if d3: d3.queue_free()
 		_close_all_tooltips()
 	)
 	dialog.add_child(confirm_btn)
@@ -3228,11 +3229,7 @@ func _show_reset_confirm() -> void:
 	cancel_btn.position = Vector2(200, 120)
 	cancel_btn.size = Vector2(80, 36)
 	UIUtils.shrine_button_style(cancel_btn, false)
-	cancel_btn.pressed.connect(func():
-		var d4 := get_node_or_null("ResetConfirmDialog")
-		if d4: d4.queue_free()
-		_close_all_tooltips()
-	)
+	cancel_btn.pressed.connect(_close_all_tooltips)
 	dialog.add_child(cancel_btn)
 
 	add_child(dialog)
@@ -3252,21 +3249,18 @@ func _show_inventory_panel() -> void:
 
 
 func _raise_ui_panel(panel: CanvasItem) -> void:
-	# Inventory and stats can be opened on top of each other. Use a dynamic
-	# sibling z-index so the latest panel, including its tab buttons, is always
-	# above the panel that was opened before it.
-	var highest := 0
-	for child in get_children():
-		if child == panel or not child is CanvasItem:
-			continue
-		var child_name := str(child.name)
-		if not child_name.ends_with("Panel"):
-			continue
-		var child_z := int((child as CanvasItem).z_index)
-		if child_z < 99:
-			highest = maxi(highest, child_z)
-	panel.z_index = mini(98, highest + 1)
+	# Ordinary windows and their contents all stay at z=0. Scene-tree order then
+	# keeps every child inside its own window's stacking context: moving a window
+	# to the front moves the complete subtree, without a child leaking through a
+	# newer sibling window.
+	panel.z_index = 0
 	panel.move_to_front()
+
+
+func _prepare_modal_panel(panel: Control) -> void:
+	# TooltipOverlay is z=100. Every blocking dialog must be one level above it.
+	panel.z_index = 101
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 
 
 func _build_inventory_panel() -> void:
@@ -3296,12 +3290,12 @@ func _build_inventory_panel() -> void:
 		{ "id": "gem",     "text": "宝    石" },
 		{ "id": "lottery", "text": "彩    票" },
 	]
+	var inventory_tabs: Array[Button] = []
 	for ti in range(tabs.size()):
 		var tb: Button = Button.new()
 		tb.text = tabs[ti]["text"]
 		tb.position = Vector2(324 + ti * 104, 59)
 		tb.size = Vector2(96, 34)
-		tb.z_index = 5
 		tb.add_theme_font_size_override("font_size", 16)
 		var is_tab_active: bool = (_inv_tab == tabs[ti]["id"])
 		if is_tab_active:
@@ -3329,6 +3323,7 @@ func _build_inventory_panel() -> void:
 		)
 		tb.set_meta("tab_id", tid)
 		panel.add_child(tb)
+		inventory_tabs.append(tb)
 
 	# 装备栏（左侧）
 	var equip_panel: Panel = Panel.new()
@@ -3382,6 +3377,7 @@ func _build_inventory_panel() -> void:
 			var frame_p: Panel = Panel.new()
 			frame_p.position = Vector2(rx, ry + 16)
 			frame_p.size = Vector2(icon_s + 2, icon_s + 2)
+			frame_p.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			var fb := StyleBoxFlat.new()
 			fb.bg_color = Color("fff9f6")
 			fb.border_width_left = 1; fb.border_width_right = 1
@@ -3576,12 +3572,19 @@ func _build_inventory_panel() -> void:
 	close_btn.size = Vector2(70, 24)
 	UIUtils.shrine_button_style(close_btn, false)
 	close_btn.pressed.connect(func():
+		_close_all_tooltips()
 		_inv_filter_quality.clear()
 		_inv_filter_slot.clear()
 		_equip_page = 0
 		panel.queue_free()
 	)
 	panel.add_child(close_btn)
+
+	# Tabs need to cover only the inventory content below them. Keeping the same
+	# z-index and moving them last preserves that local order without allowing
+	# them to draw through a newer top-level window such as StatsPanel.
+	for tab_button in inventory_tabs:
+		tab_button.move_to_front()
 
 	add_child(panel)
 	_raise_ui_panel(panel)
@@ -3630,17 +3633,14 @@ func _run_network_slot_enhancement(slot_names: Array[String], levels: int) -> bo
 func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
 	var old := get_node_or_null("SlotEnhancePanel")
 	if old:
-		old.queue_free()
+		_close_all_tooltips()
 		return
 	_ensure_overlay()
 	var dialog := Panel.new()
 	dialog.name = "SlotEnhancePanel"
 	dialog.position = Vector2(315, 135)
 	dialog.size = Vector2(650, 450)
-	# The tooltip overlay is a full-screen z=100 input shield. Keep this dialog
-	# above it so the enhancement controls remain visible and clickable.
-	dialog.z_index = 101
-	dialog.mouse_filter = Control.MOUSE_FILTER_STOP
+	_prepare_modal_panel(dialog)
 	UIUtils.shrine_panel_style(dialog, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(dialog)
 	# Attach the shell first so a later content-refresh failure cannot make the
@@ -3751,17 +3751,19 @@ func _show_auto_dismantle_panel() -> void:
 	dialog.name = "AutoDismantlePanel"
 	dialog.position = Vector2(155, 90)
 	dialog.size = Vector2(970, 540)
+	_prepare_modal_panel(dialog)
 	UIUtils.shrine_panel_style(dialog, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(dialog)
 	var title := Label.new()
 	title.text = "自动分解 - 六维保留条件取交集"
 	title.position = Vector2(20, 14)
 	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color("96353e"))
 	dialog.add_child(title)
 	var hint := Label.new()
 	hint.text = "符合全部所选条件的装备会保留，其余自动分解；列内取任一、列间取交集。锁定装备永不分解。"
 	hint.position = Vector2(20, 45)
-	hint.add_theme_color_override("font_color", Color(0.7, 0.75, 0.85))
+	hint.add_theme_color_override("font_color", Color("6f6264"))
 	dialog.add_child(hint)
 	var enabled := CheckBox.new()
 	enabled.text = ("☑ " if auto_dismantle_enabled else "☐ ") + "启用自动分解"
@@ -3785,13 +3787,14 @@ func _show_auto_dismantle_panel() -> void:
 		var lbl := Label.new()
 		lbl.text = str(defn["title"]) + "（空=全部）"
 		lbl.position = Vector2(20 + di * 188, 82)
+		lbl.add_theme_color_override("font_color", Color("4f454d"))
 		dialog.add_child(lbl)
 		var list := ItemList.new()
 		list.position = Vector2(20 + di * 188, 108)
 		list.size = Vector2(172, 260)
 		list.select_mode = ItemList.SELECT_MULTI
 		list.add_theme_color_override("font_color", Color("352e38"))
-		list.add_theme_color_override("font_selected_color", Color.WHITE)
+		list.add_theme_color_override("font_selected_color", Color("5f5557"))
 		var list_panel := StyleBoxFlat.new(); list_panel.bg_color = Color("fffdfb"); list_panel.border_width_left = 1; list_panel.border_width_right = 1; list_panel.border_width_top = 1; list_panel.border_width_bottom = 1; list_panel.border_color = Color("d6b8b3"); list.add_theme_stylebox_override("panel", list_panel)
 		var selected_style := StyleBoxFlat.new(); selected_style.bg_color = Color("c94a55"); selected_style.set_corner_radius_all(3); list.add_theme_stylebox_override("selected", selected_style); list.add_theme_stylebox_override("selected_focus", selected_style)
 		for item_label in defn["labels"]:
@@ -3804,12 +3807,13 @@ func _show_auto_dismantle_panel() -> void:
 	var count_lbl := Label.new()
 	count_lbl.text = "词缀数量范围"
 	count_lbl.position = Vector2(20, 390)
+	count_lbl.add_theme_color_override("font_color", Color("4f454d"))
 	dialog.add_child(count_lbl)
 	var min_box := SpinBox.new()
 	min_box.min_value = 0; min_box.max_value = 8; min_box.value = int(auto_dismantle_rules.get("affix_min", 0))
 	min_box.position = Vector2(145, 382); min_box.size = Vector2(80, 36)
 	dialog.add_child(min_box)
-	var range_lbl := Label.new(); range_lbl.text = "至"; range_lbl.position = Vector2(238, 390); dialog.add_child(range_lbl)
+	var range_lbl := Label.new(); range_lbl.text = "至"; range_lbl.position = Vector2(238, 390); range_lbl.add_theme_color_override("font_color", Color("4f454d")); dialog.add_child(range_lbl)
 	var max_box := SpinBox.new()
 	max_box.min_value = 0; max_box.max_value = 8; max_box.value = int(auto_dismantle_rules.get("affix_max", 8))
 	max_box.position = Vector2(270, 382); max_box.size = Vector2(80, 36)
@@ -3982,12 +3986,14 @@ func _show_expansion_confirm(main_panel: Panel) -> void:
 	dialog.name = "ExpansionConfirm"
 	dialog.position = Vector2(340, 280)
 	dialog.size = Vector2(360, 180)
+	_prepare_modal_panel(dialog)
 	UIUtils.shrine_panel_style(dialog, Color("fff9f5"), Color("b88d89"), 2)
+	_tooltip_nodes.append(dialog)
 
 	var title: Label = Label.new()
 	title.text = "📦 背包扩容"
 	title.add_theme_font_size_override("font_size", 20)
-	title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
+	title.add_theme_color_override("font_color", Color("96353e"))
 	title.position = Vector2(20, 16)
 	dialog.add_child(title)
 
@@ -3997,7 +4003,7 @@ func _show_expansion_confirm(main_panel: Panel) -> void:
 	var new_cap: int = current_cap + expand_size
 	body.text = "扩容 +%d 格\n当前: %d → %d 格\n消耗金币: %d" % [expand_size, current_cap, new_cap, cost]
 	body.add_theme_font_size_override("font_size", 14)
-	body.add_theme_color_override("font_color", Color(0.8, 0.8, 0.85))
+	body.add_theme_color_override("font_color", Color("4f454d"))
 	body.position = Vector2(20, 52)
 	dialog.add_child(body)
 
@@ -4027,9 +4033,6 @@ func _show_expansion_confirm(main_panel: Panel) -> void:
 			else:
 				inventory.expand()
 			_show_float_text("扩容成功！背包 %d 格" % (equip_capacity if is_equip else inventory.capacity), Color(0.3, 1.0, 0.6))
-		# 关闭弹窗
-		var d3 := get_node_or_null("ExpansionConfirm")
-		if d3: d3.queue_free()
 		_close_all_tooltips()
 		if is_instance_valid(main_panel):
 			main_panel.queue_free()
@@ -4043,11 +4046,7 @@ func _show_expansion_confirm(main_panel: Panel) -> void:
 	cancel_btn.position = Vector2(200, 120)
 	cancel_btn.size = Vector2(80, 36)
 	UIUtils.btn_style_mini(cancel_btn, Color(0.2, 0.2, 0.3))
-	cancel_btn.pressed.connect(func():
-		var d4 := get_node_or_null("ExpansionConfirm")
-		if d4: d4.queue_free()
-		_close_all_tooltips()
-	)
+	cancel_btn.pressed.connect(_close_all_tooltips)
 	dialog.add_child(cancel_btn)
 
 	add_child(dialog)
@@ -4093,6 +4092,7 @@ func _build_consume_tab(area: Panel, main_panel: Panel) -> void:
 		if slot.is_empty():
 			# 空格子
 			cell_bg.add_theme_stylebox_override("panel", empty_style)
+			cell_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		else:
 			# 有物品
 			cell_bg.add_theme_stylebox_override("panel", cell_style)
@@ -4236,6 +4236,7 @@ func _build_equip_tab(area: Panel, main_panel: Panel) -> void:
 			var empty_frame: Panel = Panel.new()
 			empty_frame.position = Vector2(x, y)
 			empty_frame.size = Vector2(icon_s, icon_s)
+			empty_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			empty_frame.add_theme_stylebox_override("panel", empty_style)
 			area.add_child(empty_frame)
 	if page_count > 1:
@@ -4248,6 +4249,10 @@ func _build_equip_tab(area: Panel, main_panel: Panel) -> void:
 
 ## 装备完整 tooltip
 func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_panel: Panel, x_pos: float = 340.0) -> void:
+	# Empty equipment slots are decorative only and must never open a blank
+	# detail dialog, even if a delayed click arrives while the panel refreshes.
+	if eqp.is_empty():
+		return
 	# 确保全屏遮罩层存在
 	_ensure_overlay()
 
@@ -4256,7 +4261,7 @@ func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_pane
 	var viewport_size := get_viewport().get_visible_rect().size
 	tip.position = Vector2(clampf(x_pos, 8.0, maxf(8.0, viewport_size.x - 348.0)), clampf(122.0, 8.0, maxf(8.0, viewport_size.y - 348.0)))
 	tip.size = Vector2(340, 340)
-	tip.z_index = 101
+	_prepare_modal_panel(tip)
 	UIUtils.shrine_panel_style(tip, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(tip)
 
@@ -4548,7 +4553,7 @@ func _show_gem_socket_panel(eqp: Dictionary, socket_index: int, main_panel: Pane
 	dialog.name = "GemSocketDialog"
 	dialog.position = Vector2(390, 145)
 	dialog.size = Vector2(500, 410)
-	dialog.z_index = 101
+	_prepare_modal_panel(dialog)
 	UIUtils.shrine_panel_style(dialog, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(dialog)
 	add_child(dialog)
@@ -4965,12 +4970,14 @@ func _show_socket_select_panel(item_slot_idx: int) -> void:
 	dialog.name = "SocketSelectPanel"
 	dialog.position = Vector2(390, 220)
 	dialog.size = Vector2(500, 220)
+	_prepare_modal_panel(dialog)
 	UIUtils.shrine_panel_style(dialog, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(dialog)
 	var title := Label.new()
 	title.text = "选择要打孔的装备"
 	title.position = Vector2(20, 18)
 	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color("96353e"))
 	dialog.add_child(title)
 	var selector := OptionButton.new()
 	selector.position = Vector2(20, 58)
@@ -5027,12 +5034,14 @@ func _show_reroll_panel(equip_idx: int, main_panel: Panel) -> void:
 	dialog.name = "RerollPanel"
 	dialog.position = Vector2(390, 145)
 	dialog.size = Vector2(500, 410)
+	_prepare_modal_panel(dialog)
 	UIUtils.shrine_panel_style(dialog, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(dialog)
 	var title := Label.new()
 	title.text = "词缀重铸 - " + EquipGenCls.full_name(eqp)
 	title.position = Vector2(18, 15)
 	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", Color("96353e"))
 	dialog.add_child(title)
 	var checks: Array[CheckBox] = []
 	var affixes: Array = eqp.get("affixes", [])
@@ -5057,7 +5066,7 @@ func _show_reroll_panel(equip_idx: int, main_panel: Panel) -> void:
 		checks.append(cb)
 	var cost_label := Label.new()
 	cost_label.position = Vector2(22, 275)
-	cost_label.add_theme_color_override("font_color", Color(1.0, 0.8, 0.3))
+	cost_label.add_theme_color_override("font_color", Color("6f4a72"))
 	dialog.add_child(cost_label)
 	var refresh_cost := func():
 		var count := 0
@@ -5431,6 +5440,7 @@ func _build_skill_tab(panel: Panel) -> void:
 			var lock_bg: Panel = Panel.new()
 			lock_bg.position = Vector2(sx, sy)
 			lock_bg.size = Vector2(slot_w, slot_h)
+			lock_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			var lock_st := StyleBoxFlat.new()
 			lock_st.bg_color = Color("f3e7e4")
 			lock_st.border_width_left = 1
@@ -5537,6 +5547,7 @@ func _build_skill_tab(panel: Panel) -> void:
 			var empty_bg: Panel = Panel.new()
 			empty_bg.position = Vector2(sx, sy)
 			empty_bg.size = Vector2(slot_w, slot_h)
+			empty_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			var es := StyleBoxFlat.new()
 			es.bg_color = Color("fffdfb")
 			es.border_width_left = 1
@@ -5723,16 +5734,14 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 	if sdata.is_empty():
 		return
 	var is_unlocked: bool = skill_system.is_skill_unlocked(skill_id)
-
-	# 清除旧 tooltip
-	var old_tip: Node = get_node_or_null("SkillTooltip")
-	if old_tip:
-		old_tip.queue_free()
+	_close_all_tooltips()
+	_ensure_overlay()
 
 	var tip: Panel = Panel.new()
 	tip.name = "SkillTooltip"
 	tip.position = Vector2(360, 160)
 	tip.size = Vector2(300, 260)
+	_prepare_modal_panel(tip)
 	UIUtils.shrine_panel_style(tip, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(tip)
 
@@ -5901,8 +5910,6 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 	close_btn.pressed.connect(_close_all_tooltips)
 	tip.add_child(close_btn)
 
-	# 遮罩
-	_ensure_overlay()
 	add_child(tip)
 
 
@@ -6004,7 +6011,10 @@ func _show_stats_panel() -> void:
 	close.position = Vector2(panel.size.x - 42, 8)
 	close.size = Vector2(30, 28)
 	UIUtils.shrine_button_style(close, false)
-	close.pressed.connect(panel.queue_free)
+	close.pressed.connect(func():
+		_close_all_tooltips()
+		panel.queue_free()
+	)
 	panel.add_child(close)
 
 	if _stats_tab == "skill":
@@ -6207,38 +6217,16 @@ func _show_stats_panel() -> void:
 
 ## 属性气泡说明
 func _show_stat_tooltip(stat_name: String, desc: String) -> void:
-	var old: Node = get_node_or_null("StatTooltip")
-	if old:
-		old.queue_free()
-	var old_overlay: Node = get_node_or_null("StatTooltipOverlay")
-	if old_overlay:
-		old_overlay.queue_free()
-
-	var overlay := Button.new()
-	overlay.name = "StatTooltipOverlay"
-	overlay.flat = true
-	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	overlay.z_index = 99
-	var empty_style := StyleBoxEmpty.new()
-	overlay.add_theme_stylebox_override("normal", empty_style)
-	overlay.add_theme_stylebox_override("hover", empty_style)
-	overlay.add_theme_stylebox_override("pressed", empty_style)
-	overlay.pressed.connect(func():
-		var current_tip := get_node_or_null("StatTooltip")
-		if current_tip:
-			current_tip.queue_free()
-		if is_instance_valid(overlay):
-			overlay.queue_free()
-	)
-	add_child(overlay)
+	_close_all_tooltips()
+	_ensure_overlay()
 
 	var tip: Panel = Panel.new()
 	tip.name = "StatTooltip"
-	tip.z_index = 100
-	tip.mouse_filter = Control.MOUSE_FILTER_STOP
+	_prepare_modal_panel(tip)
 	tip.position = Vector2(360, 280)
 	tip.size = Vector2(320, 120)
 	UIUtils.panel_style(tip, Color(0.05, 0.06, 0.12, 0.95))
+	_tooltip_nodes.append(tip)
 
 	var title: Label = Label.new()
 	title.text = stat_name
