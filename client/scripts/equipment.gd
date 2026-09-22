@@ -46,7 +46,7 @@ const SLOT_TYPE: Dictionary = {
 func equip_instance(slot_name: String, eqp: Dictionary) -> bool:
 	if not _equipped.has(slot_name):
 		return false
-	if eqp.is_empty():
+	if not EquipmentRulesCls.is_valid_equipment(eqp, slot_name):
 		return false
 	_equipped[slot_name] = eqp.duplicate(true)
 	equipment_changed.emit()
@@ -65,12 +65,16 @@ func unequip(slot_name: String) -> Dictionary:
 
 ## 获取槽位装备
 func get_slot_item(slot_name: String) -> Dictionary:
-	return _equipped.get(slot_name, {})
+	var raw: Variant = _equipped.get(slot_name, {})
+	if not (raw is Dictionary):
+		return {}
+	var eqp: Dictionary = raw as Dictionary
+	return eqp if EquipmentRulesCls.is_valid_equipment(eqp, slot_name) else {}
 
 
 ## 已装备实例的显示文本（用于装备面板）
 func get_slot_display(slot_name: String) -> String:
-	var eqp: Dictionary = _equipped.get(slot_name, {})
+	var eqp: Dictionary = get_slot_item(slot_name)
 	if eqp.is_empty():
 		return "[ 空 ]"
 	var s: String = UIUtils.safe_icon(str(eqp.get("icon", "")), "装") + " " + eqp.get("base_name", "???")
@@ -115,10 +119,11 @@ func from_dict(data: Dictionary) -> void:
 			if not normalized.is_empty():
 				normalized["slot"] = str(normalized.get("slot", key))
 				normalized = EquipmentRulesCls.normalize_equipment(normalized)
-			_equipped[key] = normalized
+			_equipped[key] = normalized if EquipmentRulesCls.is_valid_equipment(normalized, key) else {}
 			# 旧存档实例强化迁移到槽位；迁移后装备实例不再携带强化收益。
 			_slot_enhance[key] = clampi(maxi(int(saved_enhance.get(key, 0)), int(v.get("enhance", 0))), 0, MAX_SLOT_ENHANCE)
-			_equipped[key]["enhance"] = 0
+			if not _equipped[key].is_empty():
+				_equipped[key]["enhance"] = 0
 		else:
 			_equipped[key] = {}
 			_slot_enhance[key] = clampi(int(saved_enhance.get(key, 0)), 0, MAX_SLOT_ENHANCE)

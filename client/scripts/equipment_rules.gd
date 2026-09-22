@@ -25,6 +25,13 @@ const LEGACY_QUALITY_COEF := [1.0, 1.2, 1.5, 2.0, 3.0]
 static func normalize_equipment(eqp: Dictionary) -> Dictionary:
 	if eqp.is_empty():
 		return eqp
+	# Older local saves can contain only a slot/enhancement marker. Preserve a
+	# legacy name when available, then let is_valid_equipment reject incomplete
+	# records instead of rendering them as "???".
+	if not eqp.has("base_name"):
+		var legacy_name := str(eqp.get("name", "")).strip_edges()
+		if not legacy_name.is_empty():
+			eqp["base_name"] = legacy_name
 	if not eqp.has("initial_gem_slots"):
 		eqp["initial_gem_slots"] = int(eqp.get("gem_slots", 0))
 	if not eqp.has("locked"):
@@ -42,6 +49,20 @@ static func normalize_equipment(eqp: Dictionary) -> Dictionary:
 		if not affix.has("type"):
 			affix["type"] = _infer_affix_type(str(affix.get("name", "")))
 	return eqp
+
+
+static func is_valid_equipment(eqp: Dictionary, expected_slot: String = "") -> bool:
+	if eqp.is_empty():
+		return false
+	var slot_name := str(eqp.get("slot", "")).strip_edges()
+	var base_name := str(eqp.get("base_name", "")).strip_edges()
+	if slot_name.is_empty() or not LEGACY_MAIN_STATS.has(slot_name):
+		return false
+	if not expected_slot.is_empty() and slot_name != expected_slot:
+		return false
+	if base_name.is_empty() or base_name == "???":
+		return false
+	return true
 
 static func essence_value(eqp: Dictionary) -> int:
 	return ESSENCE_BY_QUALITY[clampi(int(eqp.get("quality", 0)), 0, ESSENCE_BY_QUALITY.size() - 1)]

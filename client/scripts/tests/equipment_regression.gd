@@ -12,6 +12,7 @@ var failures: Array[String] = []
 func _init() -> void:
 	_test_set_affixes()
 	_test_lock_and_filter()
+	_test_invalid_equipment_is_empty()
 	_test_reroll()
 	_test_slot_enhance_and_capacity()
 	_test_synthesis_protection()
@@ -49,6 +50,12 @@ func _test_lock_and_filter() -> void:
 	var legacy := Rules.normalize_equipment({"slot":"weapon", "quality":3})
 	_expect(str(legacy.get("main_stat", "")) == "攻击力" and is_equal_approx(float(legacy.get("main_value", 0.0)), 80.0), "旧档装备必须自动补全主属性")
 
+func _test_invalid_equipment_is_empty() -> void:
+	var equipment := EquipmentCls.new()
+	equipment.from_dict({"equipped": {"weapon": {"slot": "weapon", "enhance": 5}}})
+	_expect(equipment.get_slot_item("weapon").is_empty(), "字段不完整的旧装备必须按空槽处理")
+	_expect(not Rules.is_valid_equipment({"slot": "weapon", "base_name": "???"}, "weapon"), "占位装备名称不得视为有效装备")
+
 func _test_reroll() -> void:
 	var eqp := {"quality":3, "affixes":[{"name":"攻击%", "type":"attack", "value":5.0, "display":"+5%"}, {"name":"速度", "type":"universal", "value":3.0, "display":"+3"}]}
 	var kept: Dictionary = eqp["affixes"][0].duplicate(true)
@@ -58,9 +65,9 @@ func _test_reroll() -> void:
 
 func _test_slot_enhance_and_capacity() -> void:
 	var equipment := EquipmentCls.new()
-	equipment.equip_instance("weapon", {"main_value": 10, "enhance": 0})
+	equipment.equip_instance("weapon", {"slot": "weapon", "base_name": "测试武器", "main_value": 10, "enhance": 0})
 	_expect(equipment.enhance_slot("weapon"), "槽位应可强化")
-	var replacement := {"main_value": 20, "enhance": 0}
+	var replacement := {"slot": "weapon", "base_name": "替换武器", "main_value": 20, "enhance": 0}
 	equipment.equip_instance("weapon", replacement)
 	_expect(equipment.get_slot_enhance("weapon") == 1, "换装后槽位强化必须保留")
 	_expect(is_equal_approx(equipment.get_slot_main_multiplier("weapon"), 1.03), "槽位强化倍率应为每级3%")

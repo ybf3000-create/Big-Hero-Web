@@ -213,6 +213,10 @@ func _sm():
 	return get_node_or_null("/root/SaveManager")
 
 
+func _is_valid_equipment(eqp: Dictionary, expected_slot: String = "") -> bool:
+	return EquipmentRulesCls.is_valid_equipment(eqp, expected_slot)
+
+
 ## ============================================================
 ## 第一部分 — 顶部属性栏
 ## ============================================================
@@ -3389,7 +3393,8 @@ func _build_inventory_panel() -> void:
 			equip_panel.add_child(frame_p)
 
 			var eqp: Dictionary = equipment.get_slot_item(es["name"])
-			if not eqp.is_empty():
+			var has_equipment := _is_valid_equipment(eqp, str(es["name"]))
+			if has_equipment:
 				# 品质色边框
 				var qclr: Color = UIUtils.qcolor(eqp.get("quality", 0))
 				var qb2 := StyleBoxFlat.new()
@@ -3478,9 +3483,9 @@ func _build_inventory_panel() -> void:
 			enhance_badge.size = Vector2(26, 20)
 			enhance_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 			enhance_badge.add_theme_font_size_override("font_size", 11)
-			enhance_badge.add_theme_color_override("font_color", Color("ffd45c") if not eqp.is_empty() else Color("96353e"))
+			enhance_badge.add_theme_color_override("font_color", Color("ffd45c") if has_equipment else Color("96353e"))
 			enhance_badge.add_theme_color_override("font_outline_color", Color("352e38"))
-			enhance_badge.add_theme_constant_override("outline_size", 3 if not eqp.is_empty() else 1)
+			enhance_badge.add_theme_constant_override("outline_size", 3 if has_equipment else 1)
 			enhance_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			equip_panel.add_child(enhance_badge)
 
@@ -3674,7 +3679,7 @@ func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
 		var slot_id: String = str(slot_defs[i]["id"])
 		all_slots.append(slot_id)
 		var level: int = int(equipment.get_slot_enhance(slot_id))
-		var equipped_mark: String = "  · 已装备" if not equipment.get_slot_item(slot_id).is_empty() else ""
+		var equipped_mark: String = "  · 已装备" if _is_valid_equipment(equipment.get_slot_item(slot_id), slot_id) else ""
 		selector.add_item("%s槽位   +%d / +%d%s" % [slot_defs[i]["name"], level, EquipmentCls.MAX_SLOT_ENHANCE, equipped_mark])
 		selector.set_item_metadata(i, slot_id)
 		if slot_id == initial_slot:
@@ -3714,7 +3719,7 @@ func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
 		for i in range(slot_defs.size()):
 			var slot_id: String = str(slot_defs[i]["id"])
 			var level: int = int(equipment.get_slot_enhance(slot_id))
-			var equipped_mark: String = "  · 已装备" if not equipment.get_slot_item(slot_id).is_empty() else ""
+			var equipped_mark: String = "  · 已装备" if _is_valid_equipment(equipment.get_slot_item(slot_id), slot_id) else ""
 			selector.set_item_text(i, "%s槽位   +%d / +%d%s" % [slot_defs[i]["name"], level, EquipmentCls.MAX_SLOT_ENHANCE, equipped_mark])
 			var inventory_panel: Node = get_node_or_null("InventoryPanel")
 			if inventory_panel:
@@ -4224,7 +4229,7 @@ func _build_equip_tab(area: Panel, main_panel: Panel) -> void:
 							_close_all_tooltips()
 							var s: String = eqp.get("slot", "")
 							var weq: Dictionary = equipment.get_slot_item(s)
-							if not weq.is_empty():
+							if _is_valid_equipment(weq, s):
 								_show_compare_tooltips(eqp, weq, s, main_panel)
 							else:
 								_show_equip_tooltip(eqp, eidx, "", main_panel)
@@ -4251,7 +4256,7 @@ func _build_equip_tab(area: Panel, main_panel: Panel) -> void:
 func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_panel: Panel, x_pos: float = 340.0) -> void:
 	# Empty equipment slots are decorative only and must never open a blank
 	# detail dialog, even if a delayed click arrives while the panel refreshes.
-	if eqp.is_empty():
+	if not _is_valid_equipment(eqp, slot_name):
 		return
 	# 确保全屏遮罩层存在
 	_ensure_overlay()
