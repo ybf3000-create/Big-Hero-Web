@@ -3986,6 +3986,10 @@ func _show_auto_dismantle_rule_editor(edit_index: int = -1) -> void:
 	slot_all.toggled.connect(func(pressed: bool):
 		for item in checks["slots"]: item.button_pressed = pressed
 	)
+	for slot_check in checks["slots"]:
+		slot_check.toggled.connect(func(_pressed: bool):
+			slot_all.set_pressed_no_signal((checks["slots"] as Array).all(func(item: CheckBox): return item.button_pressed))
+		)
 	var slot_column: Node = columns.get_child(1)
 	slot_column.add_child(slot_all)
 	var count_lbl := Label.new()
