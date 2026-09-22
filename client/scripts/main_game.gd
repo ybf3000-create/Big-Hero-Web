@@ -3314,12 +3314,10 @@ func _build_inventory_panel() -> void:
 			tb.add_theme_stylebox_override("normal", active_tab)
 			tb.add_theme_stylebox_override("hover", active_tab)
 			tb.add_theme_stylebox_override("pressed", active_tab)
-			tb.add_theme_color_override("font_color", Color("96353e"))
-			tb.add_theme_color_override("font_hover_color", Color("96353e"))
+			UIUtils.set_button_text_color(tb, Color("5f5557"))
 		else:
 			UIUtils.shrine_button_style(tb, false)
-			tb.add_theme_color_override("font_color", Color("6f6264"))
-			tb.add_theme_color_override("font_hover_color", Color("352e38"))
+			UIUtils.set_button_text_color(tb, Color("6f6264"))
 		tb.flat = false
 		var tid: String = tabs[ti]["id"]
 		tb.pressed.connect(func():
@@ -3645,6 +3643,10 @@ func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
 	dialog.mouse_filter = Control.MOUSE_FILTER_STOP
 	UIUtils.shrine_panel_style(dialog, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(dialog)
+	# Attach the shell first so a later content-refresh failure cannot make the
+	# entire dialog disappear in web exports.
+	add_child(dialog)
+	dialog.move_to_front()
 	var title := Label.new()
 	title.text = "槽位强化"
 	title.position = Vector2(22, 16)
@@ -3693,11 +3695,12 @@ func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
 
 	var refresh_text := func():
 		var slot_id: String = str(selector.get_item_metadata(selector.selected))
+		var selected_slots: Array[String] = [slot_id]
 		var level: int = int(equipment.get_slot_enhance(slot_id))
 		var multiplier: float = equipment.get_slot_main_multiplier(slot_id)
 		detail.text = "%s槽位：+%d\n当前主属性倍率：×%.2f   每强化1级增加3%%" % [slot_defs[selector.selected]["name"], level, multiplier]
-		selected_one.text = "当前槽位 +1  （%d金）" % _slot_enhance_cost([slot_id], 1)
-		selected_five.text = "当前槽位 +5  （%d金）" % _slot_enhance_cost([slot_id], 5)
+		selected_one.text = "当前槽位 +1  （%d金）" % _slot_enhance_cost(selected_slots, 1)
+		selected_five.text = "当前槽位 +5  （%d金）" % _slot_enhance_cost(selected_slots, 5)
 		all_one.text = "全部槽位 +1  （%d金）" % _slot_enhance_cost(all_slots, 1)
 		all_five.text = "全部槽位 +5  （%d金）" % _slot_enhance_cost(all_slots, 5)
 	selector.item_selected.connect(func(_index: int): refresh_text.call())
@@ -3739,7 +3742,6 @@ func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
 	UIUtils.shrine_button_style(close, false)
 	close.pressed.connect(_close_all_tooltips)
 	dialog.add_child(close)
-	add_child(dialog)
 
 
 func _show_auto_dismantle_panel() -> void:
@@ -3881,8 +3883,7 @@ func _rebuild_filters(item_area: Panel, main_panel: Panel) -> void:
 		var selected: bool = (qv == -1 and _inv_filter_quality.is_empty()) or _inv_filter_quality.has(qv)
 		var clr: Color = qclrvals[qi]
 		UIUtils.btn_style_mini(qb, clr.darkened(0.18) if selected else Color("f4e8e7"))
-		qb.add_theme_color_override("font_color", Color.WHITE if selected else (Color("352e38") if qi == 0 else clr.darkened(0.35)))
-		qb.add_theme_color_override("font_hover_color", Color.WHITE if selected else Color("352e38"))
+		UIUtils.set_button_text_color(qb, Color("5f5557") if selected else (Color("352e38") if qi == 0 else clr.darkened(0.35)))
 		qb.pressed.connect(func():
 			if qv == -1:
 				_inv_filter_quality.clear()
@@ -3919,8 +3920,7 @@ func _rebuild_filters(item_area: Panel, main_panel: Panel) -> void:
 			var sv: int = si - 1
 			var ssel: bool = (sv == -1 and _inv_filter_slot.is_empty()) or _inv_filter_slot.has(sv)
 			UIUtils.btn_style_mini(sb, Color("c94a55") if ssel else Color("f4e8e7"))
-			sb.add_theme_color_override("font_color", Color.WHITE if ssel else Color("352e38"))
-			sb.add_theme_color_override("font_hover_color", Color.WHITE if ssel else Color("96353e"))
+			UIUtils.set_button_text_color(sb, Color("5f5557") if ssel else Color("352e38"))
 			sb.pressed.connect(func():
 				if sv == -1:
 					_inv_filter_slot.clear()
@@ -5596,7 +5596,7 @@ func _build_skill_tab(panel: Panel) -> void:
 			qb.add_theme_stylebox_override("normal", sel_s)
 		else:
 			UIUtils.btn_style_mini(qb, school_colors[qi].darkened(0.5))
-		qb.add_theme_color_override("font_color", Color(1,1,1) if selected else school_colors[qi])
+		UIUtils.set_button_text_color(qb, Color("5f5557") if selected else school_colors[qi])
 		qb.pressed.connect(func():
 			_skill_filter = qi - 1 if qi > 0 else -1
 			_stats_tab = "skill"

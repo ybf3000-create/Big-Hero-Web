@@ -153,6 +153,13 @@ static func btn_style(btn: Button, clr: Color) -> void:
 	btn.add_theme_color_override("font_color", Color.WHITE)
 
 
+static func set_button_text_color(btn: Button, color: Color) -> void:
+	# Godot falls back to the project theme for any omitted interaction state.
+	# Keep focused/pressed text readable on the light web UI as well.
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+		btn.add_theme_color_override(state, color)
+
+
 static func shrine_button_style(btn: Button, primary: bool = false) -> void:
 	var base := Color("c94a55") if primary else Color("f4e8e7")
 	var ink := Color.WHITE if primary else Color("352e38")
@@ -172,3 +179,6 @@ static func shrine_button_style(btn: Button, primary: bool = false) -> void:
 	btn.add_theme_stylebox_override("pressed", pressed)
 	btn.add_theme_color_override("font_color", ink)
 	btn.add_theme_color_override("font_hover_color", ink)
+	btn.add_theme_color_override("font_pressed_color", Color("5f5557") if not primary else ink)
+	btn.add_theme_color_override("font_hover_pressed_color", Color("5f5557") if not primary else ink)
+	btn.add_theme_color_override("font_focus_color", Color("5f5557") if not primary else ink)
