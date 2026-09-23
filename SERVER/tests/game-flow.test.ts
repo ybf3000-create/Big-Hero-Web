@@ -51,6 +51,20 @@ test("game state survives commands and repeated roll requests are idempotent", a
   assert.equal((await repository.getGameState(character.id)).lastDiceRoll, first.state.lastDiceRoll);
 });
 
+test("server-owned auto-play must be enabled before a background roll", () => {
+  const initial = createInitialGameState();
+  assert.equal(initial.autoPlayEnabled, false);
+  assert.throws(
+    () => applyGameCommand(initial, { level: 1, experience: 0, gold: 0 }, "auto_roll", {}),
+    /自动挂机未开启/,
+  );
+  const enabled = applyGameCommand(initial, { level: 1, experience: 0, gold: 0 }, "auto_play", { enabled: true });
+  assert.equal(enabled.state.autoPlayEnabled, true);
+  const rolled = applyGameCommand(enabled.state, enabled.character, "auto_roll", {});
+  assert.equal(typeof rolled.event.dice, "number");
+  assert.equal(rolled.state.autoPlayEnabled, true);
+});
+
 test("a committed battle is recoverable after the response is lost", async (context) => {
   const { directory, repository } = await setup();
   context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
@@ -311,6 +325,20 @@ test("game HTTP endpoints expose state and roll result", async (context) => {
   const roll = await app.inject({ method: "POST", url: "/api/v1/game/roll", headers: { authorization: `Bearer ${token}` }, payload: { rules_version: "network-1", request_id: "http_roll_01", payload: {} } });
   assert.equal(roll.statusCode, 200);
   assert.equal(typeof roll.json().event.dice, "number");
+  const backgroundState = await repository.getGameState(character!.id);
+  backgroundState.mapGrids = backgroundState.mapGrids.map(() => 0);
+  backgroundState.pendingConstruction = null;
+  repository.database.prepare("UPDATE character_states SET state_json = ? WHERE character_id = ?").run(serializeGameState(backgroundState), character!.id);
+  const enabled = await app.inject({ method: "POST", url: "/api/v1/game/auto-play", headers: { authorization: `Bearer ${token}` }, payload: { rules_version: "network-1", request_id: "http_auto_play_1", payload: { enabled: true } } });
+  assert.equal(enabled.statusCode, 200);
+  assert.equal(enabled.json().state.autoPlayEnabled, true);
+  const beforeBackgroundRevision = (await repository.getCharacter(login.json().account.id as string))!.revision;
+  const presence = await app.inject({ method: "POST", url: "/api/v1/game/auto-play/presence", headers: { authorization: `Bearer ${token}` }, payload: { background: true } });
+  assert.equal(presence.statusCode, 200);
+  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  const afterBackground = await repository.getCharacter(login.json().account.id as string);
+  assert.ok(afterBackground!.revision > beforeBackgroundRevision);
+  assert.notEqual((await repository.getGameState(character!.id)).lastDiceRoll, null);
   await app.close();
 });
 

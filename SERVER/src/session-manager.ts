@@ -12,6 +12,7 @@ interface SessionEntry {
   expiresAt: number;
   graceUntil: number | null;
   socket: WebSocket | null;
+  background: boolean;
 }
 
 export type SessionRemovalReason =
@@ -37,6 +38,7 @@ export class SessionManager {
     private readonly maxOnline: number,
     private readonly now: () => number = Date.now,
     private readonly onRemoved?: (sessionId: string, reason: SessionRemovalReason) => void,
+    private readonly onBackground?: (identity: SessionIdentity) => void,
   ) {}
 
   get onlineCount(): number {
@@ -67,6 +69,7 @@ export class SessionManager {
       expiresAt: expiresAt ?? this.now() + 7 * 24 * 60 * 60_000,
       graceUntil: this.now() + RECONNECT_GRACE_MS,
       socket: null,
+      background: false,
     };
     this.bySession.set(sessionId, entry);
     this.byAccount.set(accountId, entry);
@@ -93,17 +96,39 @@ export class SessionManager {
       this.sendAndClose(entry.socket, "KICKED", "账号已在其他页面连接");
     }
     entry.socket = socket;
+    entry.background = false;
     entry.graceUntil = null;
     entry.lastSeenAt = this.now();
     return identity;
   }
 
-  heartbeat(sessionId: string): void {
+  heartbeat(sessionId: string): boolean {
     const entry = this.bySession.get(sessionId);
     if (!entry) {
       throw new AppError("SESSION_INVALID", 401, "登录已失效，请重新登录");
     }
+    const resumed = entry.background;
+    entry.background = false;
     entry.lastSeenAt = this.now();
+    return resumed;
+  }
+
+  setBackground(sessionId: string, background: boolean): void {
+    const entry = this.bySession.get(sessionId);
+    if (!entry) {
+      throw new AppError("SESSION_INVALID", 401, "登录已失效，请重新登录");
+    }
+    entry.background = background;
+    entry.lastSeenAt = this.now();
+  }
+
+  isBackground(sessionId: string): boolean {
+    return this.bySession.get(sessionId)?.background === true;
+  }
+
+  isAccountOnline(accountId: string): boolean {
+    this.cleanupExpired();
+    return this.byAccount.has(accountId);
   }
 
   markDisconnected(sessionId: string, socket: WebSocket): void {
@@ -112,6 +137,7 @@ export class SessionManager {
       return;
     }
     entry.socket = null;
+    entry.background = false;
     entry.graceUntil = this.now() + RECONNECT_GRACE_MS;
   }
 
@@ -127,8 +153,9 @@ export class SessionManager {
     for (const entry of Array.from(this.bySession.values())) {
       if (current >= entry.expiresAt) {
         this.remove(entry, "session_expired", true);
-      } else if (entry.socket && current - entry.lastSeenAt >= HEARTBEAT_TIMEOUT_MS) {
-        this.remove(entry, "heartbeat_timeout", true);
+      } else if (entry.socket && !entry.background && current - entry.lastSeenAt >= HEARTBEAT_TIMEOUT_MS) {
+        entry.background = true;
+        this.onBackground?.({ sessionId: entry.id, accountId: entry.accountId });
       } else if (!entry.socket && entry.graceUntil !== null && current >= entry.graceUntil) {
         this.remove(entry, "reconnect_timeout", false);
       }

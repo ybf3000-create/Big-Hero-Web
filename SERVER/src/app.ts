@@ -29,6 +29,7 @@ const IDLE_SESSION_MS = 30 * 60_000;
 const MAX_SESSION_MS = 7 * 24 * 60 * 60_000;
 const REMEMBER_MS = 30 * 24 * 60 * 60_000;
 const REMEMBER_COOKIE = "big_hero_remember";
+const BACKGROUND_AUTO_PLAY_INTERVAL_MS = 2_000;
 
 interface BuildAppOptions {
   repository: GameRepository;
@@ -48,6 +49,7 @@ interface JsonObject {
 interface ChatConnection {
   socket: WebSocket;
   identity: SessionIdentity;
+  transportAlive: boolean;
 }
 
 function bodyObject(body: unknown): JsonObject {
@@ -126,6 +128,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const dummyPasswordHash = await options.passwordHasher.hash(
     "not-a-real-account-password-2026",
   );
+  const backgroundAutoCharacters = new Map<string, string>();
   const sessionManager = new SessionManager(
     maxOnlinePlayers,
     now,
@@ -134,11 +137,72 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         app.log.error({ err: error, sessionId, reason }, "failed to persist session removal");
       });
     },
+    (identity) => {
+      void (async () => {
+        const character = await options.repository.getCharacter(identity.accountId);
+        if (!character || !options.repository.getGameState) return;
+        const state = await options.repository.getGameState(character.id);
+        if (sessionManager.isBackground(identity.sessionId) && state.autoPlayEnabled) {
+          backgroundAutoCharacters.set(identity.accountId, character.id);
+        }
+      })().catch((error) => {
+        app.log.error({ err: error, accountId: identity.accountId }, "failed to enter background auto-play");
+      });
+    },
   );
   const chatConnections = new Set<ChatConnection>();
   const lastChatSentAt = new Map<string, number>();
   const cleanupTimer = setInterval(() => sessionManager.cleanupExpired(), 10_000);
   cleanupTimer.unref();
+  const transportTimer = setInterval(() => {
+    for (const connection of Array.from(chatConnections)) {
+      if (connection.socket.readyState !== 1) {
+        chatConnections.delete(connection);
+      } else if (!connection.transportAlive) {
+        connection.socket.terminate();
+        chatConnections.delete(connection);
+      } else {
+        connection.transportAlive = false;
+        connection.socket.ping();
+      }
+    }
+  }, 15_000);
+  transportTimer.unref();
+  let autoPlayTickRunning = false;
+  const autoPlayTimer = setInterval(() => {
+    if (autoPlayTickRunning || !options.repository.executeGameCommand) return;
+    autoPlayTickRunning = true;
+    void (async () => {
+      for (const [accountId, characterId] of Array.from(backgroundAutoCharacters.entries())) {
+        if (!sessionManager.isAccountOnline(accountId)) {
+          backgroundAutoCharacters.delete(accountId);
+          continue;
+        }
+        try {
+          await options.repository.executeGameCommand!({
+            characterId,
+            requestId: randomUUID(),
+            command: "auto_roll",
+            payload: {},
+          });
+        } catch (error) {
+          if (error instanceof AppError && error.code === "GAME_COMMAND_INVALID") {
+            try {
+              const state = await options.repository.getGameState?.(characterId);
+              if (!state?.autoPlayEnabled) backgroundAutoCharacters.delete(accountId);
+            } catch (stateError) {
+              app.log.error({ err: stateError, characterId }, "background auto-play state check failed");
+            }
+            continue;
+          }
+          app.log.error({ err: error, characterId }, "background auto-play tick failed");
+        }
+      }
+    })().finally(() => {
+      autoPlayTickRunning = false;
+    });
+  }, BACKGROUND_AUTO_PLAY_INTERVAL_MS);
+  autoPlayTimer.unref();
 
   const recordLoginAttempt = async (
     username: string,
@@ -539,6 +603,22 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return { ok: true, character, state: await repository.getGameState!(character.id) };
   });
 
+  app.post("/api/v1/game/auto-play/presence", async (request) => {
+    const identity = authenticateRequest(request);
+    const repository = requireGameRepository();
+    const character = await characterForIdentity(identity);
+    const body = bodyObject(request.body);
+    if (typeof body.background !== "boolean") throw badRequest("网页状态不正确");
+    sessionManager.setBackground(identity.sessionId, body.background);
+    const state = await repository.getGameState!(character.id);
+    if (body.background && state.autoPlayEnabled) {
+      backgroundAutoCharacters.set(identity.accountId, character.id);
+    } else {
+      backgroundAutoCharacters.delete(identity.accountId);
+    }
+    return { ok: true, background: body.background, auto_play_enabled: state.autoPlayEnabled };
+  });
+
   const gameCommand = async (request: FastifyRequest, command: string) => {
     const identity = authenticateRequest(request);
     const repository = requireGameRepository();
@@ -550,6 +630,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       ? body.payload as Record<string, unknown>
       : {};
     const result = await repository.executeGameCommand!({ characterId: character.id, requestId, command, payload });
+    if (command === "auto_play") {
+      if (result.state.autoPlayEnabled && sessionManager.isBackground(identity.sessionId)) {
+        backgroundAutoCharacters.set(identity.accountId, character.id);
+      } else {
+        backgroundAutoCharacters.delete(identity.accountId);
+      }
+    }
     // SqliteRepository includes the character row captured in the same
     // transaction. Keep the fallback for lightweight test repositories.
     const storedResult = result as typeof result & { characterSnapshot?: unknown };
@@ -558,6 +645,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   };
 
   app.post("/api/v1/game/roll", async (request) => gameCommand(request, "roll"));
+  app.post("/api/v1/game/auto-play", async (request) => gameCommand(request, "auto_play"));
   app.post("/api/v1/game/construction/choose", async (request) => gameCommand(request, "construction_choose"));
   app.post("/api/v1/game/construction/resolve", async (request) => gameCommand(request, "construction_resolve"));
   app.post("/api/v1/game/construction/upgrade", async (request) => gameCommand(request, "construction_upgrade"));
@@ -657,6 +745,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   app.get("/ws", { websocket: true }, (socket: WebSocket) => {
     let identity: SessionIdentity | null = null;
+    let connection: ChatConnection | null = null;
     const authenticationTimeout = setTimeout(() => {
       if (!identity) {
         socket.close(4003, "AUTHENTICATION_TIMEOUT");
@@ -695,7 +784,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
             return;
           }
           clearTimeout(authenticationTimeout);
-          chatConnections.add({ socket, identity });
+          connection = { socket, identity, transportAlive: true };
+          chatConnections.add(connection);
           socket.send(JSON.stringify({
             type: "authenticated",
             session_id: identity.sessionId,
@@ -723,7 +813,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         }
 
         if (message.type === "heartbeat") {
-          sessionManager.heartbeat(identity.sessionId);
+          const resumedFromBackground = sessionManager.heartbeat(identity.sessionId);
+          if (resumedFromBackground) backgroundAutoCharacters.delete(identity.accountId);
           const at = new Date(now());
           await options.repository.touchSession(
             identity.sessionId,
@@ -733,7 +824,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           socket.send(JSON.stringify({
             type: "heartbeat_ack",
             server_time: at.toISOString(),
+            resumed_from_background: resumedFromBackground,
           }));
+          if (resumedFromBackground) {
+            socket.send(JSON.stringify({ type: "background_resumed" }));
+          }
           return;
         }
 
@@ -783,12 +878,15 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       });
     });
 
+    socket.on("pong", () => {
+      if (connection) connection.transportAlive = true;
+    });
+
     socket.on("close", () => {
       clearTimeout(authenticationTimeout);
-      for (const connection of chatConnections) {
-        if (connection.socket === socket) chatConnections.delete(connection);
-      }
+      if (connection) chatConnections.delete(connection);
       if (identity) {
+        backgroundAutoCharacters.delete(identity.accountId);
         sessionManager.markDisconnected(identity.sessionId, socket);
       }
     });
@@ -796,6 +894,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   app.addHook("onClose", async () => {
     clearInterval(cleanupTimer);
+    clearInterval(transportTimer);
+    clearInterval(autoPlayTimer);
     sessionManager.shutdown();
     await options.repository.close();
   });

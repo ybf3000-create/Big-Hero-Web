@@ -1011,6 +1011,7 @@ export function applyGameCommand(
   let event: Record<string, unknown>;
   let rollLotteryDraw: Record<string, unknown> | null = null;
   let stormRollsAtStart = -1;
+  const isRollCommand = command === "roll" || command === "auto_roll";
   const automaticConstruction = resolveExpiredConstruction(state, character);
   if (state.pendingConstruction && !automaticConstruction && !["construction_choose", "construction_resolve"].includes(command)) {
     throw new Error("请先完成建设方向选择");
@@ -1041,7 +1042,12 @@ export function applyGameCommand(
     delete state.constructionBuildings[String(gridIndex)];
     if (state.pendingConstruction?.gridIndex === gridIndex) state.pendingConstruction = null;
     event = { kind: "construction", action: "demolish", gridIndex, message: "建设格已拆除，建设费用和升级费用不返还" };
-  } else if (command === "roll") {
+  } else if (command === "auto_play") {
+    if (typeof payload.enabled !== "boolean") throw new Error("自动挂机状态不正确");
+    state.autoPlayEnabled = payload.enabled;
+    event = { kind: "auto_play", enabled: state.autoPlayEnabled };
+  } else if (isRollCommand) {
+    if (command === "auto_roll" && !state.autoPlayEnabled) throw new Error("自动挂机未开启");
     stormRollsAtStart = state.stormRolls;
     const baseDice = Math.floor(Math.random() * 6) + 1;
     const dice = Math.max(1, Math.min(6, baseDice + state.nextRollModifier));
@@ -1421,8 +1427,8 @@ export function applyGameCommand(
   } else {
     throw new Error("不支持的游戏操作");
   }
-  if (command === "roll" && rollLotteryDraw) event.lotteryDraw = rollLotteryDraw;
-  if (command === "roll" && stormRollsAtStart > 0) state.stormRolls = Math.max(0, state.stormRolls - 1);
+  if (isRollCommand && rollLotteryDraw) event.lotteryDraw = rollLotteryDraw;
+  if (isRollCommand && stormRollsAtStart > 0) state.stormRolls = Math.max(0, state.stormRolls - 1);
   reconcileAttributePoints(state, character.level);
   recalculateStats(state, character.level);
   return { state, character, event };

@@ -61,3 +61,24 @@ test("a session is rejected when its seven-day absolute lifetime ends", () => {
   assert.equal(manager.onlineCount, 0);
   assert.throws(() => manager.resolveToken("token"));
 });
+
+test("a connected background page is not expired by the foreground heartbeat timeout", () => {
+  let current = 1_000;
+  const manager = new SessionManager(1, () => current);
+  const socket = fakeSocket();
+  manager.admit("session", "account", "token");
+  manager.attachSocket("token", socket);
+  manager.setBackground("session", true);
+  current += 12 * 60 * 60_000;
+  assert.equal(manager.onlineCount, 1);
+  assert.equal(manager.resolveToken("token").sessionId, "session");
+  manager.setBackground("session", false);
+  current += 30_000;
+  assert.equal(manager.onlineCount, 1);
+  assert.equal(manager.isBackground("session"), true);
+  assert.equal(manager.heartbeat("session"), true);
+  assert.equal(manager.isBackground("session"), false);
+  manager.markDisconnected("session", socket);
+  current += 30_000;
+  assert.equal(manager.onlineCount, 0);
+});

@@ -125,6 +125,7 @@ var hibernate_laps: int = 0
 # 移动动画
 var _moving: bool = false
 var _network_roll_in_flight: bool = false
+var _network_roll_generation: int = 0
 var _network_action_in_flight: bool = false
 var _network_state_recovery_in_flight: bool = false
 var _pending_network_response: Dictionary = {}
@@ -192,6 +193,8 @@ func _ready() -> void:
 	$BottomBar/LogBtn.pressed.connect(_on_log_pressed)
 	$BottomBar/SettingsBtn.pressed.connect(_on_settings_pressed)
 	$MapArea/AutoPlayCheck.toggled.connect(_on_auto_play_toggled)
+	var auto_check := $MapArea/AutoPlayCheck as CheckButton
+	auto_check.set_pressed_no_signal(auto_play_enabled)
 	if _is_network_game():
 		if not NetworkClient.chat_message_received.is_connected(_on_world_chat_message):
 			NetworkClient.chat_message_received.connect(_on_world_chat_message)
@@ -205,6 +208,12 @@ func _ready() -> void:
 			NetworkClient.session_invalidated.connect(_on_network_session_invalidated)
 		if not NetworkClient.kicked.is_connected(_on_network_kicked):
 			NetworkClient.kicked.connect(_on_network_kicked)
+		if not NetworkClient.web_visibility_changed.is_connected(_on_web_visibility_changed):
+			NetworkClient.web_visibility_changed.connect(_on_web_visibility_changed)
+		if not NetworkClient.background_resumed.is_connected(_on_background_resumed):
+			NetworkClient.background_resumed.connect(_on_background_resumed)
+	if auto_play_enabled:
+		_start_auto_timer()
 	if not _pending_offline_reward.is_empty():
 		_show_offline_reward(_pending_offline_reward)
 
@@ -572,6 +581,15 @@ func _build_bottom_bar() -> void:
 ## ============================================================
 func _on_auto_play_toggled(pressed: bool) -> void:
 	auto_play_enabled = pressed
+	if _is_network_game():
+		var response: Dictionary = await NetworkClient.execute_game_command("auto-play", {"enabled": pressed})
+		if not response.get("ok", false):
+			auto_play_enabled = not pressed
+			var auto_check := get_node_or_null("MapArea/AutoPlayCheck") as CheckButton
+			if auto_check:
+				auto_check.set_pressed_no_signal(auto_play_enabled)
+			_show_float_text(_network_error_message(response), Color(1.0, 0.3, 0.3))
+			return
 	var battle_view := get_node_or_null("MapArea/BattleView")
 	if battle_view:
 		battle_view.auto_continue = pressed
@@ -584,6 +602,8 @@ func _on_auto_play_toggled(pressed: bool) -> void:
 
 
 func _start_auto_timer() -> void:
+	if _is_network_game() and NetworkClient.is_web_page_hidden():
+		return
 	var timer := get_node_or_null("AutoPlayTimer") as Timer
 	if not timer:
 		timer = Timer.new()
@@ -663,6 +683,7 @@ func _load_from_save_data(data: Dictionary) -> void:
 	dismantle_essence = maxi(0, int(data.get("dismantle_essence", 0)))
 	auto_dismantle_enabled = bool(data.get("auto_dismantle_enabled", false))
 	auto_dismantle_rules = _normalize_auto_dismantle_rules(data.get("auto_dismantle_rules", {}))
+	auto_play_enabled = bool(data.get("auto_play_enabled", false))
 	skill_system.update_max_slots(player_level)
 	skill_system.from_dict(data.get("skill_system", {}))
 	skill_system.update_max_slots(player_level)
@@ -810,7 +831,10 @@ func _on_network_dice_roll() -> void:
 	if _network_roll_in_flight:
 		return
 	_network_roll_in_flight = true
+	var request_generation := _network_roll_generation
 	var response: Dictionary = await NetworkClient.execute_game_command("roll")
+	if request_generation != _network_roll_generation:
+		return
 	_network_roll_in_flight = false
 	if not response.get("ok", false):
 		var recovered := false
@@ -1914,6 +1938,38 @@ func _recover_network_state(message := "服务器状态已重新同步") -> bool
 func _on_network_reconnected() -> void:
 	if _is_network_game():
 		await _recover_network_state("网络恢复，已同步服务器状态")
+
+
+func _on_web_visibility_changed(hidden: bool) -> void:
+	if not _is_network_game():
+		return
+	_stop_auto_timer()
+	if hidden:
+		return
+	# 浏览器后台期间服务器已继续推进。丢弃切入后台前尚未播放的旧响应，
+	# 回到页面后只展示最新权威快照，避免排队播放大量过时动画。
+	_network_roll_generation += 1
+	_network_roll_in_flight = false
+	_pending_network_response.clear()
+	_moving = false
+	_battle_active = false
+	for node_name in ["ConstructionChoice", "ConstructionManagement"]:
+		var overlay := get_node_or_null(node_name)
+		if overlay:
+			overlay.queue_free()
+	var battle_view := get_node_or_null("MapArea/BattleView")
+	if battle_view:
+		battle_view.queue_free()
+	var roll_button := get_node_or_null("BottomBar/DiceRollBtn") as Button
+	if roll_button:
+		roll_button.disabled = false
+	await get_tree().create_timer(0.25).timeout
+	if await _recover_network_state("后台挂机结果已同步") and auto_play_enabled:
+		_start_auto_timer()
+
+
+func _on_background_resumed() -> void:
+	_on_web_visibility_changed(false)
 
 
 func _on_network_disconnected(message: String) -> void:

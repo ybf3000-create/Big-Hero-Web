@@ -463,6 +463,7 @@ static func server_state_to_save_data(server_character: Dictionary, state: Dicti
 		"dismantle_essence": int(state.get("dismantleEssence", 0)),
 		"auto_dismantle_enabled": bool(state.get("autoDismantleEnabled", false)),
 		"auto_dismantle_rules": state.get("autoDismantleRules", {}),
+		"auto_play_enabled": bool(state.get("autoPlayEnabled", false)),
 		"skill_system": {"slots": skill_slots, "unlocked_skills": state.get("skills", [1, 22])},
 		"gem_bag": gems,
 		"lottery_tickets": state.get("lotteryTicketNumbers", []),

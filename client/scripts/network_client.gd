@@ -7,6 +7,8 @@ signal kicked(message: String)
 signal chat_history_received(messages: Array)
 signal chat_message_received(message: Dictionary)
 signal chat_error(message: String)
+signal web_visibility_changed(hidden: bool)
+signal background_resumed
 
 const RULES_VERSION := "network-1"
 const DESKTOP_SERVER_URL := "http://127.0.0.1:3000"
@@ -26,6 +28,7 @@ var _heartbeat_elapsed := 0.0
 var _reconnect_elapsed := 0.0
 var _reconnect_attempt_elapsed := 0.0
 var _should_reconnect := false
+var _visibility_generation := 0
 
 
 func _ready() -> void:
@@ -79,7 +82,52 @@ func _accept_login(response: Dictionary) -> void:
 	account = response.get("account", {})
 	character = response.get("character")
 	offline_reward = response.get("offline_reward")
+	_install_web_visibility_bridge()
 	_connect_realtime()
+
+
+func _install_web_visibility_bridge() -> void:
+	if not OS.has_feature("web") or session_token.is_empty():
+		return
+	var token_json := JSON.stringify(session_token)
+	var script := """
+(() => {
+  if (window.__bigHeroVisibilityHandler) {
+    document.removeEventListener('visibilitychange', window.__bigHeroVisibilityHandler);
+  }
+  const token = %s;
+  const notify = () => {
+    window.__bigHeroVisibilityGeneration = (window.__bigHeroVisibilityGeneration || 0) + 1;
+    fetch('/api/v1/game/auto-play/presence', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
+      body: JSON.stringify({background: document.hidden}),
+      keepalive: true
+    }).catch(() => {});
+  };
+  window.__bigHeroVisibilityHandler = notify;
+  document.addEventListener('visibilitychange', notify);
+  notify();
+})();
+""" % token_json
+	JavaScriptBridge.eval(script, true)
+	_visibility_generation = int(JavaScriptBridge.eval("window.__bigHeroVisibilityGeneration || 0", true))
+
+
+func is_web_page_hidden() -> bool:
+	if not OS.has_feature("web"):
+		return false
+	return bool(JavaScriptBridge.eval("document.hidden", true))
+
+
+func _poll_web_visibility() -> void:
+	if not OS.has_feature("web") or session_token.is_empty():
+		return
+	var generation := int(JavaScriptBridge.eval("window.__bigHeroVisibilityGeneration || 0", true))
+	if generation == _visibility_generation:
+		return
+	_visibility_generation = generation
+	web_visibility_changed.emit(is_web_page_hidden())
 
 
 func create_character(character_name: String) -> Dictionary:
@@ -243,6 +291,13 @@ func invalidate_local_session() -> void:
 	character = null
 	offline_reward = null
 	_websocket_authenticated = false
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("""
+if (window.__bigHeroVisibilityHandler) {
+  document.removeEventListener('visibilitychange', window.__bigHeroVisibilityHandler);
+  window.__bigHeroVisibilityHandler = null;
+}
+""", true)
 
 
 func create_request_id() -> String:
@@ -294,6 +349,7 @@ func _request_json(path: String, method: HTTPClient.Method, payload: Dictionary,
 
 
 func _process(delta: float) -> void:
+	_poll_web_visibility()
 	_websocket.poll()
 	var state := _websocket.get_ready_state()
 	while _websocket.get_available_packet_count() > 0:
@@ -360,6 +416,8 @@ func _handle_realtime_message(text: String) -> void:
 			realtime_authenticated.emit()
 		"heartbeat_ack":
 			pass
+		"background_resumed":
+			background_resumed.emit()
 		"chat_history":
 			chat_history_received.emit(data.get("messages", []))
 		"chat_message":
