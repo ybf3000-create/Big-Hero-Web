@@ -114,10 +114,12 @@ function buildUnit(rawName: string, id: number, row: "front" | "back", level: nu
   let hp = Math.round(300 * levelScale * tierScale * definition.hpMultiplier * (isElite ? 3 : 1));
   let attack = Math.round(30 * levelScale * tierScale * definition.attackMultiplier * (isElite ? 1.8 : 1));
   let defense = Math.round(20 * levelScale * tierScale * definition.defenseMultiplier);
-  if (kind === "battle" && tier === 0 && level <= 3) {
-    hp = Math.round(hp * .45);
-    attack = Math.round(attack * .55);
-    defense = Math.round(defense * .35);
+  if (kind !== "boss") {
+    const formationSize = Math.max(1, encounter.front.length + encounter.back.length);
+    const formationScale = 1 / Math.sqrt(formationSize);
+    hp = Math.round(hp * formationScale);
+    attack = Math.round(attack * formationScale);
+    defense = Math.round(defense * formationScale);
   }
   if (infiniteHp) hp = 99_999_999;
   const avoid = isElite ? eliteDodgeBlock(tier) : 0;

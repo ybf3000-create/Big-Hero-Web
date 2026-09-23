@@ -228,3 +228,32 @@ test("set healing and shadow hit bonuses affect authoritative combat", () => {
   assert.ok(without.events.some((event) => event.type === "miss"));
   assert.ok(withShadow.events.some((event) => event.type === "damage" && event.source?.side === "player"));
 });
+
+test("multi-enemy formations use a square-root budget and remain winnable with the starter weapon", () => {
+  const novice: BattlePlayerState = {
+    name: "十级新手", level: 10, currentHp: 1_220, maxHp: 1_220, attack: 83, defense: 24,
+    speedPoints: 0, crit: 0, critDamage: 150, hit: 0, dodge: 0, block: 0, skillDamage: 0,
+    cooldownReduction: 0, lifesteal: 0, freeAttackPct: 0, freeDefensePct: 0, goldBonus: 0,
+    experienceBonus: 0, luck: 0, skillSlots: [{ skillId: 1, priority: 2 }, { skillId: 22, priority: 2 }],
+    battleDamageMultiplier: 1, incomingDamageMultiplier: 1, passives: [], setCounts: {}, setAffixes: [], battleGold: 0,
+  };
+  for (let templateIndex = 0; templateIndex < 6; templateIndex += 1) {
+    const fallback = seeded(2_026_092_300 + templateIndex);
+    const prefix = [(templateIndex + .1) / 6, 0];
+    const random = () => prefix.shift() ?? fallback();
+    const encounter = generateEncounter("battle", 10, 1, 2, "sunny", random);
+    if (encounter.units.length === 2) assert.ok(encounter.units.every((unit) => unit.max_hp < 600));
+    assert.equal(runBattle(novice, encounter, random).outcome, BattleOutcome.VICTORY, encounter.template_id);
+  }
+});
+
+test("crowded damage-over-time battles never access a removed status entry", () => {
+  for (let seed = 1; seed <= 40; seed += 1) {
+    const random = seeded(seed);
+    const encounter = generateEncounter("battle", 30, 10, 11, "sunny", random);
+    const result = runBattle({
+      ...player([1, 22]), level: 30, currentHp: 3_000, maxHp: 3_000, attack: 180, defense: 90,
+    }, encounter, random);
+    validate(result);
+  }
+});

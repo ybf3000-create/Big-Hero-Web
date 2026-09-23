@@ -31,6 +31,10 @@ var _units: Dictionary = {}
 var _unit_data: Dictionary = {}
 var _speed := 0.75
 var _skip := false
+var _result_shown := false
+var _active_tweens: Array[Tween] = []
+var _transient_nodes: Array[Node] = []
+var _sprite_defaults: Dictionary = {}
 var _kind := "battle"
 var _event_label: Label
 var _combat_log: RichTextLabel
@@ -56,6 +60,9 @@ var _result_closed := false
 func setup(edata: Dictionary) -> void:
 	_edata = edata
 	_kind = str(_edata.get("battle_kind", "battle"))
+	var save_manager := get_node_or_null("/root/SaveManager")
+	if save_manager and save_manager.has_method("get_battle_speed"):
+		_speed = float(save_manager.get_battle_speed())
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_build_view()
@@ -198,7 +205,7 @@ func _build_header() -> void:
 	add_child(_event_label)
 
 	var speed_btn := HoverHintButton.new()
-	speed_btn.text = "×0.75"
+	speed_btn.text = _speed_text()
 	speed_btn.position = Vector2(1154, 18)
 	speed_btn.size = Vector2(54, 34)
 	_style_icon_button(speed_btn)
@@ -206,13 +213,14 @@ func _build_header() -> void:
 	speed_btn.pressed.connect(func():
 		if _speed < 1.0:
 			_speed = 1.0
-			speed_btn.text = "×1"
 		elif _speed < 2.0:
 			_speed = 2.0
-			speed_btn.text = "×2"
 		else:
 			_speed = 0.75
-			speed_btn.text = "×0.75"
+		speed_btn.text = _speed_text()
+		var save_manager := get_node_or_null("/root/SaveManager")
+		if save_manager and save_manager.has_method("set_battle_speed"):
+			save_manager.set_battle_speed(_speed)
 	)
 	add_child(speed_btn)
 	var skip_btn := HoverHintButton.new()
@@ -221,7 +229,7 @@ func _build_header() -> void:
 	skip_btn.size = Vector2(44, 34)
 	_style_icon_button(skip_btn)
 	skip_btn.tooltip_text = "跳过战斗"
-	skip_btn.pressed.connect(func(): _skip = true)
+	skip_btn.pressed.connect(_skip_playback)
 	add_child(skip_btn)
 
 
@@ -240,6 +248,11 @@ func _create_unit(data: Dictionary, side: String, pos: Vector2, texture_path: St
 	if ResourceLoader.exists(texture_path):
 		sprite.texture = load(texture_path)
 	root.add_child(sprite)
+	_sprite_defaults[sprite] = {
+		"position": sprite.position,
+		"scale": sprite.scale,
+		"modulate": sprite.modulate,
+	}
 
 	var name_label := Label.new()
 	name_label.text = str(data.get("display_name", data.get("name", "敌人")))
@@ -440,6 +453,9 @@ func _build_status_tip() -> void:
 
 func _play() -> void:
 	await get_tree().create_timer(0.45).timeout
+	if _skip:
+		_show_result()
+		return
 	var events: Array = _edata.get("battle_result", {}).get("events", [])
 	for index in range(events.size()):
 		if _skip:
@@ -493,7 +509,7 @@ func _play_cast(event: Dictionary) -> void:
 	_float_action_name(source, source_sprite, skill_name, int(event.get("skill_id", 0)) > 0)
 	var original := source_sprite.position
 	var direction := 52.0 if str(event.get("source", {}).get("side", "enemy")) == "player" else -52.0
-	var tween := create_tween()
+	var tween := _battle_tween()
 	tween.set_trans(Tween.TRANS_QUAD)
 	tween.set_ease(Tween.EASE_OUT)
 	tween.tween_property(source_sprite, "position", original + Vector2(direction * 0.72, -18.0), 0.10 / _speed)
@@ -532,7 +548,7 @@ func _play_summon(event: Dictionary) -> void:
 	var unit := _units.get(key, null) as Control
 	if unit:
 		unit.modulate.a = 0.0
-		var tween := create_tween()
+		var tween := _battle_tween()
 		tween.tween_property(unit, "modulate:a", 1.0, 0.24 / _speed)
 	_log_line("%s 被召唤入场" % str(raw_unit.get("name", "召唤物")), "#8b5aa8")
 	await get_tree().create_timer(0.24 / _speed).timeout
@@ -587,7 +603,7 @@ func _play_damage(event: Dictionary) -> void:
 		var target_side := str(event.get("target", {}).get("side", "enemy"))
 		var knockback := -11.0 if target_side == "player" else 11.0
 		sprite.pivot_offset = sprite.size * 0.5
-		var tw := create_tween()
+		var tw := _battle_tween()
 		tw.set_trans(Tween.TRANS_QUAD)
 		tw.set_ease(Tween.EASE_OUT)
 		tw.tween_property(sprite, "position", base_position + Vector2(knockback, 1.0), 0.05 / _speed)
@@ -636,7 +652,7 @@ func _update_unit_hp(target: Control, hp_value: float, max_hp: float) -> void:
 			target.visible = false
 		elif not target.visible:
 			target.visible = true
-	create_tween().tween_property(hp, "size:x", 164.0 * clampf(hp_value / maxf(max_hp, 1.0), 0.0, 1.0), 0.18 / _speed)
+	_battle_tween().tween_property(hp, "size:x", 164.0 * clampf(hp_value / maxf(max_hp, 1.0), 0.0, 1.0), 0.18 / _speed)
 	var text := target.get_node_or_null("HPText") as Label
 	if text:
 		var shield_value := float(_unit_data.get(key, {}).get("shield", 0.0))
@@ -747,8 +763,8 @@ func _spawn_projectile(source: Control, target: Control, color: Color, visual: S
 	shot.size = Vector2(22, 10)
 	shot.position = source.position + Vector2(90, 35)
 	shot.add_theme_stylebox_override("panel", _box(color, Color.WHITE, 1, 5))
-	add_child(shot)
-	var tw := create_tween()
+	_add_transient(shot)
+	var tw := _battle_tween()
 	tw.tween_property(shot, "position", target.position + Vector2(90, 35), 0.18 / _speed)
 	tw.tween_callback(_spawn_ranged_impact.bind(target, visual))
 	tw.tween_callback(shot.queue_free)
@@ -758,7 +774,7 @@ func _spawn_slash_impact(target: Control) -> void:
 	var effect := Node2D.new()
 	effect.position = target.position + Vector2(90, 36)
 	effect.z_index = 45
-	add_child(effect)
+	_add_transient(effect)
 	for stroke in [{"width": 11.0, "color": Color("fff1b0")}, {"width": 4.0, "color": Color("d95470")}]:
 		var slash := Line2D.new()
 		slash.points = PackedVector2Array([Vector2(-40, 34), Vector2(40, -38)])
@@ -768,7 +784,7 @@ func _spawn_slash_impact(target: Control) -> void:
 		slash.end_cap_mode = Line2D.LINE_CAP_ROUND
 		effect.add_child(slash)
 	effect.scale = Vector2(0.25, 0.25)
-	var tween := create_tween()
+	var tween := _battle_tween()
 	tween.tween_property(effect, "scale", Vector2.ONE, 0.08 / _speed)
 	tween.tween_property(effect, "scale", Vector2(1.25, 1.25), 0.10 / _speed)
 	tween.parallel().tween_property(effect, "modulate:a", 0.0, 0.10 / _speed)
@@ -783,10 +799,10 @@ func _spawn_heal_lines(target: Control) -> void:
 		line.position = target.position + Vector2(48 + (i % 7) * 12, 48 + (i / 7) * 12)
 		line.z_index = 44
 		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		add_child(line)
+		_add_transient(line)
 		line.modulate.a = 0.0
 		var delay := float(i % 7) * 0.025 / _speed
-		var tween := create_tween()
+		var tween := _battle_tween()
 		tween.tween_interval(delay)
 		tween.tween_property(line, "modulate:a", 1.0, 0.06 / _speed)
 		tween.parallel().tween_property(line, "position:y", line.position.y - 72.0 - float(i % 3) * 10.0, 0.42 / _speed)
@@ -814,8 +830,8 @@ func _spawn_impact_ring(target: Control, color: Color) -> void:
 	ring.default_color = color
 	ring.position = target.position + Vector2(90, 36)
 	ring.z_index = 44
-	add_child(ring)
-	var tween := create_tween()
+	_add_transient(ring)
+	var tween := _battle_tween()
 	tween.tween_property(ring, "scale", Vector2(2.8, 2.8), 0.16 / _speed)
 	tween.parallel().tween_property(ring, "modulate:a", 0.0, 0.16 / _speed)
 	tween.tween_callback(ring.queue_free)
@@ -831,13 +847,13 @@ func _spawn_burst_particles(target: Control, primary: Color, secondary: Color, s
 		particle.color = primary if i % 2 else secondary
 		particle.position = target.position + Vector2(90, 36)
 		particle.z_index = 44
-		add_child(particle)
+		_add_transient(particle)
 		var angle := TAU * float(i) / 12.0 + randf_range(-0.14, 0.14)
 		var distance := randf_range(32.0, 64.0)
 		var destination := particle.position + Vector2(cos(angle), sin(angle)) * distance
 		if shape == "bubble":
 			destination.y -= 32.0
-		var tween := create_tween()
+		var tween := _battle_tween()
 		tween.tween_property(particle, "position", destination, 0.22 / _speed)
 		tween.parallel().tween_property(particle, "rotation", angle + 1.4, 0.22 / _speed)
 		tween.parallel().tween_property(particle, "modulate:a", 0.0, 0.22 / _speed)
@@ -848,7 +864,7 @@ func _spawn_lightning_impact(target: Control) -> void:
 	var effect := Node2D.new()
 	effect.position = target.position + Vector2(90, 38)
 	effect.z_index = 45
-	add_child(effect)
+	_add_transient(effect)
 	for offset in [-18.0, 0.0, 18.0]:
 		var bolt := Line2D.new()
 		bolt.points = PackedVector2Array([Vector2(offset - 12, -82), Vector2(offset + 8, -55), Vector2(offset - 7, -28), Vector2(offset + 10, 2)])
@@ -857,7 +873,7 @@ func _spawn_lightning_impact(target: Control) -> void:
 		bolt.begin_cap_mode = Line2D.LINE_CAP_ROUND
 		bolt.end_cap_mode = Line2D.LINE_CAP_ROUND
 		effect.add_child(bolt)
-	var tween := create_tween()
+	var tween := _battle_tween()
 	tween.tween_interval(0.06 / _speed)
 	tween.tween_property(effect, "modulate:a", 0.0, 0.12 / _speed)
 	tween.tween_callback(effect.queue_free)
@@ -880,8 +896,8 @@ func _float_number(target: Control, text: String, color: Color, font_size: int) 
 	label.add_theme_font_size_override("font_size", font_size)
 	_text_outline(label, color, 3)
 	label.z_index = 50
-	add_child(label)
-	var tw := create_tween()
+	_add_transient(label)
+	var tw := _battle_tween()
 	tw.tween_property(label, "position:y", label.position.y - 46, 0.55 / _speed)
 	tw.parallel().tween_property(label, "modulate:a", 0.0, 0.55 / _speed)
 	tw.tween_callback(label.queue_free)
@@ -898,8 +914,8 @@ func _float_action_name(source: Control, sprite: TextureRect, action_name: Strin
 	_text_outline(label, Color("ffe58c") if is_skill else Color.WHITE, 4)
 	label.z_index = 60
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(label)
-	var tween := create_tween()
+	_add_transient(label)
+	var tween := _battle_tween()
 	tween.tween_property(label, "position:y", label.position.y - 18.0, 0.38 / _speed)
 	tween.tween_interval(0.12 / _speed)
 	tween.tween_property(label, "modulate:a", 0.0, 0.18 / _speed)
@@ -910,7 +926,7 @@ func _update_boss_hp(value: float, max_hp: float) -> void:
 	if not _boss_hp or not _boss_hp_text:
 		return
 	_boss_hp.max_value = maxf(max_hp, 1.0)
-	create_tween().tween_property(_boss_hp, "value", value, 0.18 / _speed)
+	_battle_tween().tween_property(_boss_hp, "value", value, 0.18 / _speed)
 	_boss_hp_text.text = "%d / %d" % [int(value), int(max_hp)]
 
 
@@ -950,6 +966,9 @@ func _log_line(text: String, color: String) -> void:
 
 
 func _show_result() -> void:
+	if _result_shown:
+		return
+	_result_shown = true
 	_hide_status_tip()
 	_event_label.text = ""
 	var result: Dictionary = _edata.get("battle_result", {})
@@ -1051,6 +1070,49 @@ func _format_number(value: int) -> String:
 		output = "," + raw.right(3) + output
 		raw = raw.left(raw.length() - 3)
 	return ("-" if value < 0 else "") + raw + output
+
+
+func _speed_text() -> String:
+	if is_equal_approx(_speed, 1.0):
+		return "×1"
+	if is_equal_approx(_speed, 2.0):
+		return "×2"
+	return "×0.75"
+
+
+func _battle_tween() -> Tween:
+	var tween := create_tween()
+	_active_tweens.append(tween)
+	return tween
+
+
+func _add_transient(node: Node) -> void:
+	_transient_nodes.append(node)
+	add_child(node)
+
+
+func _skip_playback() -> void:
+	if _skip or _result_shown:
+		return
+	_skip = true
+	for tween in _active_tweens:
+		if tween and tween.is_valid():
+			tween.kill()
+	_active_tweens.clear()
+	for node in _transient_nodes:
+		if is_instance_valid(node):
+			node.free()
+	_transient_nodes.clear()
+	for raw_sprite in _sprite_defaults:
+		var sprite := raw_sprite as Control
+		if not is_instance_valid(sprite):
+			continue
+		var defaults: Dictionary = _sprite_defaults[raw_sprite]
+		sprite.position = defaults.get("position", sprite.position)
+		sprite.scale = defaults.get("scale", sprite.scale)
+		sprite.modulate = defaults.get("modulate", Color.WHITE)
+	_event_label.text = ""
+	_show_result()
 
 
 func _text_outline(label: Label, color: Color, outline: int) -> void:

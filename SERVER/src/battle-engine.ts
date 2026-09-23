@@ -201,14 +201,16 @@ function tickActorTimers(state: Data, actor: Data, delta: number): void {
     if (actor.controls[key] <= 0) delete actor.controls[key];
   }
   for (let index = actor.dots.length - 1; index >= 0; index -= 1) {
-    const dot = actor.dots[index]!;
+    const dot = actor.dots[index];
+    if (!dot) continue;
     dot.tickTimer -= delta;
     while (dot.tickTimer <= 0 && dot.ticksRemaining > 0 && actor.alive) {
       dot.tickTimer += dot.tickInterval;
       tickDot(state, actor, dot);
       dot.ticksRemaining -= 1;
     }
-    if (dot.ticksRemaining <= 0 || !actor.alive) actor.dots.splice(index, 1);
+    const currentIndex = actor.dots.indexOf(dot);
+    if (currentIndex >= 0 && (dot.ticksRemaining <= 0 || !actor.alive)) actor.dots.splice(currentIndex, 1);
   }
   for (let index = actor.hots.length - 1; index >= 0; index -= 1) {
     const hot = actor.hots[index]!;

@@ -6,6 +6,7 @@ const CjkFont = preload("res://assets/fonts/NotoSansHans-Regular.otf")
 const EmojiFont = preload("res://assets/fonts/NotoEmoji-VariableFont.ttf")
 const HoverHintButtonCls = preload("res://scripts/ui/hover_hint_button.gd")
 const UIFontInstallerCls = preload("res://scripts/ui_font_installer.gd")
+const BattleViewCls = preload("res://scripts/ui/battle_view.gd")
 
 var failures: Array[String] = []
 
@@ -14,6 +15,7 @@ func _init() -> void:
 	_test_character_name_rules()
 	_test_network_numeric_baseline()
 	_test_web_ui_resources()
+	_test_battle_playback_controls()
 	if failures.is_empty():
 		print("[network_rules_regression] PASS")
 		quit(0)
@@ -61,3 +63,25 @@ func _test_web_ui_resources() -> void:
 	tooltip.queue_free()
 	hint_button.free()
 	font_installer.free()
+
+
+func _test_battle_playback_controls() -> void:
+	var save_manager := SaveManagerCls.new()
+	_expect(is_equal_approx(save_manager._normalize_battle_speed(0.75), 0.75), "0.75倍战斗速度应合法")
+	_expect(is_equal_approx(save_manager._normalize_battle_speed(2.0), 2.0), "2倍战斗速度应合法")
+	_expect(is_equal_approx(save_manager._normalize_battle_speed(9.0), 0.75), "非法战斗速度应回退到0.75倍")
+	save_manager.free()
+
+	var battle := BattleViewCls.new()
+	get_root().add_child(battle)
+	battle.setup({
+		"battle_kind": "battle",
+		"battle_result": {"outcome": 0, "events": [], "player_max_hp": 500, "player_start_hp": 500},
+		"encounter": {"template_name": "测试战斗", "units": [], "weather": "sunny"},
+	})
+	var transient := Label.new()
+	battle._add_transient(transient)
+	battle._skip_playback()
+	_expect(battle._result_shown, "跳过战斗应立即显示结算")
+	_expect(battle._transient_nodes.is_empty(), "跳过战斗应清空飘字和临时特效")
+	battle.free()

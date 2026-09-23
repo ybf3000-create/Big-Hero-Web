@@ -41,8 +41,12 @@ test("game state survives commands and repeated roll requests are idempotent", a
   const character = await repository.createCharacter({ id: "game-character", requestId: "game_character_1", accountId: account.id, displayName: "测试勇者", normalizedName: "测试勇者" });
   const before = await repository.getGameState(character.id);
   assert.deepEqual(before.inventory, []);
-  assert.deepEqual(before.equipmentBag, []);
-  assert.equal(before.stats.attack, 25);
+  assert.equal(before.equipmentBag.length, 1);
+  assert.equal(before.equipmentBag[0]?.slot, "weapon");
+  assert.equal(before.equipmentBag[0]?.locked, true);
+  assert.equal(before.equipmentBag[0]?.bound, true);
+  assert.equal(before.equipped.weapon, before.equipmentBag[0]?.id);
+  assert.equal(before.stats.attack, 65);
   assert.equal(before.stats.defense, 15);
   assert.equal(before.stats.crit, 0);
   const first = await repository.executeGameCommand({ characterId: character.id, requestId: "game_roll_01", command: "roll", payload: {} });
@@ -558,7 +562,8 @@ test("server-generated equipment preserves original build fields", () => {
     assert.match(String(equipment.iconPath), /^res:\/\/assets\/equipment_icons\//);
     assert.ok(Array.isArray(equipment.gems));
     assert.ok(typeof equipment.suitName === "string");
-    assert.equal(result.state.equipmentBag.length, 1);
+    assert.equal(result.state.equipmentBag.length, 2);
+    assert.equal(equipment.slot, "armor");
   } finally {
     Math.random = originalRandom;
   }
@@ -572,8 +577,44 @@ test("legacy server equipment receives a stable image path when loaded", () => {
   });
   const first = parseGameState(serializeGameState(state));
   const second = parseGameState(serializeGameState(state));
-  assert.match(first.equipmentBag[0]?.iconPath ?? "", /^res:\/\/assets\/equipment_icons\/weapon\/icon_\d+\.png$/);
-  assert.equal(first.equipmentBag[0]?.iconPath, second.equipmentBag[0]?.iconPath);
+  const firstLegacy = first.equipmentBag.find((equipment) => equipment.id === "legacy-weapon");
+  const secondLegacy = second.equipmentBag.find((equipment) => equipment.id === "legacy-weapon");
+  assert.match(firstLegacy?.iconPath ?? "", /^res:\/\/assets\/equipment_icons\/weapon\/icon_\d+\.png$/);
+  assert.equal(firstLegacy?.iconPath, secondLegacy?.iconPath);
+});
+
+test("legacy characters without a weapon receive the starter weapon exactly once", () => {
+  const legacy = createInitialGameState();
+  legacy.equipmentBag = [];
+  legacy.equipped.weapon = null;
+  delete (legacy as Partial<typeof legacy>).starterWeaponGranted;
+
+  const migrated = parseGameState(serializeGameState(legacy));
+  assert.equal(migrated.starterWeaponGranted, true);
+  assert.equal(migrated.equipmentBag.length, 1);
+  assert.equal(migrated.equipmentBag[0]?.slot, "weapon");
+  assert.equal(migrated.equipped.weapon, migrated.equipmentBag[0]?.id);
+
+  const repeatedUnsavedLoad = parseGameState(serializeGameState(legacy));
+  assert.equal(repeatedUnsavedLoad.equipmentBag[0]?.id, migrated.equipmentBag[0]?.id);
+
+  const loadedAgain = parseGameState(serializeGameState(migrated));
+  assert.equal(loadedAgain.equipmentBag.filter((equipment) => equipment.slot === "weapon").length, 1);
+});
+
+test("equipment rewards fill missing slots before returning to random slots", () => {
+  const originalRandom = Math.random;
+  Math.random = () => .7;
+  try {
+    const state = createInitialGameState();
+    state.mapGrids = state.mapGrids.map(() => 5);
+    const armorDrop = applyGameCommand(state, { level: 10, experience: 0, gold: 0 }, "roll", {});
+    assert.ok(armorDrop.state.equipmentBag.some((equipment) => equipment.slot === "armor"));
+    const shoesDrop = applyGameCommand(armorDrop.state, armorDrop.character, "roll", {});
+    assert.ok(shoesDrop.state.equipmentBag.some((equipment) => equipment.slot === "shoes"));
+  } finally {
+    Math.random = originalRandom;
+  }
 });
 
 test("server owns gem, socket, dismantle and reroll state transitions", () => {
@@ -589,21 +630,22 @@ test("server owns gem, socket, dismantle and reroll state transitions", () => {
   const synthesized = applyGameCommand(state, character, "gem_synthesize", { gem_id: 8, level: 2 });
   assert.equal(synthesized.state.gemBag.find((gem) => gem.gemId === 8 && gem.level === 3)?.count, 1);
   const socketed = applyGameCommand(synthesized.state, synthesized.character, "equipment_gem_socket", { equipment_id: equipment.id, socket_index: 0, gem_id: 8, level: 3 });
-  assert.deepEqual(socketed.state.equipmentBag[0]?.gems, [{ id: 8, level: 3 }]);
+  assert.deepEqual(socketed.state.equipmentBag.find((item) => item.id === equipment.id)?.gems, [{ id: 8, level: 3 }]);
   const unsocketed = applyGameCommand(socketed.state, socketed.character, "equipment_gem_unsocket", { equipment_id: equipment.id, socket_index: 0 });
   assert.equal(unsocketed.state.gemBag.find((gem) => gem.gemId === 8 && gem.level === 3)?.count, 1);
   unsocketed.state.dismantleEssence = 100;
   const rerolled = applyGameCommand(unsocketed.state, unsocketed.character, "equipment_reroll", { equipment_id: equipment.id, locked_indices: [] });
   assert.equal(rerolled.state.dismantleEssence, 85);
   const dismantled = applyGameCommand(rerolled.state, rerolled.character, "equipment_dismantle", { equipment_id: equipment.id });
-  assert.equal(dismantled.state.equipmentBag.length, 0);
+  assert.equal(dismantled.state.equipmentBag.some((item) => item.id === equipment.id), false);
+  assert.equal(dismantled.state.equipmentBag.length, 1);
   assert.equal(dismantled.state.dismantleEssence, 105);
 
   const boundState = createInitialGameState();
   boundState.equipmentBag.push({ ...equipment, id: "bound-equip", gems: [] });
   boundState.gemBag.push({ gemId: 8, level: 1, count: 1, bound: true });
   const boundSocketed = applyGameCommand(boundState, character, "equipment_gem_socket", { equipment_id: "bound-equip", socket_index: 0, gem_id: 8, level: 1 });
-  assert.deepEqual(boundSocketed.state.equipmentBag[0]?.gems, [{ id: 8, level: 1, bound: true }]);
+  assert.deepEqual(boundSocketed.state.equipmentBag.find((item) => item.id === "bound-equip")?.gems, [{ id: 8, level: 1, bound: true }]);
   const boundUnsocketed = applyGameCommand(boundSocketed.state, boundSocketed.character, "equipment_gem_unsocket", { equipment_id: "bound-equip", socket_index: 0 });
   assert.equal(boundUnsocketed.state.gemBag.find((gem) => gem.gemId === 8 && gem.level === 1)?.bound, true);
 });
@@ -658,7 +700,8 @@ test("fate card resolves on the server and empty auto-dismantle rules dismantle 
     chest.mapGrids = chest.mapGrids.map(() => 5);
     Math.random = () => .7;
     const rolled = applyGameCommand(chest, { level: 1, experience: 0, gold: 0 }, "roll", {});
-    assert.deepEqual(rolled.state.equipmentBag, []);
+    assert.equal(rolled.state.equipmentBag.length, 1);
+    assert.equal(rolled.state.equipmentBag[0]?.slot, "weapon");
     assert.ok(rolled.state.dismantleEssence > 0);
   } finally {
     Math.random = random;

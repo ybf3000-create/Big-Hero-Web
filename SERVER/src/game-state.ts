@@ -117,6 +117,7 @@ export interface GameState {
   lastOnline: number;
   completedLaps: number;
   activeBattle: null | Record<string, unknown>;
+  starterWeaponGranted: boolean;
 }
 
 export class InvalidGameStateError extends Error {
@@ -126,6 +127,35 @@ export class InvalidGameStateError extends Error {
   }
 }
 
+function createStarterWeapon(): EquipmentItem {
+  // The fixed per-character ID keeps a legacy grant stable across repeated
+  // reads before the first post-migration command persists the state.
+  const id = "starter-training-weapon";
+  return {
+    id,
+    slot: "weapon",
+    name: "普通训练剑",
+    baseName: "训练剑",
+    icon: "武器",
+    iconPath: equipmentIconPath("weapon", id),
+    slotTypeId: 1,
+    quality: 0,
+    enhance: 0,
+    mainStat: "攻击力",
+    mainValue: 40,
+    affixes: [],
+    gems: [],
+    gemSlots: 0,
+    initialGemSlots: 0,
+    acquiredAt: Date.now(),
+    suitName: "",
+    extraSuitName: "",
+    setAffixes: [],
+    locked: true,
+    bound: true,
+  };
+}
+
 export function defaultGameState(): GameState {
   const equipped: Record<string, string | null> = {};
   const slotEnhance: Record<string, number> = {};
@@ -133,12 +163,14 @@ export function defaultGameState(): GameState {
     equipped[slot.key] = null;
     slotEnhance[slot.key] = 0;
   }
+  const starterWeapon = createStarterWeapon();
+  equipped.weapon = starterWeapon.id;
   return {
     version: 1,
     hp: 500,
     maxHp: 500,
     reviveCoins: 3,
-    // 与Godot新档一致：等级1白值，不预发装备或消耗品。
+    // 新手武器避免“打不过怪 -> 无掉落 -> 继续无武器”的闭环。
     stats: { attack: 25, defense: 15, maxHp: 500, speed: 0, crit: 0, critDamage: 150, hit: 0, dodge: 0, block: 0, skillDamage: 0, cooldownReduction: 0, lifesteal: 0, luck: 0, goldBonus: 0, experienceBonus: 0 },
     freeAttributePoints: 0,
     attributes: { attack: 0, defense: 0, speed: 0, luck: 0 },
@@ -154,7 +186,7 @@ export function defaultGameState(): GameState {
     inventory: [],
     inventoryCapacity: 100,
     inventoryExpansionCount: 0,
-    equipmentBag: [],
+    equipmentBag: [starterWeapon],
     equipmentCapacity: 100,
     equipmentExpansionCount: 0,
     equipped,
@@ -188,6 +220,7 @@ export function defaultGameState(): GameState {
     lastOnline: Date.now(),
     completedLaps: 0,
     activeBattle: null,
+    starterWeaponGranted: true,
   };
 }
 
@@ -252,6 +285,17 @@ export function parseGameState(value: string | null | undefined): GameState {
     state.gemSynthesisRefunds = Math.max(0, Math.min(10, Math.floor(Number(state.gemSynthesisRefunds) || 0)));
     state.rerollDiscounts = Math.max(0, Math.min(10, Math.floor(Number(state.rerollDiscounts) || 0)));
     state.autoPlayEnabled = state.autoPlayEnabled === true;
+    if (parsed.starterWeaponGranted !== true) {
+      const hasWeapon = state.equipmentBag.some((equipment) => equipment.slot === "weapon");
+      if (!hasWeapon && state.equipmentBag.length < state.equipmentCapacity) {
+        const starterWeapon = createStarterWeapon();
+        state.equipmentBag.push(starterWeapon);
+        if (!state.equipped.weapon) state.equipped.weapon = starterWeapon.id;
+        state.starterWeaponGranted = true;
+      } else {
+        state.starterWeaponGranted = hasWeapon;
+      }
+    }
     for (const equipment of state.equipmentBag) {
       if (!equipment.iconPath) equipment.iconPath = equipmentIconPath(equipment.slot, equipment.id);
     }

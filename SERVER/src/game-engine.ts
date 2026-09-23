@@ -263,7 +263,9 @@ function equippedSetGenerationBonuses(state: GameState): { extraSuitRate: number
 
 function generateStateEquipment(state: GameState, level: number, bossTier: number, minimumQuality = 0, maximumQuality = 4, requestedSlot?: string, qualityWeights: readonly number[] = QUALITY_WEIGHTS): EquipmentItem {
   const bonuses = equippedSetGenerationBonuses(state);
-  return generateEquipment(level, bossTier, minimumQuality, maximumQuality, state.stats.luck, bonuses.extraSuitRate, bonuses.setRateBonus, requestedSlot, qualityWeights);
+  const ownedSlots = new Set(state.equipmentBag.map((equipment) => equipment.slot));
+  const missingSlot = EQUIPMENT_SLOTS.find((slot) => !ownedSlots.has(slot.key))?.key;
+  return generateEquipment(level, bossTier, minimumQuality, maximumQuality, state.stats.luck, bonuses.extraSuitRate, bonuses.setRateBonus, requestedSlot ?? missingSlot, qualityWeights);
 }
 
 function addGem(state: GameState, gemId: number, level = 1, count = 1, bound = false): boolean {

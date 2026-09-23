@@ -8,6 +8,8 @@ extends Node
 const SAVE_VERSION := 1
 const MAX_SLOTS := 3
 const SAVE_DIR := "user://saves/"
+const SETTINGS_PATH := "user://client_settings.cfg"
+const BATTLE_SPEEDS: Array[float] = [0.75, 1.0, 2.0]
 
 signal slot_changed(slot: int)
 
@@ -108,6 +110,31 @@ func delete_slot(slot: int) -> void:
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
 	slot_changed.emit(slot)
+
+
+## ============ 客户端设置 ============
+
+func get_battle_speed() -> float:
+	var config := ConfigFile.new()
+	if config.load(SETTINGS_PATH) != OK:
+		return BATTLE_SPEEDS[0]
+	return _normalize_battle_speed(float(config.get_value("battle", "speed", BATTLE_SPEEDS[0])))
+
+
+func set_battle_speed(value: float) -> void:
+	var config := ConfigFile.new()
+	config.load(SETTINGS_PATH)
+	config.set_value("battle", "speed", _normalize_battle_speed(value))
+	var error := config.save(SETTINGS_PATH)
+	if error != OK:
+		push_warning("[SaveManager] 无法保存战斗速度设置: " + str(error))
+
+
+func _normalize_battle_speed(value: float) -> float:
+	for allowed in BATTLE_SPEEDS:
+		if is_equal_approx(value, allowed):
+			return allowed
+	return BATTLE_SPEEDS[0]
 
 
 ## ============ 名称校验 ============
