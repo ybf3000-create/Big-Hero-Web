@@ -3841,7 +3841,7 @@ func _show_auto_dismantle_panel() -> void:
 	title.add_theme_color_override("font_color", Color("96353e"))
 	dialog.add_child(title)
 	var hint := Label.new()
-	hint.text = "任意一条规则命中就自动分解；规则内各项取交集。锁定装备永不分解。"
+	hint.text = "任意一条规则命中就自动分解；每条规则可只选一列，未选列不参与判断。"
 	hint.position = Vector2(20, 45)
 	hint.add_theme_color_override("font_color", Color("6f6264"))
 	dialog.add_child(hint)
@@ -3992,7 +3992,7 @@ func _show_auto_dismantle_rule_editor(edit_index: int = -1) -> void:
 	title.add_theme_color_override("font_color", Color("96353e"))
 	dialog.add_child(title)
 	var hint := Label.new()
-	hint.text = "勾选的项目同时满足时命中；未勾选的项目视为全部。随机词缀按名称匹配。"
+	hint.text = "可只选择任意一列；选择多列时需同时满足，未选择的列不参与判断。"
 	hint.position = Vector2(20, 45)
 	hint.add_theme_color_override("font_color", Color("6f6264"))
 	dialog.add_child(hint)
@@ -4025,7 +4025,7 @@ func _show_auto_dismantle_rule_editor(edit_index: int = -1) -> void:
 		column.add_theme_constant_override("separation", 2)
 		columns.add_child(column)
 		var header := Label.new()
-		header.text = str(defn["title"]) + "（不选=全部）"
+		header.text = str(defn["title"]) + "（不选=忽略）"
 		header.add_theme_color_override("font_color", Color("4f454d"))
 		column.add_child(header)
 		var values: Array = defn["values"]

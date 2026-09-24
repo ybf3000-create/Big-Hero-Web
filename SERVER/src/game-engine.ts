@@ -305,7 +305,7 @@ function returnEquipmentGems(state: GameState, item: EquipmentItem): void {
   }
 }
 
-function equipmentMatchesRule(item: EquipmentItem, rules: Record<string, unknown>): boolean {
+export function equipmentMatchesRule(item: EquipmentItem, rules: Record<string, unknown>): boolean {
   const listKeys = ["qualities", "slots", "affix_types", "affix_names", "initial_sockets", "suits"];
   const hasConstraint = listKeys.some((key) => Array.isArray(rules[key]) && (rules[key] as unknown[]).length > 0)
     || numberValue(rules.affix_min, 0) > 0
@@ -1344,7 +1344,13 @@ export function applyGameCommand(
       for (const [key, allowed] of Object.entries(validValues)) {
         if (rule[key] !== undefined && (!Array.isArray(rule[key]) || (rule[key] as unknown[]).some((value) => !allowed.includes(value)))) throw new Error("自动分解规则不正确");
       }
-      if (!Number.isInteger(rule.affix_min) || !Number.isInteger(rule.affix_max) || Number(rule.affix_min) < 0 || Number(rule.affix_max) > 8 || Number(rule.affix_min) > Number(rule.affix_max)) throw new Error("词缀数量范围不正确");
+      const affixMin = rule.affix_min === undefined ? 0 : rule.affix_min;
+      const affixMax = rule.affix_max === undefined ? 8 : rule.affix_max;
+      if (!Number.isInteger(affixMin) || !Number.isInteger(affixMax) || Number(affixMin) < 0 || Number(affixMax) > 8 || Number(affixMin) > Number(affixMax)) throw new Error("词缀数量范围不正确");
+      const hasConstraint = Object.keys(validValues).some((key) => Array.isArray(rule[key]) && (rule[key] as unknown[]).length > 0)
+        || Number(affixMin) > 0
+        || Number(affixMax) < 8;
+      if (ruleList && !hasConstraint) throw new Error("请至少选择一项分解条件");
     }
     state.autoDismantleEnabled = enabled;
     state.autoDismantleRules = structuredClone(rules);

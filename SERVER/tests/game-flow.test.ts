@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { buildApp } from "../src/app.js";
 import { BOSS_NAMES } from "../src/game-catalog.js";
-import { applyGameCommand, createInitialGameState } from "../src/game-engine.js";
+import { applyGameCommand, createInitialGameState, equipmentMatchesRule } from "../src/game-engine.js";
 import { addItem, parseGameState, recalculateStats, serializeGameState } from "../src/game-state.js";
 import { applyMigrations } from "../src/migrations.js";
 import { hashSecret } from "../src/security.js";
@@ -713,6 +713,33 @@ test("server poker reward consumes exactly three records and auto dismantle is a
   assert.equal(typeof (first.event.poker as Record<string, unknown>).matched, "boolean");
   assert.equal((first.event.poker as Record<string, unknown>).records instanceof Array, true);
   assert.equal(((first.event.poker as Record<string, unknown>).records as unknown[]).length, 3);
+});
+
+test("auto dismantle rules may constrain only quality or only equipment slot", () => {
+  const weapon = {
+    id: "quality-only", slot: "weapon", slotTypeId: 1, name: "史诗武器", quality: 3, enhance: 0,
+    mainStat: "攻击力", mainValue: 100, locked: false, bound: true,
+    affixes: [{ name: "攻击%", type: "attack", value: 5, display: "+5%" }], setAffixes: [], initialGemSlots: 2,
+  };
+  const armor = { ...weapon, id: "slot-only", slot: "armor", slotTypeId: 2, name: "普通防具", quality: 0 };
+  assert.equal(equipmentMatchesRule(weapon, { qualities: [3] }), true);
+  assert.equal(equipmentMatchesRule(armor, { qualities: [3] }), false);
+  assert.equal(equipmentMatchesRule(armor, { slots: [2] }), true);
+  assert.equal(equipmentMatchesRule(weapon, { slots: [2] }), false);
+  assert.equal(equipmentMatchesRule(armor, { qualities: [0], slots: [2] }), true);
+  assert.equal(equipmentMatchesRule(weapon, { qualities: [3], slots: [2] }), false);
+  assert.equal(equipmentMatchesRule(weapon, {}), false);
+
+  const state = createInitialGameState();
+  const saved = applyGameCommand(state, { level: 1, experience: 0, gold: 0 }, "auto_dismantle", {
+    enabled: true,
+    rules: { rules: [{ qualities: [3] }, { slots: [2] }] },
+  });
+  assert.deepEqual(saved.state.autoDismantleRules, { rules: [{ qualities: [3] }, { slots: [2] }] });
+  assert.throws(
+    () => applyGameCommand(saved.state, saved.character, "auto_dismantle", { enabled: true, rules: { rules: [{}] } }),
+    /至少选择一项/,
+  );
 });
 
 test("empty slots enhance atomically and skill priorities persist", async (context) => {

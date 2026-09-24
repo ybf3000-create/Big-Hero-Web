@@ -47,6 +47,10 @@ func _test_lock_and_filter() -> void:
 	_expect(Rules.matches_six_dimensions(eqp, matching), "六维全部满足时应匹配")
 	matching["slots"] = [2]
 	_expect(not Rules.matches_six_dimensions(eqp, matching), "任一维不满足时不得匹配")
+	_expect(Rules.should_auto_dismantle(eqp, {"rules":[{"qualities":[4]}]}), "只选择品质列时应能命中")
+	_expect(Rules.should_auto_dismantle(eqp, {"rules":[{"slots":[1]}]}), "只选择部位列时应能命中")
+	_expect(not Rules.should_auto_dismantle(eqp, {"rules":[{"slots":[2]}]}), "只选择部位列时不匹配的部位不得命中")
+	_expect(not Rules.should_auto_dismantle(eqp, {"rules":[{}]}), "空白规则不得命中任何装备")
 	var legacy := Rules.normalize_equipment({"slot":"weapon", "quality":3})
 	_expect(str(legacy.get("main_stat", "")) == "攻击力" and is_equal_approx(float(legacy.get("main_value", 0.0)), 80.0), "旧档装备必须自动补全主属性")
 
