@@ -5062,7 +5062,9 @@ func _show_dismantle_panel(main_panel: Panel) -> void:
 			elif _inv_filter_quality.has(qv): _inv_filter_quality.erase(qv)
 			else: _inv_filter_quality.append(qv)
 			dp.queue_free()
-			call_deferred("_show_dismantle_panel", main_panel)
+			await dp.tree_exited
+			if is_instance_valid(main_panel):
+				_show_dismantle_panel(main_panel)
 		)
 		dp.add_child(quality_btn)
 
@@ -5082,7 +5084,9 @@ func _show_dismantle_panel(main_panel: Panel) -> void:
 			elif _inv_filter_slot.has(sv): _inv_filter_slot.erase(sv)
 			else: _inv_filter_slot.append(sv)
 			dp.queue_free()
-			call_deferred("_show_dismantle_panel", main_panel)
+			await dp.tree_exited
+			if is_instance_valid(main_panel):
+				_show_dismantle_panel(main_panel)
 		)
 		dp.add_child(slot_btn)
 
