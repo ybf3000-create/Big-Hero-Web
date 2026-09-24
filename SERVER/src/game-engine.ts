@@ -858,10 +858,13 @@ function originalBattle(state: GameState, character: CharacterProgress, kind: "b
     if (stat === "quality_up_chance") qualityUpgradeChance = Math.max(qualityUpgradeChance, value);
   }
   const goldBonus = (goldMultiplier - 1) * 100;
+  // Each grid combat is an independent battle. The server always supplies
+  // full HP at battle start; result.player_hp remains the playback end value.
+  const battleStartHp = state.maxHp;
   const player: BattlePlayerState = {
     name: character.name ?? "勇者",
     level: character.level,
-    currentHp: Math.max(1, Math.min(state.maxHp, numberValue(state.hp, state.maxHp))),
+    currentHp: battleStartHp,
     maxHp: state.maxHp,
     attack: state.stats.attack,
     defense: state.stats.defense,
@@ -975,9 +978,9 @@ function originalBattle(state: GameState, character: CharacterProgress, kind: "b
       messages.push(`战败，强制回家并损失${penalty}金币`);
     }
   }
-  // Normal victories preserve the authoritative HP left by the battle.
-  // Defeat handling below overwrites this with the revived/full HP value.
-  state.hp = Math.max(0, Math.min(state.maxHp, result.player_hp));
+  // HP loss only belongs to this battle result and its client playback.
+  // The authoritative map state is full after every independent battle.
+  state.hp = state.maxHp;
   for (const name of ["skillBoost", "damagePenalty"]) {
     if ((state.buffs[name] ?? 0) > 0) state.buffs[name] = Math.max(0, (state.buffs[name] ?? 0) - 1);
   }

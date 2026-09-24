@@ -383,6 +383,58 @@ test("battle grids return a browser-playable combat timeline", () => {
   assert.match(encounter.units[0]?.asset ?? "", /\.png$/);
 });
 
+test("every independent battle starts and returns to the map at full HP", () => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.5;
+  try {
+    const cases = [
+      { gridType: 1, battleKind: "battle" },
+      { gridType: 2, battleKind: "elite" },
+      { gridType: 3, battleKind: "challenge" },
+      { gridType: 11, battleKind: "boss" },
+    ] as const;
+    for (const fixture of cases) {
+      const state = createInitialGameState();
+      state.mapGrids = Array.from({ length: state.mapTotalGrids }, () => fixture.gridType);
+      state.hp = 1;
+      const result = applyGameCommand(state, { level: 1, experience: 0, gold: 100 }, "roll", {});
+      const battle = result.event.battle_result as { player_start_hp: number; player_max_hp: number };
+      assert.equal(result.event.battleKind, fixture.battleKind);
+      assert.equal(battle.player_start_hp, battle.player_max_hp, `${fixture.battleKind} should start at full HP`);
+      assert.equal(result.state.hp, result.state.maxHp, `${fixture.battleKind} should return to the map at full HP`);
+    }
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test("a recovered battle response cannot persist battle damage into the next fight", async (context) => {
+  const { directory, repository } = await setup();
+  context.after(async () => { await repository.close(); await rm(directory, { recursive: true, force: true }); });
+  const inviteHash = hashSecret("FULL-HP-RECOVERY-INVITE");
+  repository.insertInviteCode("full-hp-recovery-invite", inviteHash);
+  const account = await repository.registerAccount({ requestId: "full_hp_register", username: "full_hp_hero", passwordHash: "x", inviteCodeHash: inviteHash });
+  const character = await repository.createCharacter({ id: "full-hp-character", requestId: "full_hp_character", accountId: account.id, displayName: "满血勇者", normalizedName: "满血勇者" });
+  const state = await repository.getGameState(character.id);
+  state.mapGrids = Array.from({ length: state.mapTotalGrids }, () => 1);
+  state.hp = 1;
+  repository.database.prepare("UPDATE character_states SET state_json = ? WHERE character_id = ?").run(serializeGameState(state), character.id);
+
+  const originalRandom = Math.random;
+  Math.random = () => 0.5;
+  try {
+    const committed = await repository.executeGameCommand({ characterId: character.id, requestId: "full_hp_roll", command: "roll", payload: {} });
+    const repeated = await repository.executeGameCommand({ characterId: character.id, requestId: "full_hp_roll", command: "roll", payload: {} });
+    const battle = committed.event.battle_result as { player_start_hp: number; player_max_hp: number };
+    assert.equal(battle.player_start_hp, battle.player_max_hp);
+    assert.deepEqual(repeated, committed);
+    const recovered = await repository.getGameState(character.id);
+    assert.equal(recovered.hp, recovered.maxHp);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
 test("boss battle triggers only when the final landing grid is the boss grid", () => {
   const originalRandom = Math.random;
   try {
