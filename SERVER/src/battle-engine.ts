@@ -346,8 +346,8 @@ function selectTargets(state: Data, actor: Data, targetTag: number, skill?: Batt
   return [];
 }
 
-function castEvent(actor: Data, targets: Data[], skillId: number, label: string, visual: string): Data {
-  return { type: "cast", source: actorRef(actor), targets: targets.map(actorRef), skill_id: skillId, label, visual };
+function castEvent(actor: Data, targets: Data[], skillId: number, label: string, visual: string, hits = 1): Data {
+  return { type: "cast", source: actorRef(actor), targets: targets.map(actorRef), skill_id: skillId, label, visual, hits: Math.max(1, Math.floor(hits)) };
 }
 
 function skillVisual(skill: BattleSkill): string {
@@ -651,7 +651,7 @@ function executeSkill(state: Data, actor: Data, skillId: number, random: RandomS
     actor.endlessStrikeCount = count;
   }
   const targets = selectTargets(state, actor, skill.target, skill);
-  state.events.push(castEvent(actor, targets, skill.id, skill.name, skillVisual(skill)));
+  state.events.push(castEvent(actor, targets, skill.id, skill.name, skillVisual(skill), n(skill.hits, 1)));
   if (skill.shieldPct !== undefined) applyShield(state, actor, skill);
   if (skill.healPct !== undefined && [TargetTag.SELF, TargetTag.SELF_HEAL].includes(skill.target as 10 | 11)) {
     const basis = skill.healStat === "maxHpPct" ? actor.maxHp : actor.attack;
@@ -690,7 +690,10 @@ function executeSkill(state: Data, actor: Data, skillId: number, random: RandomS
     if (skillId === 32) for (const enemy of state.actors.enemies) if (enemy !== target && enemy.alive) enemy.dots.push(...target.dots.map((dot: Data) => structuredClone(dot)).slice(0, Math.max(0, 10 - enemy.dots.length)));
   }
   const reduction = Math.min(Math.max(0, n(actor.cooldownReduction)) / 100, .5);
-  actor.cooldowns[skillId] = Math.max(1, skill.actionCd * (1 - reduction) * (actor.controls.paralysis ? 1.3 : 1));
+  // Skill rotations must leave room for other equipped skills. Even with the
+  // maximum cooldown-reduction build, a skill cannot return in fewer than
+  // four real actions.
+  actor.cooldowns[skillId] = Math.max(4, skill.actionCd * (1 - reduction) * (actor.controls.paralysis ? 1.3 : 1));
   const resetChance = .25 + (hasSetAffix(actor, "【星辰】专注") ? .1 : 0);
   if (setCount(actor, "星辰") >= 3 && random() < resetChance) {
     actor.cooldowns[skillId] = 0;

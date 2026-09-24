@@ -493,7 +493,7 @@ static func _set_skill_cooldown(actor: Dictionary, skill_id: int, base_cd: float
 	var extra_mult: float = 1.0
 	if actor.get("controls", {}).has("paralysis"):
 		extra_mult = 1.3
-	actor["cooldowns"][skill_id] = maxf(1.0, base_cd * (1.0 - cd_reduce) * extra_mult)
+	actor["cooldowns"][skill_id] = maxf(4.0, base_cd * (1.0 - cd_reduce) * extra_mult)
 
 
 static func _reset_after_turn(actor: Dictionary) -> void:

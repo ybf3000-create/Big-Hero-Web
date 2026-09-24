@@ -36,7 +36,11 @@ var _active_tweens: Array[Tween] = []
 var _transient_nodes: Array[Node] = []
 var _sprite_defaults: Dictionary = {}
 var _kind := "battle"
-var _event_label: Label
+var _player_event_label: Label
+var _enemy_event_label: Label
+var _formation_button: Button
+var _formation_overlay: Control
+var _formation_overlay_visible := false
 var _combat_log: RichTextLabel
 var _combat_lines: Array[String] = []
 var _combat_log_at_top: bool = true
@@ -194,15 +198,17 @@ func _build_header() -> void:
 	weather_label.add_theme_stylebox_override("normal", _box(Color(0.22, 0.28, 0.32, 0.82), Color("f0d59b"), 1, 3))
 	add_child(weather_label)
 
-	_event_label = Label.new()
-	_event_label.position = Vector2(475, 92)
-	_event_label.size = Vector2(330, 34)
-	_event_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_event_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_event_label.add_theme_font_size_override("font_size", 14)
-	_event_label.add_theme_color_override("font_color", Color("fff9e8"))
-	_event_label.add_theme_stylebox_override("normal", _box(Color(0.27, 0.15, 0.18, 0.86), Color("f1d895"), 2, 0))
-	add_child(_event_label)
+	_player_event_label = _event_label(Vector2(350, 92), Color("d9f4e5"), Color("3d927d"), "我方")
+	_enemy_event_label = _event_label(Vector2(810, 92), Color("ffe0df"), Color("b93647"), "敌方")
+
+	_formation_button = HoverHintButton.new()
+	_formation_button.text = "敌方站位"
+	_formation_button.position = Vector2(1028, 18)
+	_formation_button.size = Vector2(112, 34)
+	_style_icon_button(_formation_button)
+	_formation_button.tooltip_text = "显示或隐藏敌方前后排与列关系"
+	_formation_button.pressed.connect(_toggle_formation_overlay)
+	add_child(_formation_button)
 
 	var speed_btn := HoverHintButton.new()
 	speed_btn.text = _speed_text()
@@ -231,6 +237,20 @@ func _build_header() -> void:
 	skip_btn.tooltip_text = "跳过战斗"
 	skip_btn.pressed.connect(_skip_playback)
 	add_child(skip_btn)
+
+
+func _event_label(pos: Vector2, font_color: Color, border: Color, side_name: String) -> Label:
+	var label := Label.new()
+	label.position = pos
+	label.size = Vector2(270, 34)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 14)
+	label.add_theme_color_override("font_color", font_color)
+	label.add_theme_stylebox_override("normal", _box(Color(0.20, 0.14, 0.16, 0.88), border, 2, 4))
+	label.text = side_name
+	add_child(label)
+	return label
 
 
 func _create_unit(data: Dictionary, side: String, pos: Vector2, texture_path: String, sprite_size: Vector2) -> void:
@@ -417,6 +437,59 @@ func _build_footer() -> void:
 	add_child(hint)
 
 
+func _toggle_formation_overlay() -> void:
+	_formation_overlay_visible = not _formation_overlay_visible
+	if _formation_overlay_visible:
+		_build_formation_overlay()
+	elif is_instance_valid(_formation_overlay):
+		_formation_overlay.queue_free()
+		_formation_overlay = null
+
+
+func _build_formation_overlay() -> void:
+	if is_instance_valid(_formation_overlay):
+		_formation_overlay.queue_free()
+	_formation_overlay = Control.new()
+	_formation_overlay.name = "EnemyFormationOverlay"
+	_formation_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_formation_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_formation_overlay.z_index = 35
+	add_child(_formation_overlay)
+	var title := Label.new()
+	title.text = "敌方站位"
+	title.position = Vector2(680, 120)
+	title.size = Vector2(280, 22)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 12)
+	title.add_theme_color_override("font_color", Color("4b3036"))
+	_formation_overlay.add_child(title)
+	for row_index in range(2):
+		var row_name := "前排" if row_index == 0 else "后排"
+		var row_label := Label.new()
+		row_label.text = row_name
+		row_label.position = Vector2(646, 160 + row_index * 115)
+		row_label.size = Vector2(48, 74)
+		row_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		row_label.add_theme_font_size_override("font_size", 11)
+		row_label.add_theme_color_override("font_color", Color("4b3036"))
+		_formation_overlay.add_child(row_label)
+		for column in range(3):
+			var cell := Panel.new()
+			cell.position = Vector2(700 + column * 82, 160 + row_index * 115)
+			cell.size = Vector2(74, 74)
+			cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			cell.add_theme_stylebox_override("panel", _box(Color(0.93, 0.86, 0.83, 0.24), Color(0.50, 0.25, 0.29, 0.72), 1, 2))
+			_formation_overlay.add_child(cell)
+			var column_label := Label.new()
+			column_label.text = "列%d" % (column + 1)
+			column_label.position = Vector2(700 + column * 82, 236 + row_index * 115)
+			column_label.size = Vector2(74, 16)
+			column_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			column_label.add_theme_font_size_override("font_size", 9)
+			column_label.add_theme_color_override("font_color", Color("71575d"))
+			_formation_overlay.add_child(column_label)
+
+
 func _build_status_tip() -> void:
 	_status_tip_overlay = Button.new()
 	_status_tip_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -497,7 +570,14 @@ func _play_event(event: Dictionary) -> void:
 func _play_cast(event: Dictionary) -> void:
 	var source_name := str(event.get("source", {}).get("name", "单位"))
 	var skill_name := str(event.get("label", "攻击"))
-	_event_label.text = source_name + " · " + skill_name
+	var source_side := str(event.get("source", {}).get("side", "enemy"))
+	var event_text := source_name + " · " + skill_name
+	if source_side == "player":
+		_player_event_label.text = event_text
+		_enemy_event_label.text = "敌方"
+	else:
+		_enemy_event_label.text = event_text
+		_player_event_label.text = "我方"
 	_log_line("%s 使用 %s" % [source_name, skill_name], "#762c39")
 	var source := _find_unit(event.get("source", {}))
 	if not source:
@@ -520,7 +600,11 @@ func _play_cast(event: Dictionary) -> void:
 		for target_ref in event.get("targets", []):
 			var melee_target := _find_unit(target_ref)
 			if melee_target:
-				_spawn_slash_impact(melee_target)
+				var hit_count := maxi(1, int(event.get("hits", 1)))
+				for hit_index in range(hit_count):
+					_spawn_slash_impact(melee_target)
+					if hit_index + 1 < hit_count:
+						await get_tree().create_timer(0.07 / _speed).timeout
 	elif visual in ["projectile", "control", "dot", "fire", "ice", "thunder", "poison", "blood"] and not event.get("targets", []).is_empty():
 		for target_ref in event.get("targets", []):
 			var ranged_target := _find_unit(target_ref)
@@ -970,7 +1054,8 @@ func _show_result() -> void:
 		return
 	_result_shown = true
 	_hide_status_tip()
-	_event_label.text = ""
+	_player_event_label.text = "我方"
+	_enemy_event_label.text = "敌方"
 	var result: Dictionary = _edata.get("battle_result", {})
 	var outcome := int(result.get("outcome", 2))
 	var victory := outcome == 0 or outcome == 3
@@ -1111,7 +1196,8 @@ func _skip_playback() -> void:
 		sprite.position = defaults.get("position", sprite.position)
 		sprite.scale = defaults.get("scale", sprite.scale)
 		sprite.modulate = defaults.get("modulate", Color.WHITE)
-	_event_label.text = ""
+	_player_event_label.text = "我方"
+	_enemy_event_label.text = "敌方"
 	_show_result()
 
 

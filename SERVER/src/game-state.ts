@@ -142,7 +142,10 @@ function createStarterWeapon(): EquipmentItem {
     quality: 0,
     enhance: 0,
     mainStat: "攻击力",
-    mainValue: 40,
+    // The longer skill rotations leave more damage to the starter weapon's
+    // basic attack, so the guaranteed weapon is intentionally a little more
+    // generous during the first multi-enemy encounters.
+    mainValue: 60,
     affixes: [],
     gems: [],
     gemSlots: 0,
@@ -297,6 +300,7 @@ export function parseGameState(value: string | null | undefined): GameState {
       }
     }
     for (const equipment of state.equipmentBag) {
+      if (equipment.id === "starter-training-weapon" && equipment.mainValue < 60) equipment.mainValue = 60;
       if (!equipment.iconPath) equipment.iconPath = equipmentIconPath(equipment.slot, equipment.id);
     }
     return state;

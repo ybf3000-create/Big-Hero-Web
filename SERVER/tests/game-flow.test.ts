@@ -46,7 +46,7 @@ test("game state survives commands and repeated roll requests are idempotent", a
   assert.equal(before.equipmentBag[0]?.locked, true);
   assert.equal(before.equipmentBag[0]?.bound, true);
   assert.equal(before.equipped.weapon, before.equipmentBag[0]?.id);
-  assert.equal(before.stats.attack, 65);
+  assert.equal(before.stats.attack, 85);
   assert.equal(before.stats.defense, 15);
   assert.equal(before.stats.crit, 0);
   const first = await repository.executeGameCommand({ characterId: character.id, requestId: "game_roll_01", command: "roll", payload: {} });

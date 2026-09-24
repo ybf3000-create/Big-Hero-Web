@@ -57,6 +57,19 @@ test("all 36 original skills produce a valid authoritative battle timeline", () 
   }
 });
 
+test("skill cooldowns keep a four-action floor and favor seven-to-nine action rotations", () => {
+  assert.ok(BATTLE_SKILLS.every((skill) => skill.actionCd >= 4), "a skill has a cooldown below four actions");
+  const commonRotation = BATTLE_SKILLS.filter((skill) => skill.actionCd >= 7 && skill.actionCd <= 9).length;
+  assert.ok(commonRotation >= 20, `expected most skills in the 7-9 action band, got ${commonRotation}`);
+});
+
+test("multi-hit cast events expose their hit count for the browser replay", () => {
+  const result = runBattle(player([8]), trainingEncounter(), () => .9);
+  const cast = result.events.find((event) => event.type === "cast" && event.skill_id === 8);
+  assert.equal(cast?.hits, 2);
+  assert.ok(result.events.filter((event) => event.type === "damage" && event.source?.side === "player").length >= 2);
+});
+
 test("all 200 boss tiers generate valid server-owned encounters and battles", () => {
   for (let bossIndex = 1; bossIndex <= 200; bossIndex += 1) {
     const random = seeded(4_000 + bossIndex);
@@ -231,7 +244,7 @@ test("set healing and shadow hit bonuses affect authoritative combat", () => {
 
 test("multi-enemy formations use a square-root budget and remain winnable with the starter weapon", () => {
   const novice: BattlePlayerState = {
-    name: "十级新手", level: 10, currentHp: 1_220, maxHp: 1_220, attack: 83, defense: 24,
+    name: "十级新手", level: 10, currentHp: 1_220, maxHp: 1_220, attack: 100, defense: 24,
     speedPoints: 0, crit: 0, critDamage: 150, hit: 0, dodge: 0, block: 0, skillDamage: 0,
     cooldownReduction: 0, lifesteal: 0, freeAttackPct: 0, freeDefensePct: 0, goldBonus: 0,
     experienceBonus: 0, luck: 0, skillSlots: [{ skillId: 1, priority: 2 }, { skillId: 22, priority: 2 }],

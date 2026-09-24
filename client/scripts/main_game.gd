@@ -3725,6 +3725,13 @@ func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
 	title.add_theme_font_size_override("font_size", 22)
 	title.add_theme_color_override("font_color", Color("96353e"))
 	dialog.add_child(title)
+	var gold_label := Label.new()
+	gold_label.position = Vector2(430, 19)
+	gold_label.size = Vector2(190, 24)
+	gold_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	gold_label.add_theme_font_size_override("font_size", 15)
+	gold_label.add_theme_color_override("font_color", Color("8a5a12"))
+	dialog.add_child(gold_label)
 	var subtitle := Label.new()
 	subtitle.text = "强化永久绑定槽位，换装后等级和加成保持不变"
 	subtitle.position = Vector2(22, 48)
@@ -3775,6 +3782,7 @@ func _show_slot_enhance_panel(initial_slot: String = "weapon") -> void:
 		selected_five.text = "当前槽位 +5  （%d金）" % _slot_enhance_cost(selected_slots, 5)
 		all_one.text = "全部槽位 +1  （%d金）" % _slot_enhance_cost(all_slots, 1)
 		all_five.text = "全部槽位 +5  （%d金）" % _slot_enhance_cost(all_slots, 5)
+		gold_label.text = "金币：%d" % player_gold
 	selector.item_selected.connect(func(_index: int): refresh_text.call())
 	refresh_text.call()
 
@@ -5775,7 +5783,10 @@ func _build_skill_tab(panel: Panel) -> void:
 			var detail_btn: Button = HoverHintButton.new()
 			detail_btn.flat = true
 			detail_btn.position = Vector2(sx, sy)
-			detail_btn.size = Vector2(slot_w - 50, slot_h)
+			# Keep the description hit area separate from the priority control.
+			# The priority button starts at slot_w - 100, so leave a visible gap
+			# instead of allowing a click on the skill card to change priority.
+			detail_btn.size = Vector2(slot_w - 110, slot_h)
 			UIUtils.btn_transparent2(detail_btn)
 			var sid_cap: int = sid
 			detail_btn.tooltip_text = _skill_hover_text(sdata)
