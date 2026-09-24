@@ -26,10 +26,16 @@ if not exist "node_modules\tsx\dist\cli.mjs" (
 )
 
 echo Updating the database and compiled server...
+call npm run web:patch
+if errorlevel 1 (
+  echo ERROR: Godot web export could not be prepared for ZeroTier HTTP access.
+  pause
+  exit /b 1
+)
+
 call npm run web:check
 if errorlevel 1 (
   echo ERROR: Godot web export is not ready for ZeroTier HTTP access.
-  echo Run: npm run web:patch
   pause
   exit /b 1
 )
