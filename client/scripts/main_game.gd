@@ -984,13 +984,19 @@ func _on_move_complete() -> void:
 	elif edata.get("type", "") == "gem":
 		_add_gem(int(edata.get("gem_id", 0)), int(edata.get("level", 1)), 1)
 	elif edata.get("type", "") == "card":
-		inventory.add_item(5, int(edata.get("count", 1)))
+		# 兼容旧版本地结果：天命卡获得后立即执行，不再进入背包。
+		_apply_fate_card({})
 	elif edata.get("type", "") == "lottery":
 		_grant_lottery_ticket(int(edata.get("ticket", randi_range(0, 999))))
 	elif edata.has("deity_effect"):
 		_apply_deity_effect(edata.get("name", "神祇"), edata.get("deity_effect", {}))
 	if edata.has("item_id"):
-		inventory.add_item(int(edata.get("item_id", 0)), int(edata.get("count", 1)))
+		var received_item_id := int(edata.get("item_id", 0))
+		if received_item_id == 5:
+			# 兼容旧版服务器事件，避免天命卡重新落入客户端背包。
+			_apply_fate_card({})
+		else:
+			inventory.add_item(received_item_id, int(edata.get("count", 1)))
 	if edata.has("next_step_bonus"):
 		next_roll_modifier = int(edata.get("next_step_bonus", 0))
 	if edata.has("next_step_penalty"):
@@ -1060,6 +1066,11 @@ func _apply_network_roll_response(response: Dictionary) -> void:
 		poker_records = display_records
 		top_bar.refresh_poker_slots()
 		top_bar.set_poker_result(str(poker.get("message", "未成牌")))
+	var lottery_draw: Dictionary = event.get("lotteryDraw", {}) as Dictionary
+	var lottery_rewards: Dictionary = lottery_draw.get("rewards", {}) as Dictionary
+	var lottery_message := str(lottery_rewards.get("message", ""))
+	if bool(lottery_draw.get("won", false)) and not lottery_message.is_empty():
+		_show_float_text(lottery_message, Color(1.0, 0.85, 0.3))
 	if str(event.get("kind", "")) == "construction" and str(event.get("action", "")) == "choose":
 		_show_construction_choice(int(event.get("gridIndex", player_grid_index)), event)
 		return
@@ -1764,7 +1775,11 @@ func _apply_simple_grid_result(edata: Dictionary) -> void:
 	if edata.has("gem_id"):
 		_add_gem(int(edata.get("gem_id", 0)), int(edata.get("level", 1)), 1)
 	if edata.has("item_id"):
-		inventory.add_item(int(edata.get("item_id", 0)), int(edata.get("count", 1)))
+		var received_item_id := int(edata.get("item_id", 0))
+		if received_item_id == 5:
+			_apply_fate_card({})
+		else:
+			inventory.add_item(received_item_id, int(edata.get("count", 1)))
 	if edata.has("next_step_bonus"):
 		next_roll_modifier = int(edata.get("next_step_bonus", 0))
 	if edata.has("next_step_penalty"):
@@ -2214,7 +2229,7 @@ func _show_lottery_popup(win_num: String, hit: bool) -> void:
 
 		var rewards: Label = Label.new()
 		var jackpot_gold: int = maxi(10000, player_level * 5000)
-		rewards.text = "金币 %d  ·  随机Lv.3宝石×1  ·  天命卡×1\n稀有装备×1  ·  史诗装备×1  ·  传说装备×1" % jackpot_gold
+		rewards.text = "金币 %d  ·  随机Lv.3宝石×1  ·  天命事件立即结算\n稀有装备×1  ·  史诗装备×1  ·  传说装备×1" % jackpot_gold
 		rewards.add_theme_font_size_override("font_size", 13)
 		rewards.add_theme_color_override("font_color", Color("a56f00"))
 		rewards.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -5680,7 +5695,7 @@ func _calc_deity_bonus() -> Dictionary:
 
 func _apply_fate_card(card_data: Dictionary) -> void:
 	var ctx := _build_grid_context()
-	var result: Dictionary = GridExecutorCls._exec_fate(ctx)
+	var result: Dictionary = GridExecutorCls._exec_fate_with_limit(ctx)
 	player_gold = int(ctx.get("player_gold", player_gold))
 	player_revive = int(ctx.get("player_revive", player_revive))
 	player_hp = clampi(int(ctx.get("player_hp", player_hp)), 0, player_max_hp)

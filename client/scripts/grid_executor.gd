@@ -198,8 +198,12 @@ static func _treasure_equip(ctx: Dictionary) -> Dictionary:
 	return {"event": "treasure", "data": {"type": "equip", "equip": eqp, "message": "宝箱获得: " + EquipGenCls.full_name(eqp)}}
 
 
-static func _treasure_card(_ctx: Dictionary) -> Dictionary:
-	return {"event": "treasure", "data": {"type": "card", "item_id": 5, "count": 1, "message": "宝箱开出天命卡×1"}}
+static func _treasure_card(ctx: Dictionary) -> Dictionary:
+	var fate_result := _exec_fate_with_limit(ctx)
+	var fate_data: Dictionary = (fate_result.get("data", {}) as Dictionary).duplicate(true)
+	fate_data["fate_card"] = true
+	fate_data["message"] = "宝箱开出天命卡，立即使用：" + str(fate_data.get("message", "命运已结算"))
+	return {"event": "treasure", "data": fate_data}
 
 
 static func _treasure_gem(_ctx: Dictionary) -> Dictionary:
@@ -300,7 +304,7 @@ static func _exec_fate(ctx: Dictionary) -> Dictionary:
 		"技能大赛":
 			return {"event": "fate", "data": {"type": "reward", "name": "技能大赛", "message": "未来3场战斗伤害+30%"}}
 		"天命降临":
-			return {"event": "fate", "data": {"type": "reward", "name": "天命降临", "item_id": 5, "count": 1, "message": "获得天命卡×1"}}
+			return {"event": "fate", "data": {"type": "reward", "name": "天命降临", "fate_card_granted": true, "message": "获得天命卡，立即使用"}}
 		"装备促销":
 			var promoted_options := _equip_generation_options(ctx)
 			promoted_options["min_quality"] = 1
@@ -318,6 +322,30 @@ static func _exec_fate(ctx: Dictionary) -> Dictionary:
 			return {"event": "fate", "data": {"type": "punish", "name": "攻击削弱", "message": "未来3场战斗伤害-30%"}}
 		_:
 			return {"event": "fate", "data": {"type": chosen["type"], "name": chosen["name"], "message": chosen["name"]}}
+
+
+static func _exec_fate_with_limit(ctx: Dictionary, depth: int = 0) -> Dictionary:
+	var result := _exec_fate(ctx)
+	var data: Dictionary = (result.get("data", {}) as Dictionary).duplicate(true)
+	if str(data.get("name", "")) != "天命降临":
+		return result
+	if depth >= 9:
+		data.erase("item_id")
+		data.erase("count")
+		data["fate_card_granted"] = false
+		data["card_consumed"] = true
+		data["chain_limit_reached"] = true
+		data["message"] = "天命降临：连续天命卡达到10次上限，本次停止继续抽取"
+		return {"event": "fate", "data": data}
+	var chained := _exec_fate_with_limit(ctx, depth + 1)
+	var chained_data: Dictionary = (chained.get("data", {}) as Dictionary).duplicate(true)
+	data.erase("item_id")
+	data.erase("count")
+	data["fate_card_granted"] = false
+	data["card_consumed"] = true
+	data["chained_fate"] = chained_data
+	data["message"] = "天命降临：天命卡立即使用：" + str(chained_data.get("message", "命运已结算"))
+	return {"event": "fate", "data": data}
 
 
 static func _try_weather_fate(ctx: Dictionary) -> Dictionary:

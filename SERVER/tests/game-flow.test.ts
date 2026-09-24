@@ -787,6 +787,47 @@ test("fate card resolves on the server and empty auto-dismantle rules dismantle 
   }
 });
 
+test("new fate card rewards resolve immediately and chain safely", () => {
+  const originalRandom = Math.random;
+  try {
+    // 0.24 selects 天命降临 (the fourth weighted entry); the chained 0 selects 股市大涨.
+    const rolls = [0.24, 0];
+    Math.random = () => rolls.shift() ?? 0;
+    const state = createInitialGameState();
+    addItem(state, 5, 1);
+    const result = applyGameCommand(state, { level: 1, experience: 0, gold: 1_000 }, "item_use", { item_id: 5 });
+    const fate = result.event.fate as Record<string, unknown>;
+    assert.equal(result.state.inventory.find((item) => item.itemId === 5), undefined);
+    assert.equal(fate.cardConsumed, true);
+    assert.equal((fate.chainedFate as Record<string, unknown>).name, "股市大涨");
+    assert.equal(result.character.gold, 1_100);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test("fate card chaining stops at ten immediate resolutions", () => {
+  const originalRandom = Math.random;
+  try {
+    // Always select 天命降临 to exercise the hard chain boundary.
+    Math.random = () => 0.24;
+    const state = createInitialGameState();
+    addItem(state, 5, 1);
+    const result = applyGameCommand(state, { level: 1, experience: 0, gold: 0 }, "item_use", { item_id: 5 });
+    let current = result.event.fate as Record<string, unknown>;
+    let count = 1;
+    while (current.chainedFate) {
+      current = current.chainedFate as Record<string, unknown>;
+      count += 1;
+    }
+    assert.equal(count, 10);
+    assert.equal(current.chainLimitReached, true);
+    assert.equal(result.state.inventory.find((item) => item.itemId === 5), undefined);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
 test("demolition fate fallback uses exactly level times fifty gold", () => {
   const originalRandom = Math.random;
   try {

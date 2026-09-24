@@ -31,7 +31,7 @@ static func _init_all() -> void:
 		2: { "id": 2, "name": "大回复药", "type": 0, "icon": "药", "desc": "恢复 200 HP", "price": 100, "stack_max": 50, "stats": { "heal": 200 } },
 		3: { "id": 3, "name": "经验卷轴", "type": 0, "icon": "经", "desc": "获得 100 经验", "price": 80, "stack_max": 20, "stats": { "exp_bonus": 100 } },
 		4: { "id": 4, "name": "金币袋",   "type": 0, "icon": "金", "desc": "获得 200 金币", "price": 0, "stack_max": 30, "stats": { "gold_bonus": 200 } },
-		5: { "id": 5, "name": "天命卡",   "type": 0, "icon": "卡", "desc": "使用后立即随机触发一次命运事件", "price": 0, "stack_max": 99, "stats": { "fate_event": 1 } },
+		5: { "id": 5, "name": "天命卡",   "type": 0, "icon": "卡", "desc": "获得后立即随机触发一次命运事件", "price": 0, "stack_max": 99, "stats": { "fate_event": 1 } },
 		6: { "id": 6, "name": "打孔器",   "type": 0, "icon": "孔", "desc": "为符合条件的装备增加1个宝石孔", "price": 0, "stack_max": 99, "stats": { "socket_tool": 1 } },
 
 		# ======== 武器 ========

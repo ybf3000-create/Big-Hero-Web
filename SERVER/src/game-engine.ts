@@ -23,6 +23,7 @@ const MAX_BOSS_INDEX = 200;
 const CONSTRUCTION_GRID = 15;
 const CONSTRUCTION_BUILD_COST = 5_000;
 const CONSTRUCTION_UPGRADE_MAX = 10;
+const MAX_FATE_CARD_CHAIN = 10;
 const GEM_LEVEL_WEIGHTS = [60, 25, 12, 3] as const;
 const CHEST_QUALITY_WEIGHTS = [.20, .34, .28, .13, .05] as const;
 const QUALITY_COEFFICIENTS = [1, 1.2, 1.5, 2, 3];
@@ -472,8 +473,8 @@ function constructionChest(state: GameState, character: CharacterProgress, gridI
     return { kind: "construction", action: "chest", gridIndex, level, equipment: received.accepted ? equipment : null, message: received.accepted ? `建设宝箱获得：${equipment.name}` : received.essence > 0 ? `建设宝箱装备自动分解：+${received.essence}精华` : "装备背包已满" };
   }
   if (roll < .92) {
-    const added = addItem(state, 5, 1);
-    return { kind: "construction", action: "chest", gridIndex, level, itemId: added ? 5 : undefined, message: added ? "建设宝箱开出天命卡×1" : "背包已满，天命卡未能收入" };
+    const fate = resolveFateCard(state, character);
+    return { kind: "construction", action: "chest", gridIndex, level, fateCard: true, fate, message: `建设宝箱开出天命卡，立即使用：${String(fate.message ?? "命运已结算")}` };
   }
   const gemId = Math.floor(Math.random() * 8) + 1;
   const gemLevel = randomGemLevel();
@@ -544,7 +545,10 @@ function lotteryLapDraw(state: GameState, character: CharacterProgress): Record<
     const gold = Math.max(10_000, character.level * 5_000);
     const actualGold = grantMapGold(state, character, gold);
     addGem(state, Math.floor(Math.random() * 8) + 1, randomGemLevel());
-    addItem(state, 5, 1);
+    const fate = resolveFateCard(state, character);
+    rewards.fateCard = true;
+    rewards.fate = fate;
+    rewards.message = `彩票大奖：天命卡立即使用：${String(fate.message ?? "命运已结算")}`;
     for (const quality of [2, 3, 4]) {
       receiveEquipment(state, generateStateEquipment(state, character.level, state.bossTier, quality, quality));
     }
@@ -639,8 +643,7 @@ function fateEvent(state: GameState, character: CharacterProgress): Record<strin
     return { type: "punish", name: selected, curse, message: `诅咒降临：${curse.name}，持续1圈` };
   }
   if (selected === "天命降临") {
-    addItem(state, 5, 1);
-    return { type: "reward", name: selected, itemId: 5, message: "获得天命卡×1" };
+    return { type: "reward", name: selected, fateCardGranted: true, message: "获得天命卡，立即使用" };
   }
   if (selected === "装备促销") {
     state.rerollDiscounts = Math.min(10, state.rerollDiscounts + 1);
@@ -655,6 +658,41 @@ function fateEvent(state: GameState, character: CharacterProgress): Record<strin
   return { type: "special", name: "命运平静", message: "命运暂时没有改变" };
 }
 
+function applyFateTeleport(state: GameState, fate: Record<string, unknown>): Record<string, unknown> {
+  if (fate.teleport !== true && fate.teleportTreasure !== true) return fate;
+  const targetType = fate.teleportTreasure === true ? 5 : 10;
+  const target = state.mapGrids.findIndex((entry, index) => index > state.gridIndex && entry === targetType);
+  const wrappedTarget = target >= 0 ? target : state.mapGrids.findIndex((entry) => entry === targetType);
+  if (wrappedTarget >= 0) {
+    state.gridIndex = wrappedTarget;
+    fate.teleportTo = wrappedTarget;
+  }
+  return fate;
+}
+
+function resolveFateCard(state: GameState, character: CharacterProgress, depth = 0): Record<string, unknown> {
+  const fate = fateEvent(state, character);
+  if (fate.fateCardGranted !== true) return applyFateTeleport(state, fate);
+  if (depth >= MAX_FATE_CARD_CHAIN - 1) {
+    return {
+      ...fate,
+      fateCardGranted: false,
+      cardConsumed: true,
+      chainLimitReached: true,
+      message: "天命降临：连续天命卡达到10次上限，本次停止继续抽取",
+    };
+  }
+  const chainedFate = resolveFateCard(state, character, depth + 1);
+  return {
+    ...fate,
+    fateCardGranted: false,
+    cardConsumed: true,
+    chainedFate,
+    message: `天命降临：天命卡立即使用：${String(chainedFate.message ?? "命运已结算")}`,
+    ...(chainedFate.teleportTo !== undefined ? { teleportTo: chainedFate.teleportTo } : {}),
+  };
+}
+
 function deityEvent(state: GameState, character: CharacterProgress): Record<string, unknown> {
   const selected = weightedPick([
     { name: "财神", type: "bless", weight: 15, stat: "gold_mult", value: 2, turns: 3, description: "金币收益×2" },
@@ -666,7 +704,7 @@ function deityEvent(state: GameState, character: CharacterProgress): Record<stri
     { name: "懒神", type: "curse", weight: 7, stat: "cd_mult", value: 1.3, turns: 2, description: "技能冷却×1.3" },
     { name: "命运之神", type: "special", weight: 10, stat: "fate_now", value: 1, turns: 0, description: "立即触发一次命运事件" },
   ]);
-  if (selected.stat === "fate_now") return { kind: "deity", deity: selected.name, immediateFate: fateEvent(state, character), message: `遇到${selected.name}：${selected.description}` };
+  if (selected.stat === "fate_now") return { kind: "deity", deity: selected.name, immediateFate: resolveFateCard(state, character), message: `遇到${selected.name}：${selected.description}` };
   state.deityBuffs = state.deityBuffs.filter((buff) => String(buff.stat ?? "") !== selected.stat);
   state.deityBuffs.push({ name: selected.name, stat: selected.stat, value: selected.value, turns: selected.turns });
   return { kind: "deity", deity: selected.name, effect: { stat: selected.stat, value: selected.value, turns: selected.turns }, message: `遇到${selected.name}：${selected.description}` };
@@ -1107,8 +1145,8 @@ export function applyGameCommand(
         const received = receiveEquipment(state, equipment);
         event = { kind: "chest", dice, from: previous, to: next, gridType, gridName: eventName, equipment: received.accepted ? equipment : null, message: received.accepted ? `宝箱获得：${equipment.name}` : received.essence > 0 ? `宝箱装备自动分解：+${received.essence}精华` : "装备背包已满" };
       } else if (chestRoll < .92) {
-        addItem(state, 5, 1);
-        event = { kind: "chest", dice, from: previous, to: next, gridType, gridName: eventName, itemId: 5, itemName: itemById(5)?.name, message: "宝箱开出天命卡×1" };
+        const fate = resolveFateCard(state, character);
+        event = { kind: "chest", dice, from: previous, to: next, gridType, gridName: eventName, fateCard: true, fate, message: `宝箱开出天命卡，立即使用：${String(fate.message ?? "命运已结算")}` };
       } else {
         const gemId = Math.floor(Math.random() * 8) + 1;
         const gemLevel = randomGemLevel();
@@ -1127,16 +1165,7 @@ export function applyGameCommand(
         else { character.gold -= cost; state.slotEnhance[slot] = level + 1; recalculateStats(state, character.level); event = { kind: "forge", dice, from: previous, to: next, gridType, gridName: eventName, slot, enhance: level + 1, cost, message: `${slot} +${level} → +${level + 1}（-${cost}金）` }; }
       }
     } else if (gridType === 7) {
-      event = { kind: "fate", dice, from: previous, to: next, gridType, gridName: eventName, ...fateEvent(state, character) };
-      if (event.teleport === true || event.teleportTreasure === true) {
-        const targetType = event.teleportTreasure === true ? 5 : 10;
-        const target = state.mapGrids.findIndex((entry, index) => index > state.gridIndex && entry === targetType);
-        const wrappedTarget = target >= 0 ? target : state.mapGrids.findIndex((entry) => entry === targetType);
-        if (wrappedTarget >= 0) {
-          state.gridIndex = wrappedTarget;
-          event.teleportTo = wrappedTarget;
-        }
-      }
+      event = { kind: "fate", dice, from: previous, to: next, gridType, gridName: eventName, ...resolveFateCard(state, character) };
     } else if (gridType === 8) {
       event = { dice, from: previous, to: next, gridType, gridName: eventName, ...deityEvent(state, character) };
     } else if (gridType === 9) {
@@ -1163,6 +1192,7 @@ export function applyGameCommand(
       event = { kind: "move", dice, from: previous, to: next, gridType, gridName: eventName, gold, message: `+${gold} 金币` };
     }
     if (pathEvents.length > 0) event.pathEvents = pathEvents;
+    if (rollLotteryDraw) event.lotteryDraw = rollLotteryDraw;
     if (automaticConstruction) event.automaticConstruction = automaticConstruction;
     if (poker) event.poker = poker;
   } else if (command === "item_use") {
@@ -1179,16 +1209,7 @@ export function applyGameCommand(
       event = { kind: "equipment", action: "socket_add", equipmentId, gemSlots: equipment.gemSlots, message: "打孔成功" };
     } else if (Number(effect.fate ?? 0) > 0) {
       if (!removeItem(state, itemId, 1)) throw new Error("物品不足或不存在");
-      const fate = fateEvent(state, character);
-      if (fate.teleport === true || fate.teleportTreasure === true) {
-        const targetType = fate.teleportTreasure === true ? 5 : 10;
-        const target = state.mapGrids.findIndex((entry, index) => index > state.gridIndex && entry === targetType);
-        const wrappedTarget = target >= 0 ? target : state.mapGrids.findIndex((entry) => entry === targetType);
-        if (wrappedTarget >= 0) {
-          state.gridIndex = wrappedTarget;
-          fate.teleportTo = wrappedTarget;
-        }
-      }
+      const fate = resolveFateCard(state, character);
       event = { kind: "item_use", itemId, itemName: item.name, fate, message: String(fate.message ?? `使用了${item.name}`) };
     } else {
       if (!removeItem(state, itemId, 1)) throw new Error("物品不足或不存在");

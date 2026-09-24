@@ -17,7 +17,7 @@ export const ITEMS: ItemDefinition[] = [
   { id: 2, name: "大回复药", type: "consumable", icon: "🧴", description: "恢复200 HP", price: 100, stackMax: 50, stats: { heal: 200 } },
   { id: 3, name: "经验卷轴", type: "consumable", icon: "📜", description: "获得100经验", price: 80, stackMax: 20, stats: { experience: 100 } },
   { id: 4, name: "金币袋", type: "consumable", icon: "💰", description: "获得200金币", price: 0, stackMax: 30, stats: { gold: 200 } },
-  { id: 5, name: "天命卡", type: "consumable", icon: "🃏", description: "随机触发一次命运事件", price: 0, stackMax: 99, stats: { fate: 1 } },
+  { id: 5, name: "天命卡", type: "consumable", icon: "🃏", description: "获得后立即触发一次命运事件", price: 0, stackMax: 99, stats: { fate: 1 } },
   { id: 6, name: "打孔器", type: "consumable", icon: "🛠", description: "为史诗或传说装备增加一个宝石孔", price: 0, stackMax: 99, stats: { socketTool: 1 } },
   { id: 90, name: "铁矿石", type: "material", icon: "⛰", description: "锻造材料", price: 15, stackMax: 99, stats: {} },
   { id: 91, name: "龙鳞片", type: "material", icon: "🪶", description: "稀有材料", price: 50, stackMax: 50, stats: {} },
