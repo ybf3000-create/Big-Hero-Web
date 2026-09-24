@@ -3475,28 +3475,35 @@ func _build_inventory_panel() -> void:
 
 				_add_equipment_icon(equip_panel, eqp, Vector2(rx + 3, ry + 18), Vector2(44, 44), 26)
 
-				# 信息行
-				var info_y: float = ry + 68
+				# 套装/宝石摘要放在槽位右侧，避免占用槽位下方的布局空间。
+				var info_x: float = rx + icon_s + 8.0
+				var info_y: float = ry + 18.0
+				var info_w: float = 72.0
 
-				var suit: String = eqp.get("suit_name", "")
+				var suit: String = str(eqp.get("suit_name", ""))
 				if not suit.is_empty():
+					var suit_counts: Dictionary = _count_equipped_suits()
 					var st: Label = Label.new()
-					st.text = suit.substr(0, 1)
+					st.text = "套装 %s×%d" % [suit.substr(0, 4), int(suit_counts.get(suit, 0))]
 					st.add_theme_font_size_override("font_size", 8)
-					st.add_theme_color_override("font_color", Color(0.3, 1.0, 0.6))
-					st.position = Vector2(rx + 2, info_y)
+					st.add_theme_color_override("font_color", Color(0.16, 0.48, 0.34))
+					st.position = Vector2(info_x, info_y)
+					st.size = Vector2(info_w, 16)
+					st.clip_text = true
 					equip_panel.add_child(st)
 
-				var gem_s: int = eqp.get("gem_slots", 0)
+				var gem_s: int = int(eqp.get("gem_slots", 0))
 				if gem_s > 0:
 					var gem_filled: int = 0
 					for gv in eqp.get("gems", []):
-						if gv > 0: gem_filled += 1
+						if _gem_entry_id(gv) > 0: gem_filled += 1
 					var gt: Label = Label.new()
-					gt.text = "◆" + str(gem_filled) + "/" + str(gem_s)
-					gt.add_theme_font_size_override("font_size", 7)
-					gt.add_theme_color_override("font_color", Color(0.8, 0.5, 1.0))
-					gt.position = Vector2(rx + 2, info_y + 12)
+					gt.text = "宝石 %d/%d" % [gem_filled, gem_s]
+					gt.add_theme_font_size_override("font_size", 8)
+					gt.add_theme_color_override("font_color", Color(0.45, 0.25, 0.62))
+					gt.position = Vector2(info_x, info_y + (18 if not suit.is_empty() else 0))
+					gt.size = Vector2(info_w, 16)
+					gt.clip_text = true
 					equip_panel.add_child(gt)
 
 				# 悬停查看摘要；单击打开详情；双击快速卸下。
@@ -3555,20 +3562,6 @@ func _build_inventory_panel() -> void:
 			enhance_badge.add_theme_constant_override("outline_size", 3 if has_equipment else 1)
 			enhance_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			equip_panel.add_child(enhance_badge)
-
-	# 套装统计
-	var suit_counts: Dictionary = _count_equipped_suits()
-	if not suit_counts.is_empty():
-		var ssy: float = row_start + 4 * row_h2 + 8
-		var suit_line: Label = Label.new()
-		var stxt: String = "套装:"
-		for sk in suit_counts:
-			stxt += " " + sk + "×" + str(suit_counts[sk])
-		suit_line.text = stxt
-		suit_line.add_theme_font_size_override("font_size", 10)
-		suit_line.add_theme_color_override("font_color", Color(0.3, 1.0, 0.6))
-		suit_line.position = Vector2(12, ssy)
-		equip_panel.add_child(suit_line)
 
 	# 道具区域（右侧）
 	var item_area: Panel = Panel.new()
@@ -4177,7 +4170,8 @@ func _rebuild_filters(item_area: Panel, main_panel: Panel) -> void:
 			sb.size = Vector2(48, 20)
 			sb.add_theme_font_size_override("font_size", 12)
 			sb.alignment = HORIZONTAL_ALIGNMENT_LEFT
-			var sv: int = si - 1
+			# slot_type_id 使用 1~8；旧写法 si-1 会把“鞋子”错映射到防具。
+			var sv: int = si if si > 0 else -1
 			var ssel: bool = (sv == -1 and _inv_filter_slot.is_empty()) or _inv_filter_slot.has(sv)
 			UIUtils.btn_style_mini(sb, Color("c94a55") if ssel else Color("f4e8e7"))
 			UIUtils.set_button_text_color(sb, Color("5f5557") if ssel else Color("352e38"))
@@ -5031,8 +5025,51 @@ func _show_dismantle_panel(main_panel: Panel) -> void:
 	info.text = "灰+1 / 绿+3 / 蓝+8 / 紫+20 / 橙+50   宝石自动拆卸返还"
 	info.add_theme_font_size_override("font_size", 10)
 	info.add_theme_color_override("font_color", Color(0.5, 0.5, 0.6))
-	info.position = Vector2(12, 28)
+	info.position = Vector2(12, 25)
 	dp.add_child(info)
+
+	# 手动分解沿用背包当前的品质/部位筛选。
+	var filter_labels: Array[String] = ["全部", "灰", "绿", "蓝", "紫", "橙"]
+	var filter_colors: Array[Color] = [Color(0.5,0.5,0.5), Color(0.6,0.6,0.6), Color(0.2,0.8,0.2), Color(0.2,0.4,1.0), Color(0.7,0.2,1.0), Color(1.0,0.6,0.1)]
+	for qi in range(filter_labels.size()):
+		var quality_btn := Button.new()
+		quality_btn.text = filter_labels[qi]
+		quality_btn.position = Vector2(12 + qi * 52, 45)
+		quality_btn.size = Vector2(48, 22)
+		quality_btn.add_theme_font_size_override("font_size", 11)
+		var qv: int = qi - 1
+		var q_selected: bool = (qv == -1 and _inv_filter_quality.is_empty()) or _inv_filter_quality.has(qv)
+		var qclr: Color = filter_colors[qi]
+		UIUtils.btn_style_mini(quality_btn, qclr.darkened(0.18) if q_selected else Color("f4e8e7"))
+		UIUtils.set_button_text_color(quality_btn, Color("5f5557") if q_selected else (Color("352e38") if qi == 0 else qclr.darkened(0.35)))
+		quality_btn.pressed.connect(func():
+			if qv == -1: _inv_filter_quality.clear()
+			elif _inv_filter_quality.has(qv): _inv_filter_quality.erase(qv)
+			else: _inv_filter_quality.append(qv)
+			dp.queue_free()
+			call_deferred("_show_dismantle_panel", main_panel)
+		)
+		dp.add_child(quality_btn)
+
+	var dismantle_slot_labels: Array[String] = ["全部", "武器", "防具", "鞋子", "戒指", "项链", "披风", "头盔", "护符"]
+	for si in range(dismantle_slot_labels.size()):
+		var slot_btn := Button.new()
+		slot_btn.text = dismantle_slot_labels[si]
+		slot_btn.position = Vector2(12 + si * 52, 70)
+		slot_btn.size = Vector2(48, 22)
+		slot_btn.add_theme_font_size_override("font_size", 11)
+		var sv: int = si if si > 0 else -1
+		var slot_selected: bool = (sv == -1 and _inv_filter_slot.is_empty()) or _inv_filter_slot.has(sv)
+		UIUtils.btn_style_mini(slot_btn, Color("c94a55") if slot_selected else Color("f4e8e7"))
+		UIUtils.set_button_text_color(slot_btn, Color("5f5557") if slot_selected else Color("352e38"))
+		slot_btn.pressed.connect(func():
+			if sv == -1: _inv_filter_slot.clear()
+			elif _inv_filter_slot.has(sv): _inv_filter_slot.erase(sv)
+			else: _inv_filter_slot.append(sv)
+			dp.queue_free()
+			call_deferred("_show_dismantle_panel", main_panel)
+		)
+		dp.add_child(slot_btn)
 
 	var dismantle_targets: Array[int] = []
 	var essence_label: Label = Label.new()
@@ -5073,12 +5110,16 @@ func _show_dismantle_panel(main_panel: Panel) -> void:
 	var cols: int = 8
 	var gap: float = 8.0
 	var icon_s: float = 48.0
-	var dy: float = 60.0
+	var dy: float = 100.0
 	var selection_buttons: Array[Button] = []
 	var candidates: Array[int] = []
 	for candidate_idx in range(equip_instances.size()):
 		var candidate: Dictionary = equip_instances[candidate_idx]
 		if not bool(candidate.get("equipped", false)) and not bool(candidate.get("locked", false)):
+			if not _inv_filter_quality.is_empty() and not _inv_filter_quality.has(int(candidate.get("quality", -1))):
+				continue
+			if not _inv_filter_slot.is_empty() and not _inv_filter_slot.has(int(candidate.get("slot_type_id", -1))):
+				continue
 			candidates.append(candidate_idx)
 	candidates.sort_custom(func(a_idx: int, b_idx: int):
 		var a: Dictionary = equip_instances[a_idx]
@@ -5096,7 +5137,7 @@ func _show_dismantle_panel(main_panel: Panel) -> void:
 		var col: int = display_idx % cols
 		var row: int = display_idx / cols
 		var x: float = gap + col * 82.0
-		var y: float = dy + row * 78.0
+		var y: float = dy + row * 70.0
 
 		if y > 340:
 			break
