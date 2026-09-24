@@ -1330,6 +1330,50 @@ export function applyGameCommand(
       refund = true;
     }
     event = { kind: "gem", action: "synthesize", gemId, fromLevel: level, level: level + 1, cost, refund, remainingRefunds: state.gemSynthesisRefunds };
+  } else if (command === "gem_synthesize_all") {
+    const results: Array<{ gemId: number; fromLevel: number; count: number }> = [];
+    let synthesisCount = 0;
+    let totalCost = 0;
+    let refundCount = 0;
+    let stoppedForGold = false;
+
+    for (let level = 1; level < 10; level += 1) {
+      for (let gemId = 1; gemId <= 8; gemId += 1) {
+        let levelCount = 0;
+        while (state.gemBag.reduce((sum, entry) => sum + (entry.gemId === gemId && (entry.level ?? 1) === level ? entry.count : 0), 0) >= 3) {
+          const cost = (level + 1) * 500;
+          if (character.gold < cost) {
+            stoppedForGold = true;
+            break;
+          }
+          const consumed = takeGems(state, gemId, level, 3);
+          if (!consumed.ok) break;
+          character.gold -= cost;
+          addGem(state, gemId, level + 1, 1, consumed.bound);
+          if (state.gemSynthesisRefunds > 0) {
+            addGem(state, gemId, level, 1, consumed.bound);
+            state.gemSynthesisRefunds -= 1;
+            refundCount += 1;
+          }
+          synthesisCount += 1;
+          totalCost += cost;
+          levelCount += 1;
+        }
+        if (levelCount > 0) results.push({ gemId, fromLevel: level, count: levelCount });
+        if (stoppedForGold) break;
+      }
+      if (stoppedForGold) break;
+    }
+
+    const message = synthesisCount > 0
+      ? `一键合成完成：合成${synthesisCount}次，消耗${totalCost}金币${stoppedForGold ? "；金币不足，剩余宝石未合成" : ""}`
+      : stoppedForGold
+        ? "金币不足，没有进行合成"
+        : "没有可合成的宝石";
+    event = {
+      kind: "gem", action: "synthesize_all", synthesisCount, totalCost, refundCount,
+      stoppedForGold, remainingRefunds: state.gemSynthesisRefunds, results, message,
+    };
   } else if (command === "equipment_reroll") {
     const equipmentId = typeof payload.equipment_id === "string" ? payload.equipment_id : "";
     const item = state.equipmentBag.find((entry) => entry.id === equipmentId);

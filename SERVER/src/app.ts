@@ -662,6 +662,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.post("/api/v1/game/equipment/reroll", async (request) => gameCommand(request, "equipment_reroll"));
   app.post("/api/v1/game/equipment/auto-dismantle", async (request) => gameCommand(request, "auto_dismantle"));
   app.post("/api/v1/game/gem/synthesize", async (request) => gameCommand(request, "gem_synthesize"));
+  app.post("/api/v1/game/gem/synthesize-all", async (request) => gameCommand(request, "gem_synthesize_all"));
   app.post("/api/v1/game/inventory/expand", async (request) => gameCommand(request, "inventory_expand"));
   app.post("/api/v1/game/equipment/expand", async (request) => gameCommand(request, "equipment_expand"));
   app.post("/api/v1/game/skill/unlock", async (request) => gameCommand(request, "skill_unlock"));

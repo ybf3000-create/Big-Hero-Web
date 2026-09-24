@@ -326,6 +326,15 @@ test("game HTTP endpoints expose state and roll result", async (context) => {
   assert.equal(allocate.statusCode, 200);
   assert.equal(allocate.json().state.freeAttributePoints, 17);
   assert.equal(allocate.json().state.attributes.luck, 1);
+  const gemState = await repository.getGameState(character!.id);
+  gemState.gemBag.push({ gemId: 1, level: 1, count: 3 });
+  repository.database.prepare("UPDATE character_states SET state_json = ? WHERE character_id = ?").run(serializeGameState(gemState), character!.id);
+  repository.database.prepare("UPDATE characters SET gold = 10000 WHERE id = ?").run(character!.id);
+  const synthesizeAll = await app.inject({ method: "POST", url: "/api/v1/game/gem/synthesize-all", headers: { authorization: `Bearer ${token}` }, payload: { rules_version: "network-1", request_id: "http_gem_all_01", payload: {} } });
+  assert.equal(synthesizeAll.statusCode, 200);
+  assert.equal(synthesizeAll.json().event.synthesisCount, 1);
+  assert.equal(Number(synthesizeAll.json().character.gold), 9_000);
+  assert.equal(synthesizeAll.json().state.gemBag.find((gem: { gemId: number; level: number }) => gem.gemId === 1 && gem.level === 2)?.count, 1);
   const roll = await app.inject({ method: "POST", url: "/api/v1/game/roll", headers: { authorization: `Bearer ${token}` }, payload: { rules_version: "network-1", request_id: "http_roll_01", payload: {} } });
   assert.equal(roll.statusCode, 200);
   assert.equal(typeof roll.json().event.dice, "number");
@@ -700,6 +709,46 @@ test("server owns gem, socket, dismantle and reroll state transitions", () => {
   assert.deepEqual(boundSocketed.state.equipmentBag.find((item) => item.id === "bound-equip")?.gems, [{ id: 8, level: 1, bound: true }]);
   const boundUnsocketed = applyGameCommand(boundSocketed.state, boundSocketed.character, "equipment_gem_unsocket", { equipment_id: "bound-equip", socket_index: 0 });
   assert.equal(boundUnsocketed.state.gemBag.find((gem) => gem.gemId === 8 && gem.level === 1)?.bound, true);
+});
+
+test("one-click gem synthesis cascades all types and preserves server rules", () => {
+  const state = createInitialGameState();
+  state.gemBag.push(
+    { gemId: 1, level: 1, count: 9 },
+    { gemId: 2, level: 1, count: 3, bound: true },
+    { gemId: 3, level: 9, count: 3 },
+    { gemId: 4, level: 10, count: 9 },
+  );
+  state.gemSynthesisRefunds = 1;
+  const result = applyGameCommand(state, { level: 20, experience: 0, gold: 100_000 }, "gem_synthesize_all", {});
+  assert.equal(result.event.action, "synthesize_all");
+  assert.equal(result.event.synthesisCount, 6);
+  assert.equal(result.event.totalCost, 10_500);
+  assert.equal(result.event.refundCount, 1);
+  assert.equal(result.state.gemSynthesisRefunds, 0);
+  assert.equal(result.character.gold, 89_500);
+  assert.equal(result.state.gemBag.find((gem) => gem.gemId === 1 && gem.level === 1)?.count, 1);
+  assert.equal(result.state.gemBag.some((gem) => gem.gemId === 1 && gem.level === 2), false);
+  assert.equal(result.state.gemBag.find((gem) => gem.gemId === 1 && gem.level === 3)?.count, 1);
+  assert.equal(result.state.gemBag.find((gem) => gem.gemId === 2 && gem.level === 2)?.bound, true);
+  assert.equal(result.state.gemBag.find((gem) => gem.gemId === 3 && gem.level === 10)?.count, 1);
+  assert.equal(result.state.gemBag.find((gem) => gem.gemId === 4 && gem.level === 10)?.count, 9);
+});
+
+test("one-click gem synthesis stops cleanly when gold runs out", () => {
+  const state = createInitialGameState();
+  state.gemBag.push({ gemId: 1, level: 1, count: 6 }, { gemId: 2, level: 1, count: 3 });
+  const partial = applyGameCommand(state, { level: 1, experience: 0, gold: 1_000 }, "gem_synthesize_all", {});
+  assert.equal(partial.event.synthesisCount, 1);
+  assert.equal(partial.event.stoppedForGold, true);
+  assert.equal(partial.character.gold, 0);
+  assert.equal(partial.state.gemBag.find((gem) => gem.gemId === 1 && gem.level === 1)?.count, 3);
+  assert.equal(partial.state.gemBag.find((gem) => gem.gemId === 2 && gem.level === 1)?.count, 3);
+
+  const none = applyGameCommand(createInitialGameState(), { level: 1, experience: 0, gold: 0 }, "gem_synthesize_all", {});
+  assert.equal(none.event.synthesisCount, 0);
+  assert.equal(none.event.stoppedForGold, false);
+  assert.equal(none.event.message, "没有可合成的宝石");
 });
 
 test("server poker reward consumes exactly three records and auto dismantle is authoritative", () => {

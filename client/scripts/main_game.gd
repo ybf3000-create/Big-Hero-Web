@@ -2625,6 +2625,56 @@ func _synthesize_gem(gid: int, lv: int) -> bool:
 	return true
 
 
+## 一键合成：按等级、宝石类型顺序，将当前金币可支付的宝石全部合成
+func _synthesize_all_gems() -> bool:
+	if _is_network_game():
+		return await _run_network_game_command("gem/synthesize-all", {}, "")
+	var synthesis_count: int = 0
+	var total_cost: int = 0
+	var stopped_for_gold: bool = false
+	for lv in range(1, 10):
+		for gid in range(1, 9):
+			while true:
+				var available: int = 0
+				for gem in gem_bag:
+					if int(gem.get("id", 0)) == gid and int(gem.get("level", 1)) == lv:
+						available += int(gem.get("count", 0))
+				if available < 3:
+					break
+				var synth_cost: int = (lv + 1) * 500
+				if player_gold < synth_cost:
+					stopped_for_gold = true
+					break
+				var remaining: int = 3
+				for index in range(gem_bag.size() - 1, -1, -1):
+					var gem: Dictionary = gem_bag[index]
+					if int(gem.get("id", 0)) != gid or int(gem.get("level", 1)) != lv:
+						continue
+					var taken: int = mini(int(gem.get("count", 0)), remaining)
+					gem_bag[index]["count"] = int(gem.get("count", 0)) - taken
+					remaining -= taken
+					if int(gem_bag[index].get("count", 0)) <= 0:
+						gem_bag.remove_at(index)
+					if remaining == 0:
+						break
+				player_gold -= synth_cost
+				total_cost += synth_cost
+				synthesis_count += 1
+				_add_gem(gid, lv + 1, 1)
+			if stopped_for_gold:
+				break
+		if stopped_for_gold:
+			break
+	if synthesis_count <= 0:
+		_show_float_text("金币不足，没有进行合成" if stopped_for_gold else "没有可合成的宝石", Color(0.75, 0.45, 0.35))
+		return false
+	_auto_save()
+	top_bar.refresh()
+	var suffix := "；金币不足，剩余宝石未合成" if stopped_for_gold else ""
+	_show_float_text("一键合成完成：合成%d次，消耗%d金币%s" % [synthesis_count, total_cost, suffix], Color(0.3, 1.0, 0.6))
+	return true
+
+
 func _on_test_generate_lottery() -> void:
 	if _is_network_game():
 		return
@@ -2716,6 +2766,34 @@ func _build_gem_tab(area: Panel, main_panel: Panel) -> void:
 	title.add_theme_font_size_override("font_size", 14)
 	title.add_theme_color_override("font_color", Color("96353e"))
 	area.add_child(title)
+	var gold_label := Label.new()
+	gold_label.text = "金币：%d" % player_gold
+	gold_label.position = Vector2(122, 10)
+	gold_label.add_theme_color_override("font_color", Color("6f6264"))
+	area.add_child(gold_label)
+	var synth_all := Button.new()
+	synth_all.text = "一键合成"
+	synth_all.position = Vector2(532, 5)
+	synth_all.size = Vector2(126, 30)
+	var has_synthesizable_gem := false
+	var gem_totals: Dictionary = {}
+	for gem in gem_bag:
+		var gem_level := int(gem.get("level", 1))
+		if gem_level >= 10:
+			continue
+		var gem_key := "%d:%d" % [int(gem.get("id", 0)), gem_level]
+		gem_totals[gem_key] = int(gem_totals.get(gem_key, 0)) + int(gem.get("count", 0))
+		if int(gem_totals[gem_key]) >= 3:
+			has_synthesizable_gem = true
+			break
+	synth_all.disabled = not has_synthesizable_gem
+	UIUtils.shrine_button_style(synth_all, true)
+	synth_all.pressed.connect(func():
+		await _synthesize_all_gems()
+		if is_instance_valid(main_panel): main_panel.queue_free()
+		call_deferred("_show_inventory_panel")
+	)
+	area.add_child(synth_all)
 	if gem_bag.is_empty():
 		var empty := Label.new()
 		empty.text = "暂无宝石，可从宝箱、命运事件和调试功能中获得"
