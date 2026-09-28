@@ -255,6 +255,13 @@ function tickActorTimers(state: Data, actor: Data, delta: number): void {
       removeDotStatusIfInactive(state, actor, dot);
     }
   }
+  // 烈焰四件套的灼烧增伤只在目标仍有套装灼烧时生效。
+  if (!actor.dots.some((dot: Data) => dot.dotType === "set_burn")) {
+    actor.setBurnDamageTaken = false;
+    actor.setBurnDetonated = false;
+    actor.setBurnSpreadSource = undefined;
+    actor.setBurnSpreadTimer = undefined;
+  }
   for (let index = actor.hots.length - 1; index >= 0; index -= 1) {
     const hot = actor.hots[index]!;
     hot.tickTimer -= delta;
@@ -562,6 +569,7 @@ function triggerChainLightning(state: Data, actor: Data, primary: Data): void {
 function handleSetKill(state: Data, actor: Data): void {
   if (setCount(actor, "暗影") >= 4) {
     actor.buffs.shadow_strike = hasSetAffix(actor, "【暗影】疾影") ? 6 : 4;
+    actor.shadowStrikeRefreshes = n(actor.shadowStrikeRefreshes) + 1;
     actor.timeToAct = 0;
   }
   if (setCount(actor, "自然") >= 3) applyHeal(state, actor, actor.maxHp * (hasSetAffix(actor, "【自然】恩赐") ? .13 : .08), "自然套·生机");
@@ -575,6 +583,7 @@ function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, 
   if (actor.side === "player") rawDamage *= 1 + n(actor.freeAttackPct);
   if (hasPassive(actor, "狂暴") && n(actor.currentHp) / Math.max(1, n(actor.maxHp, 1)) < .5) rawDamage *= 1.5;
   for (let hit = 0; hit < (skill?.hits ?? 1); hit += 1) {
+    const targetWasAlive = target.alive;
     const result = resolveHit(actor, target, random);
     if (!result.hit) {
       state.events.push({ type: "miss", source: actorRef(actor), target: actorRef(target), label });
@@ -679,7 +688,8 @@ function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, 
         for (const foe of opponents(state, target)) if (foe.alive) applyFinalDamage(state, foe, target.attack * (hasSetAffix(target, "【龙鳞】龙威") ? 2.6 : 2), { owner: target });
       }
     }
-    if (!target.alive) handleSetKill(state, actor);
+    // 一次多段技能对同一目标只触发一次击杀效果。
+    if (targetWasAlive && !target.alive) handleSetKill(state, actor);
     if (dealt > 0 && hasPassive(target, "荆棘") && actor.alive) applyFinalDamage(state, actor, dealt * .15, {});
     if (dealt > 0 && isBasic && hasPassive(actor, "毒素") && target.alive) applyPassivePoison(state, target, actor);
   }
@@ -697,6 +707,7 @@ function executeSkill(state: Data, actor: Data, skillId: number, random: RandomS
   if (!original) { executeBasic(state, actor, random); return; }
   const skill = structuredClone(original);
   const hadShadowStrike = Boolean(actor.buffs.shadow_strike);
+  const shadowRefreshesBefore = n(actor.shadowStrikeRefreshes);
   if (skillId === 12) {
     const count = Math.min(n(actor.endlessStrikeCount) + 1, n(skill.bonus?.maxStacks, 10));
     skill.damagePct = n(skill.damagePct) + (count - 1) * n(skill.bonus?.stackStepPct, 10);
@@ -760,7 +771,8 @@ function executeSkill(state: Data, actor: Data, skillId: number, random: RandomS
       for (const id of Object.keys(actor.cooldowns)) actor.cooldowns[id] = 0;
     }
   }
-  if (hadShadowStrike) delete actor.buffs.shadow_strike;
+  // 本次技能击杀新敌人时，暗影突袭会刷新；不要在技能收尾时误删刷新后的状态。
+  if (hadShadowStrike && n(actor.shadowStrikeRefreshes) === shadowRefreshesBefore) delete actor.buffs.shadow_strike;
 }
 
 function processTurn(state: Data, key: string, random: RandomSource): void {

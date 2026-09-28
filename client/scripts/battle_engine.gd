@@ -262,6 +262,16 @@ static func _tick_actor_timers(state: Dictionary, actor: Dictionary, delta: floa
 			dot["ticks_remaining"] = int(dot.get("ticks_remaining", 0)) - 1
 		if int(dot.get("ticks_remaining", 0)) <= 0 or not actor.get("alive", false):
 			dots.remove_at(i)
+	var has_set_burn := false
+	for dot in dots:
+		if str(dot.get("dot_type", "")) == "set_burn":
+			has_set_burn = true
+			break
+	if not has_set_burn:
+		actor["set_burn_damage_taken"] = false
+		actor["set_burn_detonated"] = false
+		actor.erase("set_burn_spread_source")
+		actor.erase("set_burn_spread_timer")
 
 	var hots: Array = actor.get("hots", [])
 	for i in range(hots.size() - 1, -1, -1):
@@ -403,6 +413,8 @@ static func _execute_skill(state: Dictionary, actor: Dictionary, skill_id: int) 
 	if skill.is_empty():
 		_execute_basic_attack(state, actor)
 		return
+	var had_shadow_strike: bool = actor.get("buffs", {}).has("shadow_strike")
+	var shadow_refreshes_before: int = int(actor.get("shadow_strike_refreshes", 0))
 	if skill_id == 12:
 		var max_stacks: int = int(skill.get("bonus", {}).get("max_stacks", 10))
 		var chain_count: int = mini(int(actor.get("endless_strike_count", 0)) + 1, max_stacks)
@@ -485,7 +497,8 @@ static func _execute_skill(state: Dictionary, actor: Dictionary, skill_id: int) 
 					state["events"].append({"type": "damage", "source": _actor_ref(actor), "target": _actor_ref(enemy), "amount": int(round(star_dealt)), "hp": int(round(float(enemy.get("current_hp", 0)))), "max_hp": int(enemy.get("max_hp", 1)), "shield": int(round(float(enemy.get("shield", 0.0)))), "crit": false, "block": false, "dot": false, "label": "星辰坠落"})
 			for sid in actor.get("cooldowns", {}).keys():
 				actor["cooldowns"][sid] = 0.0
-	if actor.get("buffs", {}).has("shadow_strike"):
+	# 本次技能击杀新敌人时，暗影突袭会刷新；不要在技能收尾时误删刷新后的状态。
+	if had_shadow_strike and int(actor.get("shadow_strike_refreshes", 0)) == shadow_refreshes_before:
 		actor["buffs"].erase("shadow_strike")
 
 
@@ -577,6 +590,7 @@ static func _opponents(state: Dictionary, actor: Dictionary) -> Array:
 static func _handle_set_kill(state: Dictionary, actor: Dictionary) -> void:
 	if _set_count(actor, "暗影") >= 4:
 		actor["buffs"]["shadow_strike"] = 6.0 if _has_set_affix(actor, "【暗影】疾影") else 4.0
+		actor["shadow_strike_refreshes"] = int(actor.get("shadow_strike_refreshes", 0)) + 1
 		actor["time_to_act"] = 0.0
 	if _set_count(actor, "自然") >= 3:
 		var kill_heal := 0.13 if _has_set_affix(actor, "【自然】恩赐") else 0.08
@@ -683,6 +697,7 @@ static func _apply_attack_instance(state: Dictionary, actor: Dictionary, target:
 
 	var hits: int = int(skill.get("hits", 1)) if not skill.is_empty() else 1
 	for _i in range(hits):
+		var target_was_alive_this_hit := bool(target.get("alive", false))
 		var result: Dictionary = _resolve_hit_crit_block(actor, target)
 		if not result.get("hit", false):
 			state["log"].append("%s 对 %s 的%s MISS" % [actor.get("name", "单位"), target.get("name", "目标"), label])
@@ -808,7 +823,7 @@ static func _apply_attack_instance(state: Dictionary, actor: Dictionary, target:
 					if foe.get("alive", false):
 						var dragon_damage := 2.6 if _has_set_affix(target, "【龙鳞】龙威") else 2.0
 						_apply_final_damage(state, foe, float(target.get("atk", 0.0)) * dragon_damage, {"source": "龙威", "owner": target})
-		if not target.get("alive", true):
+		if target_was_alive_this_hit and not target.get("alive", true):
 			_handle_set_kill(state, actor)
 		if dealt > 0.0 and _has_passive(target, "荆棘") and actor.get("alive", false):
 			_apply_final_damage(state, actor, dealt * 0.15, {"source": target.get("name", "单位") + "(荆棘)"})
