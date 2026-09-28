@@ -10,6 +10,11 @@ const HERO_PATH := "res://assets/hreo.png"
 const BOSS_DIR := "res://assets/battle_characters/boss/"
 const MONSTER_DIR := "res://assets/battle_characters/monsters/"
 const VIEW_SIZE := Vector2(1280, 528)
+const ENEMY_FRONT_X := 700.0
+const ENEMY_BACK_X := 945.0
+const ENEMY_SLOT_START_Y := 165.0
+const ENEMY_SLOT_STEP_Y := 115.0
+const ENEMY_SLOT_SIZE := Vector2(180, 108)
 const WeatherEffectCls = preload("res://scripts/ui/weather_effect.gd")
 const SMALL_ASSETS: Array[String] = [
 	"char_0001.png", "char_0007.png", "char_0016.png", "char_0031.png", "char_0048.png",
@@ -91,10 +96,10 @@ func _build_view() -> void:
 			fronts.append(unit)
 	for i in range(fronts.size()):
 		var unit: Dictionary = fronts[i]
-		_create_unit(unit, "enemy", Vector2(700, 165 + i * 115), _enemy_texture_path(unit), _enemy_size(unit))
+		_create_unit(unit, "enemy", _enemy_slot_position("front", i), _enemy_texture_path(unit), _enemy_size(unit))
 	for i in range(backs.size()):
 		var unit: Dictionary = backs[i]
-		_create_unit(unit, "enemy", Vector2(945, 165 + i * 115), _enemy_texture_path(unit), _enemy_size(unit))
+		_create_unit(unit, "enemy", _enemy_slot_position("back", i), _enemy_texture_path(unit), _enemy_size(unit))
 
 	if _kind == "boss":
 		_build_boss_hud()
@@ -457,37 +462,43 @@ func _build_formation_overlay() -> void:
 	add_child(_formation_overlay)
 	var title := Label.new()
 	title.text = "敌方站位"
-	title.position = Vector2(680, 120)
-	title.size = Vector2(280, 22)
+	title.position = Vector2(700, 112)
+	title.size = Vector2(425, 22)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 12)
 	title.add_theme_color_override("font_color", Color("4b3036"))
 	_formation_overlay.add_child(title)
-	for row_index in range(2):
-		var row_name := "前排" if row_index == 0 else "后排"
+	for row in ["front", "back"]:
 		var row_label := Label.new()
-		row_label.text = row_name
-		row_label.position = Vector2(646, 160 + row_index * 115)
-		row_label.size = Vector2(48, 74)
-		row_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		row_label.text = "前排" if row == "front" else "后排"
+		row_label.position = Vector2(ENEMY_FRONT_X if row == "front" else ENEMY_BACK_X, 137)
+		row_label.size = Vector2(ENEMY_SLOT_SIZE.x, 22)
+		row_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		row_label.add_theme_font_size_override("font_size", 11)
 		row_label.add_theme_color_override("font_color", Color("4b3036"))
 		_formation_overlay.add_child(row_label)
 		for column in range(3):
 			var cell := Panel.new()
-			cell.position = Vector2(700 + column * 82, 160 + row_index * 115)
-			cell.size = Vector2(74, 74)
+			cell.position = _enemy_slot_position(row, column)
+			cell.size = ENEMY_SLOT_SIZE
 			cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			cell.add_theme_stylebox_override("panel", _box(Color(0.93, 0.86, 0.83, 0.24), Color(0.50, 0.25, 0.29, 0.72), 1, 2))
 			_formation_overlay.add_child(cell)
-			var column_label := Label.new()
-			column_label.text = "列%d" % (column + 1)
-			column_label.position = Vector2(700 + column * 82, 236 + row_index * 115)
-			column_label.size = Vector2(74, 16)
-			column_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			column_label.add_theme_font_size_override("font_size", 9)
-			column_label.add_theme_color_override("font_color", Color("71575d"))
-			_formation_overlay.add_child(column_label)
+	for column in range(3):
+		var column_label := Label.new()
+		column_label.text = "列%d" % (column + 1)
+		column_label.position = Vector2(648, ENEMY_SLOT_START_Y + column * ENEMY_SLOT_STEP_Y)
+		column_label.size = Vector2(44, ENEMY_SLOT_SIZE.y)
+		column_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		column_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		column_label.add_theme_font_size_override("font_size", 10)
+		column_label.add_theme_color_override("font_color", Color("71575d"))
+		_formation_overlay.add_child(column_label)
+
+
+func _enemy_slot_position(row: String, column: int) -> Vector2:
+	var slot_x := ENEMY_FRONT_X if row == "front" else ENEMY_BACK_X
+	return Vector2(slot_x, ENEMY_SLOT_START_Y + column * ENEMY_SLOT_STEP_Y)
 
 
 func _build_status_tip() -> void:
@@ -552,11 +563,19 @@ func _play_event(event: Dictionary) -> void:
 		"status":
 			var status_target := _find_unit(event.get("target", {}))
 			var status_name := str(event.get("status", "状态"))
+			var status_duration := float(event.get("duration", 0.0))
 			if status_target:
 				_float_number(status_target, status_name, Color("72b9ff"), 16)
-				_add_status(status_target, status_name, float(event.get("duration", 0.0)))
+				# Zero-duration events are battle notices (revival and boss mechanics),
+				# not persistent status icons.
+				if status_duration > 0.0:
+					_add_status(status_target, status_name, status_duration, "status", str(event.get("status_key", "status:" + status_name)))
 			_log_line("%s 获得状态：%s" % [str(event.get("target", {}).get("name", "单位")), status_name], "#7250a0")
 			await get_tree().create_timer(0.16 / _speed).timeout
+		"status_remove":
+			var removed_target := _find_unit(event.get("target", {}))
+			if removed_target:
+				_remove_status(removed_target, str(event.get("status_key", "")), str(event.get("status", "")))
 		"summon":
 			await _play_summon(event)
 		"miss":
@@ -646,8 +665,8 @@ func _next_enemy_slot(preferred_row: String) -> Dictionary:
 			if bool(info.get("alive", true)) and str(info.get("row", "front")) == row:
 				occupied += 1
 		if occupied < 3:
-			return {"row": row, "position": Vector2(700, 165 + occupied * 115) if row == "front" else Vector2(945, 165 + occupied * 115)}
-	return {"row": "back", "position": Vector2(945, 165)}
+			return {"row": row, "position": _enemy_slot_position(row, occupied)}
+	return {"row": "back", "position": _enemy_slot_position("back", 0)}
 
 
 func _play_damage(event: Dictionary) -> void:
@@ -677,7 +696,8 @@ func _play_damage(event: Dictionary) -> void:
 		_challenge_total += maxf(float(amount), 0.0)
 		_update_challenge_values()
 	if is_dot:
-		_add_status(target, str(event.get("label", "持续伤害")), 0.0, "dot")
+		var dot_name := str(event.get("label", "持续伤害"))
+		_add_status(target, dot_name, 0.0, "dot", str(event.get("status_key", "dot:" + dot_name)))
 	_log_line("%s受到 %d 伤害%s" % [str(event.get("target", {}).get("name", "目标")), amount, "（暴击）" if is_crit else ""], "#9b3648" if not is_dot else "#76509b")
 	var sprite := target.get_node_or_null("Sprite") as TextureRect
 	if sprite:
@@ -718,7 +738,7 @@ func _play_gain(event: Dictionary, color: Color, prefix: String) -> void:
 			_update_unit_hp(target, float(event.get("hp", 0)), float(event.get("max_hp", 1)))
 		if prefix.begins_with("护盾"):
 			_set_unit_shield(target, float(event.get("shield", float(_unit_data.get(_key_for_unit(target), {}).get("shield", 0.0)) + amount)))
-			_add_status(target, "护盾", 5.0, "shield")
+			_add_status(target, "护盾", 5.0, "shield", "shield")
 		_log_line("%s %s%d" % [str(event.get("target", {}).get("name", "单位")), prefix, amount], "#297c64" if prefix == "+" else "#367ca6")
 	await get_tree().create_timer(0.20 / _speed).timeout
 
@@ -733,6 +753,7 @@ func _update_unit_hp(target: Control, hp_value: float, max_hp: float) -> void:
 		_unit_data[key]["current_hp"] = hp_value
 		_unit_data[key]["alive"] = hp_value > 0.0
 		if hp_value <= 0.0:
+			_clear_statuses(target)
 			target.visible = false
 		elif not target.visible:
 			target.visible = true
@@ -749,20 +770,23 @@ func _set_unit_shield(target: Control, shield_value: float) -> void:
 		return
 	var info: Dictionary = _unit_data[key]
 	info["shield"] = maxf(0.0, shield_value)
+	if float(info["shield"]) <= 0.0:
+		_remove_status(target, "shield", "护盾")
 	var max_hp := maxf(float(info.get("max_hp", 1.0)), 1.0)
 	var overlay := target.get_node_or_null("Shield") as ColorRect
 	if overlay:
 		overlay.size.x = 164.0 * minf(float(info["shield"]) / max_hp, 1.0)
 	var text := target.get_node_or_null("HPText") as Label
 	if text:
-		text.text = "%d / %d　盾 %d" % [int(info.get("current_hp", 0.0)), int(info.get("max_hp", 1.0)), int(info["shield"])]
+		text.text = "%d / %d%s" % [int(info.get("current_hp", 0.0)), int(info.get("max_hp", 1.0)), "　盾 %d" % int(info["shield"]) if float(info["shield"]) > 0.0 else ""]
 
 
-func _add_status(target: Control, status_name: String, duration: float, kind: String = "status") -> void:
+func _add_status(target: Control, status_name: String, duration: float, kind: String = "status", status_key: String = "") -> void:
 	var row := target.get_node_or_null("Statuses") as HBoxContainer
 	if not row:
 		return
-	var node_name := "Status_" + status_name.validate_node_name()
+	var stable_key := status_key if not status_key.is_empty() else kind + ":" + status_name
+	var node_name := "Status_" + stable_key.validate_node_name()
 	var existing := row.get_node_or_null(node_name) as Button
 	if existing:
 		existing.set_meta("duration", duration)
@@ -779,12 +803,32 @@ func _add_status(target: Control, status_name: String, duration: float, kind: St
 	button.add_theme_color_override("font_color", Color.WHITE)
 	button.add_theme_stylebox_override("normal", _box(_status_color(status_name, kind), Color.WHITE, 1, 4))
 	button.add_theme_stylebox_override("hover", _box(_status_color(status_name, kind).lightened(0.15), GOLD, 2, 4))
+	button.set_meta("status_key", stable_key)
 	button.set_meta("status_name", status_name)
 	button.set_meta("duration", duration)
 	button.set_meta("kind", kind)
 	button.tooltip_text = _status_hover_text(status_name, duration)
 	button.pressed.connect(_show_status_tip.bind(button))
 	row.add_child(button)
+
+
+func _remove_status(target: Control, status_key: String, status_name: String = "") -> void:
+	var row := target.get_node_or_null("Statuses") as HBoxContainer
+	if not row:
+		return
+	for child in row.get_children():
+		if (not status_key.is_empty() and str(child.get_meta("status_key", "")) == status_key) or (status_key.is_empty() and not status_name.is_empty() and str(child.get_meta("status_name", "")) == status_name):
+			row.remove_child(child)
+			child.queue_free()
+
+
+func _clear_statuses(target: Control) -> void:
+	var row := target.get_node_or_null("Statuses") as HBoxContainer
+	if not row:
+		return
+	for child in row.get_children():
+		row.remove_child(child)
+		child.queue_free()
 
 
 func _show_status_tip(button: Button) -> void:

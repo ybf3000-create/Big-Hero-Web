@@ -653,7 +653,7 @@ function fateEvent(state: GameState, character: CharacterProgress): Record<strin
     state.stormRolls = Math.min(15, state.stormRolls + 5);
     return { type: "punish", name: selected, remaining: state.stormRolls, message: `暴风雨：接下来${state.stormRolls}投金币收益×0.5` };
   }
-  if (selected === "拆迁通知") { const loss = Math.min(character.gold, Math.max(0, character.level * 50)); character.gold -= loss; return { type: "punish", name: selected, gold: -loss, message: `拆迁通知：支付${loss}金币` }; }
+  if (selected === "拆迁通知") { const loss = Math.min(character.gold, Math.max(0, character.level * 50)); character.gold -= loss; return { type: "punish", name: selected, gold: loss === 0 ? 0 : -loss, message: `拆迁通知：支付${loss}金币` }; }
   if (selected === "传送门") return { type: "special", name: selected, teleport: true, message: "传送门！传送到闪电格" };
   return { type: "special", name: "命运平静", message: "命运暂时没有改变" };
 }

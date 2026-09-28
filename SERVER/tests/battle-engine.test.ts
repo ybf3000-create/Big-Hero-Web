@@ -119,6 +119,27 @@ test("control, dot, shield and healing event families are all represented", () =
   for (const family of ["cast", "damage", "status", "shield", "heal"]) assert.ok(resultFamilies.has(family), `missing ${family} events`);
 });
 
+test("every visible timed battle status has a matching server removal event", () => {
+  for (const skillId of [13, 15, 16, 17, 19, 21, 27, 28, 29]) {
+    const encounter = trainingEncounter();
+    encounter.duration_limit = 24;
+    const result = runBattle(player([skillId]), encounter, seeded(8_100 + skillId));
+    const additions = result.events.filter((event) => event.type === "status" && Number(event.duration) > 0);
+    const dotKeys = result.events
+      .filter((event) => event.type === "damage" && event.dot === true)
+      .map((event) => String(event.status_key ?? ""))
+      .filter(Boolean);
+    const visibleKeys = new Set([
+      ...additions.map((event) => String(event.status_key ?? "")),
+      ...dotKeys,
+      ...result.events.filter((event) => event.type === "shield").map(() => "shield"),
+    ]);
+    const removedKeys = new Set(result.events.filter((event) => event.type === "status_remove").map((event) => String(event.status_key ?? "")));
+    assert.ok([...visibleKeys].every((key) => key.length > 0), `skill ${skillId} emitted a visible status without a stable key`);
+    assert.ok([...visibleKeys].every((key) => removedKeys.has(key)), `skill ${skillId} left a visible status without removal`);
+  }
+});
+
 test("skill-damage bonuses affect skills but never the fallback basic attack", () => {
   const basic = player([]);
   basic.skillDamage = 100;

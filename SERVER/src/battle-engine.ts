@@ -61,6 +61,9 @@ const BASE_ACTION_COOLDOWN = 3;
 const MAX_ROUNDS = 50;
 const SHIELD_DURATION = 5;
 const REGEN_INTERVAL = 5;
+const CONTROL_STATUS_NAMES: Record<string, string> = {
+  freeze: "冻结", stun: "眩晕", silence: "沉默", paralysis: "麻痹", slow: "减速", anti_heal: "禁疗",
+};
 
 const n = (value: unknown, fallback = 0): number => typeof value === "number" && Number.isFinite(value) ? value : fallback;
 const b = (value: unknown): boolean => value === true;
@@ -72,6 +75,37 @@ const pick = <T>(values: readonly T[], random: RandomSource): T => values[Math.m
 
 function actorRef(actor: Data): Data {
   return { side: String(actor.side ?? "enemy"), id: n(actor.id), name: String(actor.name ?? "单位") };
+}
+
+function removeStatusEvent(state: Data, actor: Data, statusKey: string, status: string): void {
+  state.events.push({ type: "status_remove", target: actorRef(actor), status_key: statusKey, status });
+}
+
+function dotStatusKey(dot: Data): string {
+  return `dot:${String(dot.sourceName ?? "持续伤害")}`;
+}
+
+function removeDotStatusIfInactive(state: Data, actor: Data, removed: Data): void {
+  if (!actor.dots.some((dot: Data) => dotStatusKey(dot) === dotStatusKey(removed))) {
+    removeStatusEvent(state, actor, dotStatusKey(removed), String(removed.sourceName ?? "持续伤害"));
+  }
+}
+
+function clearVisibleStatuses(state: Data, actor: Data): void {
+  if (n(actor.shield) > 0) removeStatusEvent(state, actor, "shield", "护盾");
+  actor.shield = 0;
+  actor.shieldTime = 0;
+  for (const key of Object.keys(actor.controls as Record<string, number>)) {
+    removeStatusEvent(state, actor, `control:${key}`, CONTROL_STATUS_NAMES[key] ?? key);
+  }
+  actor.controls = {};
+  const dotKeys = new Set<string>();
+  for (const dot of actor.dots as Data[]) {
+    const key = dotStatusKey(dot);
+    if (!dotKeys.has(key)) removeStatusEvent(state, actor, key, String(dot.sourceName ?? "持续伤害"));
+    dotKeys.add(key);
+  }
+  actor.dots = [];
 }
 
 function setCount(actor: Data, setName: string): number {
@@ -182,7 +216,10 @@ function tickActorTimers(state: Data, actor: Data, delta: number): void {
   }
   if (actor.shieldTime > 0) {
     actor.shieldTime = Math.max(0, actor.shieldTime - delta);
-    if (actor.shieldTime <= 0) actor.shield = 0;
+    if (actor.shieldTime <= 0) {
+      actor.shield = 0;
+      removeStatusEvent(state, actor, "shield", "护盾");
+    }
   }
   if (actor.setBurnSpreadTimer !== undefined) {
     actor.setBurnSpreadTimer = Math.max(0, n(actor.setBurnSpreadTimer) - delta);
@@ -198,7 +235,10 @@ function tickActorTimers(state: Data, actor: Data, delta: number): void {
   }
   for (const [key, value] of Object.entries(actor.controls as Record<string, number>)) {
     actor.controls[key] = Math.max(0, value - delta);
-    if (actor.controls[key] <= 0) delete actor.controls[key];
+    if (actor.controls[key] <= 0) {
+      delete actor.controls[key];
+      removeStatusEvent(state, actor, `control:${key}`, CONTROL_STATUS_NAMES[key] ?? key);
+    }
   }
   for (let index = actor.dots.length - 1; index >= 0; index -= 1) {
     const dot = actor.dots[index];
@@ -210,7 +250,10 @@ function tickActorTimers(state: Data, actor: Data, delta: number): void {
       dot.ticksRemaining -= 1;
     }
     const currentIndex = actor.dots.indexOf(dot);
-    if (currentIndex >= 0 && (dot.ticksRemaining <= 0 || !actor.alive)) actor.dots.splice(currentIndex, 1);
+    if (currentIndex >= 0 && (dot.ticksRemaining <= 0 || !actor.alive)) {
+      actor.dots.splice(currentIndex, 1);
+      removeDotStatusIfInactive(state, actor, dot);
+    }
   }
   for (let index = actor.hots.length - 1; index >= 0; index -= 1) {
     const hot = actor.hots[index]!;
@@ -408,9 +451,10 @@ function applyFinalDamage(state: Data, target: Data, damage: number, meta: Data)
       target.currentHp = Math.max(1, target.currentHp);
     } else {
       target.alive = false;
-      target.dots = [];
+      clearVisibleStatuses(state, target);
       if (hasPassive(target, "诅咒") && meta.owner) {
         meta.owner.controls.anti_heal = 5;
+        state.events.push({ type: "status", target: actorRef(meta.owner), status_key: "control:anti_heal", status: "禁疗", duration: 5 });
         state.log.push(`${target.name} 的诅咒触发，${meta.owner.name} 被禁疗 5 秒`);
       }
     }
@@ -459,12 +503,12 @@ function applyControl(state: Data, target: Data, skill: BattleSkill): void {
   const key = keys[skill.control ?? 0];
   if (!key || duration <= 0) return;
   target.controls[key] = duration;
-  state.events.push({ type: "status", target: actorRef(target), status: names[skill.control ?? 0], duration });
+  state.events.push({ type: "status", target: actorRef(target), status_key: `control:${key}`, status: names[skill.control ?? 0], duration });
 }
 
 function tickDot(state: Data, target: Data, dot: Data): void {
   const dealt = applyFinalDamage(state, target, dot.damage, { source: dot.sourceName, dot: true });
-  state.events.push({ type: "damage", target: actorRef(target), amount: Math.round(dealt), hp: Math.round(target.currentHp), max_hp: target.maxHp, shield: Math.round(target.shield), crit: false, block: false, dot: true, label: dot.sourceName });
+  state.events.push({ type: "damage", target: actorRef(target), amount: Math.round(dealt), hp: Math.round(target.currentHp), max_hp: target.maxHp, shield: Math.round(target.shield), crit: false, block: false, dot: true, status_key: dotStatusKey(dot), label: dot.sourceName });
   if (dot.sourceSide === "player") state.damageTotal += Math.max(0, dealt);
 }
 
@@ -479,7 +523,10 @@ function applyDot(state: Data, target: Data, actor: Data, skill: BattleSkill): v
       return;
     }
   }
-  if (target.dots.length >= 10) target.dots.shift();
+  if (target.dots.length >= 10) {
+    const removed = target.dots.shift();
+    if (removed) removeDotStatusIfInactive(state, target, removed);
+  }
   target.dots.push(entry);
   tickDot(state, target, entry);
   entry.ticksRemaining -= 1;
@@ -561,7 +608,11 @@ function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, 
     // Skill-damage bonuses apply to skills and DoT skills, never to the
     // fallback basic attack.
     if (skill) damage *= 1 + n(actor.skillDamage) / 100;
-    if (target.controls.freeze) { damage *= hasSetAffix(actor, "【冰霜】寒甲") ? 1.7 : 1.5; delete target.controls.freeze; }
+    if (target.controls.freeze) {
+      damage *= hasSetAffix(actor, "【冰霜】寒甲") ? 1.7 : 1.5;
+      delete target.controls.freeze;
+      removeStatusEvent(state, target, "control:freeze", "冻结");
+    }
     const burnCount = target.dots.filter((dot: Data) => dot.dotType === "set_burn").length;
     if (target.setBurnDamageTaken && burnCount > 0) damage *= 1 + Math.min(burnCount, 4) * .12;
     if (n(skill?.bonus?.executeThreshold) > 0 && target.currentHp / target.maxHp < n(skill?.bonus?.executeThreshold)) damage *= n(skill?.bonus?.executeMultiplier, 1);
@@ -586,10 +637,10 @@ function applyAttack(state: Data, actor: Data, target: Data, damagePct: number, 
     if (dealt > 0 && setCount(actor, "冰霜") >= 3 && target.alive && random() < (target.isBoss ? .075 : .15)) {
       const duration = hasSetAffix(actor, "【冰霜】极寒") ? 2 : 1.5;
       target.controls.freeze = duration;
-      state.events.push({ type: "status", target: actorRef(target), status: "冻结", duration });
+      state.events.push({ type: "status", target: actorRef(target), status_key: "control:freeze", status: "冻结", duration });
       if (hasSetAffix(actor, "【冰霜】蔓延")) {
         const spread = opponents(state, actor).find((candidate) => candidate !== target && candidate.alive);
-        if (spread) { spread.controls.freeze = duration; state.events.push({ type: "status", target: actorRef(spread), status: "冻结", duration }); }
+        if (spread) { spread.controls.freeze = duration; state.events.push({ type: "status", target: actorRef(spread), status_key: "control:freeze", status: "冻结", duration }); }
       }
       if (setCount(actor, "冰霜") >= 4) {
         const stacks = Math.min(5, n(actor.frostShieldStacks) + 1);
@@ -736,7 +787,13 @@ function applyPassivePoison(state: Data, target: Data, actor: Data): void {
   const name = `${actor.name}·毒素`;
   const current = target.dots.find((dot: Data) => dot.sourceName === name);
   const entry = { sourceName: name, damage: actor.attack * .15, ticksRemaining: 5, tickInterval: 1, tickTimer: 1, dotType: "poison", sourceSide: actor.side };
-  if (current) Object.assign(current, entry); else { if (target.dots.length >= 10) target.dots.shift(); target.dots.push(entry); }
+  if (current) Object.assign(current, entry); else {
+    if (target.dots.length >= 10) {
+      const removed = target.dots.shift();
+      if (removed) removeDotStatusIfInactive(state, target, removed);
+    }
+    target.dots.push(entry);
+  }
   const dot = current ?? entry;
   tickDot(state, target, dot);
   dot.ticksRemaining -= 1;
@@ -803,7 +860,8 @@ function tickBossMechanics(state: Data, delta: number): void {
       if (["web", "charm"].includes(mechanic.id)) {
         const immune = Boolean(player.buffs.tenacity);
         if (!immune) player.controls.stun = n(mechanic.stun, 3);
-        emitMechanic(state, boss, String(mechanic.name), immune ? null : player, [player]);
+        emitMechanic(state, boss, String(mechanic.name), null, [player]);
+        if (!immune) state.events.push({ type: "status", target: actorRef(player), status_key: "control:stun", status: "眩晕", duration: player.controls.stun });
       }
       else if (mechanic.id === "nature_guard") {
         const livingAllies = state.actors.enemies.filter((ally: Data) => ally.alive);
@@ -887,7 +945,7 @@ function tickWeather(state: Data, delta: number): void {
       const weights = living.map((actor: Data) => 1 / Math.max(actor.actionCooldown, .01));
       let roll = state.random() * weights.reduce((sum: number, value: number) => sum + value, 0);
       const target = living[weights.findIndex((weight: number) => (roll -= weight) <= 0)] ?? living[0];
-      if (!target.bossMechanic?.controlImmune && !target.buffs.tenacity) { target.controls.freeze = target.isBoss ? 1 : 2; state.events.push({ type: "status", target: actorRef(target), status: "天气·冻结", duration: target.controls.freeze }); }
+      if (!target.bossMechanic?.controlImmune && !target.buffs.tenacity) { target.controls.freeze = target.isBoss ? 1 : 2; state.events.push({ type: "status", target: actorRef(target), status_key: "control:freeze", status: "冻结", duration: target.controls.freeze, source: "天气·暴风雪" }); }
     }
     if (state.weather === "scorching_sun") for (const target of living) mechanicDamage(state, source, target, target.maxHp * .03, "天气·灼烧", true);
     if (state.weather === "sandstorm") for (const target of living) mechanicDamage(state, source, target, target.maxHp * .015, "天气·沙暴", true);

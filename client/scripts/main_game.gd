@@ -3931,6 +3931,13 @@ func _show_auto_dismantle_panel() -> void:
 	hint.position = Vector2(20, 45)
 	hint.add_theme_color_override("font_color", Color("6f6264"))
 	dialog.add_child(hint)
+	var saved_state := Label.new()
+	var storage_name := "服务器" if _is_network_game() else "本地"
+	saved_state.text = "%s已保存 %d 条规则 · 当前%s" % [storage_name, auto_dismantle_rules.size(), "已启用" if auto_dismantle_enabled else "未启用"]
+	saved_state.position = Vector2(20, 69)
+	saved_state.add_theme_font_size_override("font_size", 13)
+	saved_state.add_theme_color_override("font_color", Color("267453") if auto_dismantle_enabled else Color("74676b"))
+	dialog.add_child(saved_state)
 	var enabled := CheckBox.new()
 	enabled.text = "启用自动分解"
 	enabled.button_pressed = auto_dismantle_enabled
@@ -3939,8 +3946,8 @@ func _show_auto_dismantle_panel() -> void:
 	enabled.add_theme_color_override("font_color", Color("352e38"))
 	dialog.add_child(enabled)
 	var list_area := VBoxContainer.new()
-	list_area.position = Vector2(20, 84)
-	list_area.size = Vector2(930, 330)
+	list_area.position = Vector2(20, 100)
+	list_area.size = Vector2(930, 314)
 	list_area.add_theme_constant_override("separation", 8)
 	dialog.add_child(list_area)
 	if auto_dismantle_rules.is_empty():
@@ -3957,6 +3964,7 @@ func _show_auto_dismantle_panel() -> void:
 			var rule_label := Label.new()
 			rule_label.text = "%d. %s" % [index + 1, _auto_rule_summary(auto_dismantle_rules[index])]
 			rule_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			rule_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			rule_label.add_theme_color_override("font_color", Color("352e38"))
 			row.add_child(rule_label)
 			var edit_btn := Button.new()
@@ -4015,40 +4023,62 @@ func _show_auto_dismantle_panel() -> void:
 
 func _auto_rule_summary(rule: Dictionary) -> String:
 	var parts: Array[String] = []
-	var quality_names := ["普通", "精良", "稀有", "史诗", "传说"]
-	var slot_names := ["武器", "防具", "鞋子", "戒指", "项链", "披风", "头盔", "护符"]
-	var socket_names := ["0孔", "1孔", "2孔", "3孔"]
-	var suit_names := ["非套装", "龙鳞", "烈焰", "冰霜", "雷霆", "疾风", "铁壁", "暗影", "自然", "引力", "星辰", "幻影", "口才", "奢侈"]
-	var quality_values: Array = rule.get("qualities", [])
-	if not quality_values.is_empty(): parts.append("品质=" + _auto_rule_names(quality_values, quality_names))
-	var slot_values: Array = rule.get("slots", [])
-	if not slot_values.is_empty():
-		var names: Array[String] = []
-		for value in slot_values:
-			var slot_index := int(value) - 1
-			if slot_index >= 0 and slot_index < slot_names.size(): names.append(slot_names[slot_index])
-		parts.append("部位=" + ",".join(names))
-	var affix_values: Array = rule.get("affix_names", [])
-	if not affix_values.is_empty(): parts.append("词缀=" + (str(affix_values[0]) if affix_values.size() == 1 else "%d项" % affix_values.size()))
-	var socket_values: Array = rule.get("initial_sockets", [])
-	if not socket_values.is_empty(): parts.append("孔数=" + _auto_rule_names(socket_values, socket_names))
-	var suit_values: Array = rule.get("suits", [])
-	if not suit_values.is_empty(): parts.append("套装=" + _auto_rule_names(suit_values, suit_names))
+	var quality_names: Array[String] = ["普通", "精良", "稀有", "史诗", "传说"]
+	var slot_names: Array[String] = ["武器", "防具", "鞋子", "戒指", "项链", "披风", "头盔", "护符"]
+	var socket_names: Array[String] = ["0孔", "1孔", "2孔", "3孔"]
+	var quality_text := _auto_indexed_rule_names(rule.get("qualities", []), quality_names, 0)
+	if not quality_text.is_empty(): parts.append("品质=" + quality_text)
+	var slot_text := _auto_indexed_rule_names(rule.get("slots", []), slot_names, 1)
+	if not slot_text.is_empty(): parts.append("部位=" + slot_text)
+	var affix_names := _auto_text_rule_names(rule.get("affix_names", []))
+	if not affix_names.is_empty(): parts.append("词缀=" + affix_names)
+	var socket_text := _auto_indexed_rule_names(rule.get("initial_sockets", []), socket_names, 0)
+	if not socket_text.is_empty(): parts.append("孔数=" + socket_text)
+	var suit_map := {"none":"非套装", "龙鳞":"龙鳞", "烈焰":"烈焰", "冰霜":"冰霜", "雷霆":"雷霆", "疾风":"疾风", "铁壁":"铁壁", "暗影":"暗影", "自然":"自然", "引力":"引力", "星辰":"星辰", "幻影":"幻影", "口才":"口才", "奢侈":"奢侈"}
+	var suit_text := _auto_mapped_rule_names(rule.get("suits", []), suit_map)
+	if not suit_text.is_empty(): parts.append("套装=" + suit_text)
 	var min_count := int(rule.get("affix_min", 0))
 	var max_count := int(rule.get("affix_max", 8))
 	if min_count > 0 or max_count < 8: parts.append("词缀数量=%d-%d" % [min_count, max_count])
 	return "；".join(parts) if not parts.is_empty() else "无条件"
 
 
-func _auto_rule_names(values: Array, names: Array[String]) -> String:
+func _auto_indexed_rule_names(raw_values: Variant, names: Array[String], first_value: int) -> String:
 	var result: Array[String] = []
-	for value in values:
-		if value is int or value is float:
-			var index := int(value)
-			if index >= 0 and index < names.size(): result.append(names[index])
-		else:
-			result.append(str(value))
-	return ",".join(result)
+	if not raw_values is Array:
+		return ""
+	for value in raw_values as Array:
+		var value_text := str(value)
+		if not value_text.is_valid_int():
+			continue
+		var index := int(value_text) - first_value
+		if index >= 0 and index < names.size() and not result.has(names[index]):
+			result.append(names[index])
+	return "、".join(result)
+
+
+func _auto_text_rule_names(raw_values: Variant) -> String:
+	var result: Array[String] = []
+	if not raw_values is Array:
+		return ""
+	for value in raw_values as Array:
+		var text := str(value).strip_edges()
+		if not text.is_empty() and not result.has(text):
+			result.append(text)
+	return "、".join(result)
+
+
+func _auto_mapped_rule_names(raw_values: Variant, names: Dictionary) -> String:
+	var result: Array[String] = []
+	if not raw_values is Array:
+		return ""
+	for value in raw_values as Array:
+		var key := str(value).strip_edges()
+		if names.has(key):
+			var display := str(names[key])
+			if not result.has(display):
+				result.append(display)
+	return "、".join(result)
 
 
 func _save_auto_dismantle_rules(next_rules: Array[Dictionary], enabled: bool) -> bool:

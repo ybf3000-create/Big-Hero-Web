@@ -887,6 +887,11 @@ test("demolition fate fallback uses exactly level times fifty gold", () => {
     const result = applyGameCommand(state, { level: 1, experience: 0, gold: 100 }, "item_use", { item_id: 5 });
     assert.equal(result.character.gold, 50);
     assert.equal((result.event.fate as Record<string, unknown>).gold, -50);
+    const noGoldState = createInitialGameState();
+    addItem(noGoldState, 5, 1);
+    const noGold = applyGameCommand(noGoldState, { level: 1, experience: 0, gold: 0 }, "item_use", { item_id: 5 });
+    assert.equal(Object.is((noGold.event.fate as Record<string, unknown>).gold, -0), false);
+    assert.equal((noGold.event.fate as Record<string, unknown>).gold, 0);
   } finally {
     Math.random = originalRandom;
   }
