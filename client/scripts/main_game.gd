@@ -2398,17 +2398,21 @@ func _refresh_map_effect_labels() -> void:
 		empty.add_theme_color_override("font_color", Color("8b7a7d"))
 		row.add_child(empty)
 		return
+	var names: Array[String] = []
+	var descriptions: Array[String] = []
 	for raw in _deity_buffs:
 		var buff: Dictionary = raw as Dictionary
-		var button := Button.new()
-		button.text = "天命：%s（%d圈）" % [str(buff.get("name", "未知")), maxi(0, int(buff.get("turns", 0)))]
-		button.custom_minimum_size = Vector2(150, 25)
-		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		UIUtils.btn_transparent2(button)
-		UIUtils.set_button_text_color(button, Color("6e4a83"))
-		var buff_copy := buff.duplicate(true)
-		button.pressed.connect(func(): _show_effect_tooltip(str(buff_copy.get("name", "天命效果")), _deity_description(buff_copy)))
-		row.add_child(button)
+		names.append("%s（%d圈）" % [str(buff.get("name", "未知")), maxi(0, int(buff.get("turns", 0)))])
+		descriptions.append("%s：%s" % [str(buff.get("name", "天命效果")), _deity_description(buff)])
+	var button := Button.new()
+	button.text = "天命：" + "、".join(names)
+	button.custom_minimum_size = Vector2(406, 25)
+	button.size = Vector2(406, 25)
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	UIUtils.btn_transparent2(button)
+	UIUtils.set_button_text_color(button, Color("6e4a83"))
+	button.pressed.connect(func(): _show_effect_tooltip("当前生效天命", "\n".join(descriptions)))
+	row.add_child(button)
 
 
 func _weather_name(weather: String) -> String:
