@@ -5921,7 +5921,7 @@ func _build_skill_tab(panel: Panel) -> void:
 			panel.add_child(name_lbl)
 
 			var cd_lbl: Label = Label.new()
-			cd_lbl.text = "行动冷却 " + SkillDataRef.action_cd_text(sdata)
+			cd_lbl.text = SkillDataRef.action_cd_text(sdata)
 			cd_lbl.add_theme_font_size_override("font_size", 11)
 			cd_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
 			cd_lbl.position = Vector2(sx + 52, sy + 32)
@@ -6132,9 +6132,9 @@ func _build_skill_tab(panel: Panel) -> void:
 
 		var pool_info: Label = Label.new()
 		if equipped:
-			pool_info.text = "已装备 · 行动冷却 " + SkillDataRef.action_cd_text(sdata)
+			pool_info.text = "已装备 · " + SkillDataRef.action_cd_text(sdata)
 		elif is_unlocked:
-			pool_info.text = "行动冷却 " + SkillDataRef.action_cd_text(sdata) + " · 已解锁"
+			pool_info.text = SkillDataRef.action_cd_text(sdata)
 		else:
 			pool_info.text = "解锁 " + str(sdata.get("price", 0)) + " 金币"
 		pool_info.add_theme_font_size_override("font_size", 10)
@@ -6174,7 +6174,7 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 	var tip: Panel = Panel.new()
 	tip.name = "SkillTooltip"
 	tip.position = Vector2(360, 160)
-	tip.size = Vector2(300, 260)
+	tip.size = Vector2(300, 300)
 	_prepare_modal_panel(tip)
 	UIUtils.shrine_panel_style(tip, Color("fff9f5"), Color("b88d89"), 2)
 	_tooltip_nodes.append(tip)
@@ -6210,7 +6210,7 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 		9: target_str = "贯穿"
 		10: target_str = "自身"
 		11: target_str = "自身治疗"
-	school_lbl.text = SkillDataRef.school_name(sdata.get("school", 0)) + "  |  行动冷却 " + SkillDataRef.action_cd_text(sdata) + ("  |  " + target_str if not target_str.is_empty() else "")
+	school_lbl.text = SkillDataRef.school_name(sdata.get("school", 0)) + "  |  " + SkillDataRef.action_cd_text(sdata) + ("  |  " + target_str if not target_str.is_empty() else "")
 	school_lbl.add_theme_font_size_override("font_size", 12)
 	school_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
 	school_lbl.position = Vector2(16, 34)
@@ -6223,44 +6223,21 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 	sep1.color = Color(0.2, 0.2, 0.3)
 	tip.add_child(sep1)
 
-	# 详细效果
-	var sy: float = 60.0
-	var desc: String = sdata.get("desc", "")
-	if sdata.has("dmg_pct"):
-		desc += "\n伤害倍率: " + str(sdata["dmg_pct"]) + "%"
-		if sdata.has("hits") and sdata["hits"] > 1:
-			desc += " ×" + str(sdata["hits"]) + "次"
-	if sdata.has("control"):
-		var cname: String = SkillDataRef.control_name(sdata.get("control", -1))
-		if not cname.is_empty():
-			desc += "\n控制: " + cname + " " + str(sdata.get("control_dur", 0)) + "秒"
-	if sdata.has("dot_pct"):
-		desc += "\nDot: " + str(sdata["dot_pct"]) + "%/次 ×" + str(sdata.get("dot_dur", 0)) + "秒"
-	if sdata.has("shield_pct"):
-		desc += "\n护盾: " + str(sdata["shield_pct"]) + "% " + sdata.get("shield_stat", "def")
-	if sdata.has("heal_pct"):
-		desc += "\n治疗: " + str(sdata["heal_pct"]) + "% " + sdata.get("heal_stat", "atk")
-
-	if sdata.has("bonus"):
-		var bonus: Dictionary = sdata["bonus"]
-		if bonus.has("ignore_def_pct"):
-			desc += "\n无视防御: " + str(bonus["ignore_def_pct"]) + "%"
-		if bonus.has("execute_threshold"):
-			desc += "\nHP<" + str(int(bonus["execute_threshold"] * 100)) + "%时伤害×" + str(bonus["execute_mult"])
-		if bonus.has("missing_hp_scale"):
-			desc += "\n每损失1%HP +" + str(bonus["missing_hp_scale"]) + "%伤害"
-		if bonus.has("detonate_dot"):
-			desc += "\n结算Dot剩余伤害×" + str(bonus["detonate_dot"])
-		if bonus.has("spread_dot"):
-			desc += "\n复制Dot到全体敌人"
+	# 完整效果说明
+	var effect_title := Label.new()
+	effect_title.text = "技能效果"
+	effect_title.add_theme_font_size_override("font_size", 13)
+	effect_title.add_theme_color_override("font_color", sc.darkened(0.2))
+	effect_title.position = Vector2(16, 64)
+	tip.add_child(effect_title)
 
 	var body: Label = Label.new()
-	body.text = desc
+	body.text = str(sdata.get("desc", "暂无效果说明。"))
 	body.add_theme_font_size_override("font_size", 12)
 	body.add_theme_color_override("font_color", Color("352e38"))
-	body.position = Vector2(16, sy)
+	body.position = Vector2(16, 88)
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD
-	body.size = Vector2(270, 120)
+	body.size = Vector2(270, 160)
 	tip.add_child(body)
 
 	# 底部操作按钮
@@ -6350,7 +6327,7 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 func _skill_hover_text(skill: Dictionary) -> String:
 	var lines: Array[String] = [
 		UIUtils.safe_icon(str(skill.get("icon", "")), "技") + " " + str(skill.get("name", "???")),
-		SkillDataRef.school_name(int(skill.get("school", 0))) + "  |  行动冷却 " + SkillDataRef.action_cd_text(skill),
+		SkillDataRef.school_name(int(skill.get("school", 0))) + "  |  " + SkillDataRef.action_cd_text(skill),
 	]
 	var description := str(skill.get("desc", ""))
 	if not description.is_empty():
