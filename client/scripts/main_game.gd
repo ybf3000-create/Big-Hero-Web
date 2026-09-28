@@ -4762,12 +4762,15 @@ func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_pane
 	# 套装专属词条不参与普通重铸。
 	for set_aff in eqp.get("set_affixes", []):
 		var sal := Label.new()
-		sal.text = str(set_aff.get("name", "套装词条")) + "  " + _equipment_set_affix_description(set_aff)
+		var set_affix_text := str(set_aff.get("name", "套装词条")) + "  " + _equipment_set_affix_description(set_aff)
+		sal.text = _wrap_ui_text(set_affix_text, 26)
+		var set_affix_lines: int = maxi(1, sal.text.split("\n").size())
 		sal.add_theme_font_size_override("font_size", 11)
 		sal.add_theme_color_override("font_color", UIUtils.set_color(_equipment_set_name(eqp)))
 		sal.position = Vector2(12, sy)
+		sal.size = Vector2(316, 16 * set_affix_lines)
 		tip.add_child(sal)
-		sy += 16
+		sy += 16 * set_affix_lines
 
 	# 宝石
 	var gem_slots: int = eqp.get("gem_slots", 0)
@@ -4947,6 +4950,22 @@ func _equipment_set_affix_description(affix: Dictionary) -> String:
 			if str(definition.get("name", "")) == affix_name:
 				return str(definition.get("desc", ""))
 	return "暂无效果说明"
+
+
+func _wrap_ui_text(text: String, columns: int) -> String:
+	# 中文没有空格分词，依赖单词换行会让 Godot Web 直接溢出；按保守列宽显式断行。
+	var safe_columns := maxi(1, columns)
+	var lines: Array[String] = []
+	for raw_line in text.split("\n"):
+		var current := ""
+		for i in range(raw_line.length()):
+			current += raw_line.substr(i, 1)
+			if current.length() >= safe_columns:
+				lines.append(current)
+				current = ""
+		if not current.is_empty() or raw_line.is_empty():
+			lines.append(current)
+	return "\n".join(lines)
 
 
 func _ensure_overlay() -> void:
@@ -6286,7 +6305,7 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 	tip.add_child(effect_title)
 
 	var body: Label = Label.new()
-	body.text = str(sdata.get("desc", "暂无效果说明。"))
+	body.text = _wrap_ui_text(str(sdata.get("desc", "暂无效果说明。")), 20)
 	body.add_theme_font_size_override("font_size", 12)
 	body.add_theme_color_override("font_color", Color("352e38"))
 	body.position = Vector2(16, 88)

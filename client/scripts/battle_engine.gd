@@ -303,11 +303,12 @@ static func _apply_luxury_attack(actor: Dictionary) -> void:
 
 static func _spread_set_burn(state: Dictionary, source_target: Dictionary, actor: Dictionary) -> void:
 	var spread_count := 0
+	var spread_limit := 3 if _has_set_affix(actor, "【烈焰】燎原") else 2
 	for candidate in _opponents(state, actor):
 		if candidate != source_target and candidate.get("alive", false):
 			_apply_set_burn(state, candidate, actor)
 			spread_count += 1
-			if spread_count >= 2:
+			if spread_count >= spread_limit:
 				break
 
 

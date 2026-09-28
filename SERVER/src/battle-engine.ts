@@ -544,7 +544,8 @@ function applySetBurn(state: Data, target: Data, actor: Data): void {
 }
 
 function spreadSetBurn(state: Data, sourceTarget: Data, actor: Data): void {
-  const spreadTargets = opponents(state, actor).filter((candidate) => candidate !== sourceTarget && candidate.alive).slice(0, 2);
+  const spreadLimit = hasSetAffix(actor, "【烈焰】燎原") ? 3 : 2;
+  const spreadTargets = opponents(state, actor).filter((candidate) => candidate !== sourceTarget && candidate.alive).slice(0, spreadLimit);
   for (const spread of spreadTargets) applySetBurn(state, spread, actor);
 }
 
