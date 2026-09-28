@@ -4762,9 +4762,9 @@ func _show_equip_tooltip(eqp: Dictionary, idx: int, slot_name: String, main_pane
 	# 套装专属词条不参与普通重铸。
 	for set_aff in eqp.get("set_affixes", []):
 		var sal := Label.new()
-		sal.text = str(set_aff.get("name", "套装词条")) + "  " + str(set_aff.get("desc", ""))
+		sal.text = str(set_aff.get("name", "套装词条")) + "  " + _equipment_set_affix_description(set_aff)
 		sal.add_theme_font_size_override("font_size", 11)
-		sal.add_theme_color_override("font_color", Color("267452"))
+		sal.add_theme_color_override("font_color", UIUtils.set_color(_equipment_set_name(eqp)))
 		sal.position = Vector2(12, sy)
 		tip.add_child(sal)
 		sy += 16
@@ -4912,6 +4912,8 @@ func _equipment_hover_text(eqp: Dictionary, slot_name: String = "") -> String:
 		lines.append("套装：" + suit_name)
 	for affix in eqp.get("affixes", []).slice(0, 4):
 		lines.append(str(affix.get("name", "")) + " " + str(affix.get("display", "")))
+	for set_affix in eqp.get("set_affixes", []):
+		lines.append(str(set_affix.get("name", "套装词条")) + " " + _equipment_set_affix_description(set_affix))
 	var gem_slots := int(eqp.get("gem_slots", 0))
 	if gem_slots > 0:
 		var filled := 0
@@ -4920,6 +4922,31 @@ func _equipment_hover_text(eqp: Dictionary, slot_name: String = "") -> String:
 				filled += 1
 		lines.append("宝石：%d/%d" % [filled, gem_slots])
 	return "\n".join(lines)
+
+
+func _equipment_set_name(eqp: Dictionary) -> String:
+	var suit_name := str(eqp.get("suit_name", "")).strip_edges()
+	if not suit_name.is_empty():
+		return suit_name
+	for affix in eqp.get("set_affixes", []):
+		var affix_name := str(affix.get("name", ""))
+		var open_index := affix_name.find("【")
+		var close_index := affix_name.find("】", open_index + 1)
+		if open_index >= 0 and close_index > open_index + 1:
+			return affix_name.substr(open_index + 1, close_index - open_index - 1)
+	return ""
+
+
+func _equipment_set_affix_description(affix: Dictionary) -> String:
+	var description := str(affix.get("desc", affix.get("description", ""))).strip_edges()
+	if not description.is_empty():
+		return description
+	var affix_name := str(affix.get("name", ""))
+	for set_affixes in EquipGenCls.SET_AFFIX_POOL.values():
+		for definition in set_affixes:
+			if str(definition.get("name", "")) == affix_name:
+				return str(definition.get("desc", ""))
+	return "暂无效果说明"
 
 
 func _ensure_overlay() -> void:
