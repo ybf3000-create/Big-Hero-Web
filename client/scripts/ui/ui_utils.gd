@@ -18,6 +18,18 @@ static func suit_color(s: String) -> Color:
 	return SUIT_COLORS.get(s, Color(0.8, 0.8, 0.8))
 
 
+# 套装特技标记颜色。颜色固定按套装类型映射，避免同一套装备在不同界面颜色不一致。
+static func set_color(set_name: String) -> Color:
+	var colors := {
+		"龙鳞": Color("4e79a7"), "烈焰": Color("e15759"), "冰霜": Color("76b7b2"),
+		"雷霆": Color("f2cf5b"), "疾风": Color("59a14f"), "铁壁": Color("79706e"),
+		"暗影": Color("5b4b8a"), "自然": Color("8cd17d"), "引力": Color("b07aa1"),
+		"星辰": Color("edc948"), "幻影": Color("af7aa1"), "口才": Color("ff9da7"),
+		"奢侈": Color("f28e2b"),
+	}
+	return colors.get(set_name, Color("777777"))
+
+
 ## Return a display-safe label for data that may contain emoji icons.
 ## Godot Web renders Canvas text with the bundled CJK font; unknown emoji
 ## glyphs must never be allowed to replace otherwise readable Chinese text.

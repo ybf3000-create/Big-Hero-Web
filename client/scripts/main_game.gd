@@ -2525,6 +2525,31 @@ func _add_equipment_icon(parent: Control, eqp: Dictionary, pos: Vector2, icon_si
 	fallback.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(fallback)
 
+func _add_equipment_set_indicator(parent: Control, eqp: Dictionary, pos: Vector2) -> void:
+	# 只有带套装特技的装备显示标记；普通套装/空槽不显示，避免误认为有特技。
+	var set_affixes: Array = eqp.get("set_affixes", [])
+	if set_affixes.is_empty():
+		return
+	var set_name := str(eqp.get("suit_name", "")).strip_edges()
+	if set_name.is_empty():
+		for affix in set_affixes:
+			var affix_name := str(affix.get("name", ""))
+			var open_index := affix_name.find("【")
+			var close_index := affix_name.find("】", open_index + 1)
+			if open_index >= 0 and close_index > open_index + 1:
+				set_name = affix_name.substr(open_index + 1, close_index - open_index - 1)
+				break
+	if set_name.is_empty():
+		return
+	var marker := ColorRect.new()
+	marker.name = "SetAffixIndicator"
+	marker.position = pos
+	marker.size = Vector2(4, 4)
+	marker.color = UIUtils.set_color(set_name)
+	marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(marker)
+
+
 func _remove_ui_node_now(node: Node) -> void:
 	if not is_instance_valid(node):
 		return
@@ -3567,6 +3592,7 @@ func _build_inventory_panel() -> void:
 				frame_p.add_theme_stylebox_override("panel", qb2)
 
 				_add_equipment_icon(equip_panel, eqp, Vector2(rx + 3, ry + 18), Vector2(44, 44), 26)
+				_add_equipment_set_indicator(equip_panel, eqp, Vector2(rx + 4, ry + 59))
 
 				# 套装/宝石摘要放在槽位右侧，避免占用槽位下方的布局空间。
 				var info_x: float = rx + icon_s + 8.0
@@ -4561,6 +4587,7 @@ func _build_equip_tab(area: Panel, main_panel: Panel) -> void:
 
 			# 图标
 			_add_equipment_icon(area, eqp, Vector2(x + 2, y + 1), Vector2(icon_s - 4, icon_s - 4), 22)
+			_add_equipment_set_indicator(area, eqp, Vector2(x + 3, y + icon_s - 5))
 
 			# 名称（品质色）
 			var ename: Label = Label.new()
