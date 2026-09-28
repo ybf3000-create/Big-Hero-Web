@@ -84,6 +84,7 @@ const TopBarCls = preload("res://scripts/ui/top_bar.gd")
 const ShrineBackdropCls = preload("res://scripts/ui/shrine_backdrop.gd")
 const BattleViewCls = preload("res://scripts/ui/battle_view.gd")
 const WeatherEffectCls = preload("res://scripts/ui/weather_effect.gd")
+const ActivityLogCls = preload("res://scripts/activity_log.gd")
 
 # 子系统
 var dice: RefCounted
@@ -121,6 +122,9 @@ var _pending_offline_reward: Dictionary = {}
 var NetworkClient: Variant
 var next_roll_modifier: int = 0
 var hibernate_laps: int = 0
+var activity_log: RefCounted
+var _chat_tab: String = "world"
+var _activity_filter: String = "all"
 
 # 移动动画
 var _moving: bool = false
@@ -168,6 +172,7 @@ func _ready() -> void:
 	inventory = InventoryCls.new()
 	equipment = EquipmentCls.new()
 	skill_system = SkillCls.new()
+	activity_log = ActivityLogCls.new()
 
 	top_bar = TopBarCls.new(self)
 	_refresh_player_hp_bounds(true)
@@ -303,7 +308,7 @@ func _build_map_area() -> void:
 	var status_panel := Panel.new()
 	status_panel.name = "MapStatusPanel"
 	status_panel.position = Vector2(20, 18)
-	status_panel.size = Vector2(310, 34)
+	status_panel.size = Vector2(430, 92)
 	UIUtils.shrine_panel_style(status_panel, Color(1.0, 0.976, 0.96, 0.92), Color("b88d89"), 1)
 	area.add_child(status_panel)
 
@@ -314,8 +319,25 @@ func _build_map_area() -> void:
 	pos_lbl.add_theme_color_override("font_color", Color("352e38"))
 	pos_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	pos_lbl.position = Vector2(12, 2)
-	pos_lbl.size = Vector2(286, 30)
+	pos_lbl.size = Vector2(406, 28)
 	status_panel.add_child(pos_lbl)
+
+	var weather_btn := Button.new()
+	weather_btn.name = "WeatherButton"
+	weather_btn.position = Vector2(10, 31)
+	weather_btn.size = Vector2(190, 27)
+	weather_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	UIUtils.btn_transparent2(weather_btn)
+	UIUtils.set_button_text_color(weather_btn, Color("4f454d"))
+	weather_btn.pressed.connect(func(): _show_effect_tooltip("当前天气", _weather_description(current_weather)))
+	status_panel.add_child(weather_btn)
+
+	var deity_row := HBoxContainer.new()
+	deity_row.name = "DeityRow"
+	deity_row.position = Vector2(10, 59)
+	deity_row.size = Vector2(406, 27)
+	deity_row.add_theme_constant_override("separation", 8)
+	status_panel.add_child(deity_row)
 
 	# -- 右上角：自动挂机 --
 	var auto_check := CheckButton.new()
@@ -339,6 +361,7 @@ func _build_map_area() -> void:
 	area.add_child(auto_check)
 
 	add_child(area)
+	_refresh_map_effect_labels()
 
 
 func _load_hero_texture(res_path: String) -> Texture2D:
@@ -1018,6 +1041,7 @@ func _on_move_complete() -> void:
 
 	var msg: String = edata.get("message", "")
 	if not msg.is_empty():
+		_record_activity("event", msg)
 		var clr: Color = Color(1.0, 0.85, 0.3)
 		if edata.get("type", "") == "punish":
 			clr = Color(1.0, 0.4, 0.4)
@@ -1077,7 +1101,9 @@ func _apply_network_roll_response(response: Dictionary) -> void:
 	for raw_path_event in event.get("pathEvents", []):
 		var path_event: Dictionary = raw_path_event as Dictionary
 		var path_message := str(path_event.get("message", ""))
-		if not path_message.is_empty(): _show_float_text(path_message, Color(1.0, 0.85, 0.3))
+		if not path_message.is_empty():
+			_record_activity("event", path_message)
+			_show_float_text(path_message, Color(1.0, 0.85, 0.3))
 	if str(event.get("kind", "")) == "construction" and str(event.get("action", "")) in ["shop", "chest", "battle"] and not event.has("battle_result") and int(event.get("to", player_grid_index)) == player_grid_index:
 		_show_construction_management(int(event.get("gridIndex", player_grid_index)), event)
 	var battle_result: Dictionary = event.get("battle_result", {}) as Dictionary
@@ -1103,6 +1129,7 @@ func _apply_network_roll_response(response: Dictionary) -> void:
 	else:
 		var message := str(event.get("message", ""))
 		if not message.is_empty():
+			_record_activity("event", message)
 			_show_float_text(message, Color(1.0, 0.85, 0.3))
 	if auto_play_enabled and history.is_empty():
 		_start_auto_timer()
@@ -1322,6 +1349,7 @@ func _apply_battle_result(edata: Dictionary) -> void:
 	var battle_result: Dictionary = edata.get("battle_result", {})
 	if battle_result.is_empty():
 		return
+	_record_battle_activity(battle_result, edata)
 	# 每场战斗独立计算血量；离开战斗后恢复满血，不保留结算剩余值。
 	player_hp = player_max_hp
 	if edata.has("exp_gain"):
@@ -1354,7 +1382,10 @@ func _grant_battle_drops(drops: Array) -> Array[String]:
 		if kind in ["equip", "boss"]:
 			var eqp: Dictionary = _roll_drop_equip(drop)
 			if not eqp.is_empty() and _add_equipment_instance(eqp):
-				names.append(EquipGenCls.full_name(eqp))
+				var name := EquipGenCls.full_name(eqp)
+				names.append(name)
+				if int(eqp.get("quality", 0)) >= 3:
+					_record_activity("important", "获得%s装备：%s" % [str(eqp.get("quality_name", "高品质")), name])
 	return names
 
 
@@ -2344,6 +2375,107 @@ func _refresh_grid_display() -> void:
 	var pos_lbl: Label = area.get_node("MapStatusPanel/GridPosLabel") as Label
 	if pos_lbl:
 		pos_lbl.text = "当前格 " + str(idx + 1) + " / " + str(map_total_grids) + "  ·  已击败 Boss " + str(player_boss_index - 1) + " / 200"
+	_refresh_map_effect_labels()
+
+
+func _refresh_map_effect_labels() -> void:
+	var panel := get_node_or_null("MapArea/MapStatusPanel") as Panel
+	if not panel:
+		return
+	var weather_btn := panel.get_node_or_null("WeatherButton") as Button
+	if weather_btn:
+		weather_btn.text = "天气：" + _weather_name(current_weather)
+		weather_btn.tooltip_text = _weather_description(current_weather)
+	var row := panel.get_node_or_null("DeityRow") as HBoxContainer
+	if not row:
+		return
+	for child in row.get_children():
+		child.queue_free()
+	if _deity_buffs.is_empty():
+		var empty := Label.new()
+		empty.text = "天命：暂无生效效果"
+		empty.add_theme_font_size_override("font_size", 11)
+		empty.add_theme_color_override("font_color", Color("8b7a7d"))
+		row.add_child(empty)
+		return
+	for raw in _deity_buffs:
+		var buff: Dictionary = raw as Dictionary
+		var button := Button.new()
+		button.text = "天命：%s（%d圈）" % [str(buff.get("name", "未知")), maxi(0, int(buff.get("turns", 0)))]
+		button.custom_minimum_size = Vector2(150, 25)
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		UIUtils.btn_transparent2(button)
+		UIUtils.set_button_text_color(button, Color("6e4a83"))
+		var buff_copy := buff.duplicate(true)
+		button.pressed.connect(func(): _show_effect_tooltip(str(buff_copy.get("name", "天命效果")), _deity_description(buff_copy)))
+		row.add_child(button)
+
+
+func _weather_name(weather: String) -> String:
+	return {
+		"sunny": "晴天", "thunderstorm": "雷雨天", "drizzle": "细雨", "fog": "大雾",
+		"blizzard": "暴风雪", "scorching_sun": "烈日", "sandstorm": "沙暴", "aurora": "北极光",
+	}.get(weather, "晴天")
+
+
+func _weather_description(weather: String) -> String:
+	return {
+		"sunny": "晴天：没有额外天气效果。",
+		"thunderstorm": "雷雨天：天气计时触发落雷，对目标造成天气伤害。",
+		"drizzle": "细雨：天气事件可能带来滋润，恢复复活次数。",
+		"fog": "大雾：天气事件可能触发雾中秘径，传送到宝箱格。",
+		"blizzard": "暴风雪：天气事件可能触发冬眠，本圈普通战斗直接结算。",
+		"scorching_sun": "烈日：战斗中持续造成灼烧天气伤害。",
+		"sandstorm": "沙暴：战斗中持续造成沙暴天气伤害，天气事件可获得金币。",
+		"aurora": "北极光：幸运提高当前值的50%（不超过上限），天气事件可能获得传说装备。",
+	}.get(weather, "当前天气没有额外说明。")
+
+
+func _deity_description(buff: Dictionary) -> String:
+	var description := str(buff.get("description", buff.get("desc", ""))).strip_edges()
+	if not description.is_empty():
+		return description + "\n剩余：" + str(maxi(0, int(buff.get("turns", 0)))) + "圈。"
+	var names := {
+		"财神": "金币收益×2", "战神": "伤害×1.5，受到伤害×0.7", "速神": "技能行动冷却×0.8",
+		"福神": "掉落装备有30%概率品质提升1级", "衰神": "伤害×0.7，受到伤害×1.5",
+		"穷神": "金币收益×0.5", "懒神": "技能行动冷却×1.3",
+	}
+	return str(names.get(str(buff.get("name", "")), "当前天命没有额外说明。")) + "\n剩余：" + str(maxi(0, int(buff.get("turns", 0)))) + "圈。"
+
+
+func _show_effect_tooltip(title_text: String, body_text: String) -> void:
+	_close_all_tooltips()
+	_ensure_overlay()
+	var panel := Panel.new()
+	panel.name = "EffectTooltip"
+	panel.position = Vector2(360, 220)
+	panel.size = Vector2(560, 220)
+	_prepare_modal_panel(panel)
+	UIUtils.shrine_panel_style(panel, Color("fff9f5"), Color("b88d89"), 2)
+	_tooltip_nodes.append(panel)
+	var title := Label.new()
+	title.text = title_text
+	title.position = Vector2(20, 16)
+	title.size = Vector2(520, 30)
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color("96353e"))
+	panel.add_child(title)
+	var body := Label.new()
+	body.text = _wrap_ui_text(body_text, 32)
+	body.position = Vector2(20, 58)
+	body.size = Vector2(520, 105)
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_theme_font_size_override("font_size", 14)
+	body.add_theme_color_override("font_color", Color("4f454d"))
+	panel.add_child(body)
+	var close := Button.new()
+	close.text = "关闭"
+	close.position = Vector2(235, 175)
+	close.size = Vector2(90, 30)
+	UIUtils.shrine_button_style(close, false)
+	close.pressed.connect(_close_all_tooltips)
+	panel.add_child(close)
+	add_child(panel)
 
 
 func _get_grid_info(index: int) -> Dictionary:
@@ -2912,18 +3044,55 @@ func _on_bag_pressed() -> void:
 func _on_skill_pressed() -> void:
 	_stats_tab = "skill"
 	_show_stats_panel()
+
+
+func _record_activity(category: String, text: String) -> void:
+	if activity_log:
+		var safe_lines: Array[String] = []
+		for line in text.split("\n"):
+			safe_lines.append(UIUtils.plain_text(str(line), ""))
+		activity_log.add(category, "\n".join(safe_lines))
+		var panel := get_node_or_null("WorldChatPanel") as Panel
+		if panel and _chat_tab == "log":
+			_refresh_activity_log_panel(panel)
+
+
+func _record_battle_activity(battle_result: Dictionary, event: Dictionary = {}) -> void:
+	if battle_result.is_empty():
+		return
+	var won := bool(battle_result.get("won", event.get("won", false)))
+	var kind := str(event.get("battleKind", battle_result.get("battle_kind", "battle")))
+	var enemies: Array = battle_result.get("enemy", battle_result.get("enemies", [])) as Array
+	var enemy_name := "、".join(enemies.map(func(value): return str(value))) if not enemies.is_empty() else "敌人"
+	var headline := ""
+	match kind:
+		"boss": headline = ("击败 Boss·" if won else "战败！Boss·") + enemy_name
+		"elite": headline = ("击败精英·" if won else "战败！被精英·") + enemy_name
+		"challenge": headline = "挑战完成！" if won else "挑战结束"
+		_ : headline = ("击杀 " if won else "战败！被") + enemy_name
+	var gold := int(event.get("gold_gain", battle_result.get("gold_gain", 0)))
+	var exp := int(event.get("exp_gain", battle_result.get("exp_gain", 0)))
+	var drops: Array = event.get("drops", battle_result.get("drops", [])) as Array
+	_record_activity("battle", headline + "\n→ 金币 " + ("+" if gold >= 0 else "") + str(gold) + "  EXP +" + str(exp) + "  掉落" + str(drops.size()) + "件")
+	var reward_data: Dictionary = event.get("rewards", {}) as Dictionary
+	for raw_equipment in reward_data.get("equipment", []):
+		if raw_equipment is Dictionary and int((raw_equipment as Dictionary).get("quality", 0)) >= 3:
+			var reward_equipment: Dictionary = raw_equipment as Dictionary
+			_record_activity("important", "获得%s装备：%s" % [str(reward_equipment.get("qualityName", "高品质")), str(reward_equipment.get("name", "装备"))])
+
+
 func _on_log_pressed() -> void:
 	if not _is_network_game():
-		_show_float_text("聊天仅在联网角色中开放", Color("8b7a7d"))
+		_build_world_chat_panel("log")
 		return
 	var existing := get_node_or_null("WorldChatPanel")
 	if existing:
 		existing.queue_free()
 		return
-	_build_world_chat_panel()
+	_build_world_chat_panel("world")
 
 
-func _build_world_chat_panel() -> void:
+func _build_world_chat_panel(initial_tab: String = "world") -> void:
 	var panel := Panel.new()
 	panel.name = "WorldChatPanel"
 	panel.position = Vector2(820, 118)
@@ -2933,15 +3102,33 @@ func _build_world_chat_panel() -> void:
 	_raise_ui_panel(panel)
 
 	var title := Label.new()
-	title.text = "世界聊天"
+	title.text = "聊天与日志"
 	title.position = Vector2(18, 12)
 	title.add_theme_font_size_override("font_size", 19)
 	title.add_theme_color_override("font_color", Color("96353e"))
 	panel.add_child(title)
 
+	var world_tab := Button.new()
+	world_tab.name = "WorldTab"
+	world_tab.text = "世界聊天"
+	world_tab.position = Vector2(18, 43)
+	world_tab.size = Vector2(108, 32)
+	UIUtils.shrine_button_style(world_tab, initial_tab == "world")
+	world_tab.pressed.connect(func(): _set_chat_panel_tab(panel, "world"))
+	panel.add_child(world_tab)
+
+	var log_tab := Button.new()
+	log_tab.name = "LogTab"
+	log_tab.text = "日志"
+	log_tab.position = Vector2(134, 43)
+	log_tab.size = Vector2(108, 32)
+	UIUtils.shrine_button_style(log_tab, initial_tab == "log")
+	log_tab.pressed.connect(func(): _set_chat_panel_tab(panel, "log"))
+	panel.add_child(log_tab)
+
 	var auction := Button.new()
 	auction.text = "拍卖行"
-	auction.position = Vector2(282, 8)
+	auction.position = Vector2(282, 43)
 	auction.size = Vector2(100, 30)
 	UIUtils.shrine_button_style(auction, false)
 	auction.pressed.connect(func():
@@ -2963,11 +3150,38 @@ func _build_world_chat_panel() -> void:
 	history.bbcode_enabled = false
 	history.scroll_active = true
 	history.scroll_following = true
-	history.position = Vector2(16, 50)
-	history.size = Vector2(408, 350)
+	history.position = Vector2(16, 84)
+	history.size = Vector2(408, 330)
 	history.add_theme_font_size_override("normal_font_size", 14)
 	history.add_theme_color_override("default_color", Color("4f454d"))
 	panel.add_child(history)
+
+	var log_history := RichTextLabel.new()
+	log_history.name = "LogHistory"
+	log_history.bbcode_enabled = false
+	log_history.scroll_active = true
+	log_history.scroll_following = false
+	log_history.position = Vector2(16, 116)
+	log_history.size = Vector2(408, 298)
+	log_history.add_theme_font_size_override("normal_font_size", 13)
+	log_history.add_theme_color_override("default_color", Color("4f454d"))
+	panel.add_child(log_history)
+
+	var filters := HBoxContainer.new()
+	filters.name = "LogFilters"
+	filters.position = Vector2(16, 84)
+	filters.size = Vector2(408, 28)
+	filters.add_theme_constant_override("separation", 5)
+	panel.add_child(filters)
+	for entry in [{"id":"all", "text":"全部"}, {"id":"important", "text":"重要奖励"}, {"id":"battle", "text":"战斗"}, {"id":"event", "text":"事件"}]:
+		var filter_btn := Button.new()
+		filter_btn.name = "Filter_" + str(entry["id"])
+		filter_btn.text = str(entry["text"])
+		filter_btn.custom_minimum_size = Vector2(94, 27)
+		UIUtils.shrine_button_style(filter_btn, str(entry["id"]) == _activity_filter)
+		var filter_id := str(entry["id"])
+		filter_btn.pressed.connect(func(): _set_activity_filter(panel, filter_id))
+		filters.add_child(filter_btn)
 
 	var status := Label.new()
 	status.name = "Status"
@@ -2986,6 +3200,7 @@ func _build_world_chat_panel() -> void:
 	panel.add_child(input)
 
 	var send := Button.new()
+	send.name = "Send"
 	send.text = "发送"
 	send.position = Vector2(350, 430)
 	send.size = Vector2(74, 42)
@@ -3003,7 +3218,54 @@ func _build_world_chat_panel() -> void:
 	send.pressed.connect(func(): submit.call())
 	input.text_submitted.connect(func(value: String): submit.call(value))
 	input.grab_focus()
-	_load_world_chat_history(panel)
+	if _is_network_game():
+		_load_world_chat_history(panel)
+	_set_chat_panel_tab(panel, initial_tab)
+
+
+func _set_chat_panel_tab(panel: Panel, tab: String) -> void:
+	if not is_instance_valid(panel):
+		return
+	_chat_tab = tab
+	var world := tab == "world"
+	var history := panel.get_node_or_null("History") as RichTextLabel
+	var log_history := panel.get_node_or_null("LogHistory") as RichTextLabel
+	var filters := panel.get_node_or_null("LogFilters") as Control
+	var status := panel.get_node_or_null("Status") as Control
+	var input := panel.get_node_or_null("Input") as Control
+	var send := panel.get_node_or_null("Send") as Control
+	if history: history.visible = world
+	if log_history: log_history.visible = not world
+	if filters: filters.visible = not world
+	if status: status.visible = world
+	if input: input.visible = world
+	if send: send.visible = world
+	var world_tab := panel.get_node_or_null("WorldTab") as Button
+	var log_tab := panel.get_node_or_null("LogTab") as Button
+	if world_tab: UIUtils.shrine_button_style(world_tab, world)
+	if log_tab: UIUtils.shrine_button_style(log_tab, not world)
+	if not world:
+		_refresh_activity_log_panel(panel)
+
+
+func _set_activity_filter(panel: Panel, filter_id: String) -> void:
+	_activity_filter = filter_id
+	for child in panel.get_node("LogFilters").get_children():
+		var button := child as Button
+		if button:
+			UIUtils.shrine_button_style(button, button.name == "Filter_" + filter_id)
+	_refresh_activity_log_panel(panel)
+
+
+func _refresh_activity_log_panel(panel: Panel) -> void:
+	var history := panel.get_node_or_null("LogHistory") as RichTextLabel
+	if not history or not activity_log:
+		return
+	history.clear()
+	for item in activity_log.get_entries(_activity_filter):
+		var category_name: String = str({"important": "重要奖励", "battle": "战斗", "event": "事件"}.get(str(item.get("category", "")), "日志"))
+		history.add_text("[%s] %s\n%s\n\n" % [str(item.get("time", "")), category_name, str(item.get("text", ""))])
+	history.scroll_to_line(0)
 
 
 func _build_auction_panel(initial_tab: String = "market") -> void:

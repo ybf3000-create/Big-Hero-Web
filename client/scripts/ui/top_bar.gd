@@ -173,6 +173,8 @@ func build() -> void:
 
 
 func refresh() -> void:
+	if main_game.has_method("_refresh_map_effect_labels"):
+		main_game._refresh_map_effect_labels()
 	var name_lbl: Label = main_game.get_node_or_null("TopBar/NameLabel") as Label
 	if name_lbl:
 		name_lbl.text = "%s  Lv.%d" % [main_game.player_name, main_game.player_level]
