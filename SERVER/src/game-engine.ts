@@ -578,19 +578,20 @@ function fateEvent(state: GameState, character: CharacterProgress): Record<strin
     sandstorm: { name: "沙中淘金", weight: 20 }, aurora: { name: "许愿", weight: 15 },
   };
   const weatherEvent = state.bossTier >= 6 ? weatherEvents[state.weather] : undefined;
-  if (weatherEvent) eventPool.push({ ...weatherEvent, weather: true } as typeof eventPool[number] & { weather: boolean });
-  let selectedEntry = weightedPick(eventPool);
-  if ((selectedEntry as { weather?: boolean }).weather) {
-    if (selectedEntry.name === "冬眠") { state.hibernateLaps = Math.max(state.hibernateLaps, 1); return { type: "special", name: "冬眠", hibernateLaps: 1, message: "冬眠：本圈普通怪物直接结算胜利" }; }
-    if (selectedEntry.name === "滋润") { const before = state.reviveCoins; state.reviveCoins = Math.min(3, before + 1); return { type: "reward", name: "滋润", message: `滋润：复活币+${state.reviveCoins - before}` }; }
-    if (selectedEntry.name === "雾中秘径") return { type: "special", name: "雾中秘径", teleportTreasure: true, message: "雾中秘径：前往宝箱格" };
-    if (selectedEntry.name === "沙中淘金") { const gold = grantMapGold(state, character, character.level * 200); return { type: "reward", name: "沙中淘金", gold, message: `沙中淘金：+${gold}金币` }; }
-    if (selectedEntry.name === "许愿") {
+  // 天气专属命运事件是独立判定，不应把权重混入常规事件池。
+  // 30% + 幸运×0.5%，封顶100%，与客户端离线规则和策划案一致。
+  if (weatherEvent && Math.random() < Math.min(1, .3 + Math.max(0, state.stats.luck) * .005)) {
+    if (weatherEvent.name === "冬眠") { state.hibernateLaps = Math.max(state.hibernateLaps, 1); return { type: "special", name: "冬眠", hibernateLaps: 1, message: "冬眠：本圈普通怪物直接结算胜利" }; }
+    if (weatherEvent.name === "滋润") { const before = state.reviveCoins; state.reviveCoins = Math.min(3, before + 1); return { type: "reward", name: "滋润", reviveCoins: state.reviveCoins - before, message: `滋润：复活币+${state.reviveCoins - before}` }; }
+    if (weatherEvent.name === "雾中秘径") return { type: "special", name: "雾中秘径", teleportTreasure: true, message: "雾中秘径：前往宝箱格" };
+    if (weatherEvent.name === "沙中淘金") { const gold = grantMapGold(state, character, character.level * 200); return { type: "reward", name: "沙中淘金", gold, message: `沙中淘金：+${gold}金币` }; }
+    if (weatherEvent.name === "许愿") {
       const equipment = generateStateEquipment(state, character.level, state.bossTier, 4, 4);
       receiveEquipment(state, equipment);
       return { type: "equipment", name: "许愿", equipment, message: "许愿：获得传说装备" };
     }
   }
+  let selectedEntry = weightedPick(eventPool);
   const harmfulEvents = new Set(["股市崩盘", "暴风雨", "拆迁通知", "诅咒降临", "攻击削弱"]);
   if (harmfulEvents.has(selectedEntry.name) && Math.random() < Math.min(.5, Math.max(0, state.stats.luck) * .02)) selectedEntry = weightedPick(eventPool);
   const selected = selectedEntry.name;
@@ -653,7 +654,19 @@ function fateEvent(state: GameState, character: CharacterProgress): Record<strin
     state.stormRolls = Math.min(15, state.stormRolls + 5);
     return { type: "punish", name: selected, remaining: state.stormRolls, message: `暴风雨：接下来${state.stormRolls}投金币收益×0.5` };
   }
-  if (selected === "拆迁通知") { const loss = Math.min(character.gold, Math.max(0, character.level * 50)); character.gold -= loss; return { type: "punish", name: selected, gold: loss === 0 ? 0 : -loss, message: `拆迁通知：支付${loss}金币` }; }
+  if (selected === "拆迁通知") {
+    const candidates = Object.entries(state.constructionBuildings)
+      .filter(([, building]) => building.level > 1);
+    if (candidates.length > 0) {
+      const [gridIndex, building] = candidates[Math.floor(Math.random() * candidates.length)]!;
+      const currentLevel = building.level;
+      building.level = Math.max(1, currentLevel - 1);
+      return { type: "punish", name: selected, gridIndex: Number(gridIndex), level: currentLevel - 1, message: `拆迁通知：建设格 Lv.${currentLevel}→Lv.${currentLevel - 1}` };
+    }
+    const loss = Math.min(character.gold, Math.max(0, character.level * 50));
+    character.gold -= loss;
+    return { type: "punish", name: selected, gold: loss === 0 ? 0 : -loss, message: `拆迁通知：支付${loss}金币` };
+  }
   if (selected === "传送门") return { type: "special", name: selected, teleport: true, message: "传送门！传送到闪电格" };
   return { type: "special", name: "命运平静", message: "命运暂时没有改变" };
 }

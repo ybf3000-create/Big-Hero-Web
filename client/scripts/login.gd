@@ -426,6 +426,14 @@ static func server_state_to_save_data(server_character: Dictionary, state: Dicti
 	for raw in state.get("mapGrids", []):
 		map_values.append(int(raw))
 	var construction_buildings: Dictionary = state.get("constructionBuildings", {}) as Dictionary
+	var server_buffs: Dictionary = state.get("buffs", {}) as Dictionary
+	var active_buffs: Array[Dictionary] = []
+	var skill_boost := maxi(0, int(server_buffs.get("skillBoost", 0)))
+	if skill_boost > 0:
+		active_buffs.append({"name": "技能大赛", "type": "dmg_x1.3", "turns": skill_boost, "description": "未来%d场战斗伤害+30%%" % skill_boost})
+	var damage_penalty := maxi(0, int(server_buffs.get("damagePenalty", 0)))
+	if damage_penalty > 0:
+		active_buffs.append({"name": "攻击削弱", "type": "dmg_x0.7", "turns": damage_penalty, "description": "未来%d场战斗伤害-30%%" % damage_penalty})
 	return {
 		"character_name": str(server_character.get("name", "勇者")),
 		"level": int(server_character.get("level", 1)),
@@ -466,10 +474,14 @@ static func server_state_to_save_data(server_character: Dictionary, state: Dicti
 		"auto_play_enabled": bool(state.get("autoPlayEnabled", false)),
 		"skill_system": {"slots": skill_slots, "unlocked_skills": state.get("skills", [1, 22])},
 		"gem_bag": gems,
+		"gem_synthesis_refunds": clampi(int(state.get("gemSynthesisRefunds", 0)), 0, 10),
+		"reroll_discounts": clampi(int(state.get("rerollDiscounts", 0)), 0, 10),
+		"storm_rolls": clampi(int(state.get("stormRolls", 0)), 0, 15),
 		"lottery_tickets": state.get("lotteryTicketNumbers", []),
 		"completed_laps": int(state.get("completedLaps", 0)),
 		"lottery_last_draw_lap": int(state.get("lotteryLastDrawLap", 0)),
 		"deity_buffs": state.get("deityBuffs", []),
+		"active_buffs": active_buffs,
 		"current_weather": str(state.get("weather", "sunny")),
 		"weather_roll_count": int(state.get("weatherRollCount", 0)),
 		"weather_roll_target": int(state.get("weatherRollTarget", 8)),

@@ -104,6 +104,9 @@ var dismantle_essence: int = 0
 var auto_dismantle_enabled: bool = false
 var auto_dismantle_rules: Array[Dictionary] = []
 var gem_bag: Array[Dictionary] = []   # [{gem_id, level, count}]
+var gem_synthesis_refunds: int = 0
+var reroll_discounts: int = 0
+var storm_rolls: int = 0
 var lottery_tickets: Array[int] = []  # 3位数 000~999, 最多10张
 var _tooltip_nodes: Array[Node] = []  # 当前打开的 tooltip 列表
 var _float_text_node: Control           # 当前飘字
@@ -715,12 +718,19 @@ func _load_from_save_data(data: Dictionary) -> void:
 		player_max_hp = maxi(int(data.get("player_max_hp", player_max_hp)), 1)
 		player_hp = clampi(int(data.get("player_hp", player_max_hp)), 0, player_max_hp)
 	gem_bag.assign(data.get("gem_bag", []))
+	gem_synthesis_refunds = clampi(int(data.get("gem_synthesis_refunds", 0)), 0, 10)
+	reroll_discounts = clampi(int(data.get("reroll_discounts", 0)), 0, 10)
+	storm_rolls = clampi(int(data.get("storm_rolls", 0)), 0, 15)
 	lottery_tickets.assign(data.get("lottery_tickets", []))
 	for ticket_index in range(lottery_tickets.size()):
 		lottery_tickets[ticket_index] = clampi(lottery_tickets[ticket_index], 0, 999)
 	completed_laps = int(data.get("completed_laps", 0))
 	lottery_last_draw_lap = int(data.get("lottery_last_draw_lap", completed_laps))
 	_deity_buffs.assign(data.get("deity_buffs", []))
+	active_buffs.clear()
+	for raw_buff in data.get("active_buffs", []):
+		if raw_buff is Dictionary and int((raw_buff as Dictionary).get("turns", 0)) > 0:
+			active_buffs.append((raw_buff as Dictionary).duplicate(true))
 	current_weather = str(data.get("current_weather", "sunny"))
 	call_deferred("_refresh_map_weather_effect")
 	weather_roll_count = int(data.get("weather_roll_count", 0))
@@ -790,10 +800,14 @@ func _build_save_data() -> Dictionary:
 		"auto_dismantle_rules": {"rules": auto_dismantle_rules.duplicate(true)},
 		"skill_system": skill_system.to_dict(),
 		"gem_bag": gem_bag,
+		"gem_synthesis_refunds": gem_synthesis_refunds,
+		"reroll_discounts": reroll_discounts,
+		"storm_rolls": storm_rolls,
 		"lottery_tickets": lottery_tickets,
 		"completed_laps": completed_laps,
 		"lottery_last_draw_lap": lottery_last_draw_lap,
 		"deity_buffs": _deity_buffs,
+		"active_buffs": active_buffs,
 		"current_weather": current_weather,
 		"weather_roll_count": weather_roll_count,
 		"weather_roll_target": weather_roll_target,
@@ -919,7 +933,7 @@ func _process(delta: float) -> void:
 		player_grid_index = (player_grid_index + 1) % map_total_grids
 		var prev_idx := (player_grid_index - 1 + map_total_grids) % map_total_grids
 		if prev_idx > player_grid_index and not _is_network_game():
-			player_gold += 50
+			player_gold += 25 if storm_rolls > 0 else 50
 			completed_laps += 1
 			_tick_lap_effects()
 			_check_lottery_draw()
@@ -969,6 +983,8 @@ func _on_move_complete() -> void:
 		_pending_network_response.clear()
 		return
 	var gtype: int = map_grids[player_grid_index % map_total_grids]
+	var gold_before_event := player_gold
+	var storm_was_active := storm_rolls > 0
 	var ctx := {
 		"player_level": player_level,
 		"player_gold": player_gold,
@@ -983,14 +999,38 @@ func _on_move_complete() -> void:
 		"player_state": _build_player_battle_state(),
 		"weather": current_weather,
 		"hibernate": hibernate_laps > 0,
+		"gem_synthesis_refunds": gem_synthesis_refunds,
+		"reroll_discounts": reroll_discounts,
+		"storm_rolls": storm_rolls,
+		"construction_buildings": construction_buildings.duplicate(true),
 	}
 	var result: Dictionary = executor.execute(gtype, ctx)
 	player_gold = int(ctx.get("player_gold", player_gold))
 	player_revive = int(ctx.get("player_revive", player_revive))
 	player_hp = clampi(int(ctx.get("player_hp", player_hp)), 0, player_max_hp)
+	gem_synthesis_refunds = clampi(int(ctx.get("gem_synthesis_refunds", gem_synthesis_refunds)), 0, 10)
+	reroll_discounts = clampi(int(ctx.get("reroll_discounts", reroll_discounts)), 0, 10)
+	storm_rolls = clampi(int(ctx.get("storm_rolls", storm_rolls)), 0, 15)
+	construction_buildings = (ctx.get("construction_buildings", construction_buildings) as Dictionary).duplicate(true)
+	next_roll_modifier = int(ctx.get("next_roll_modifier", next_roll_modifier))
+	hibernate_laps = maxi(hibernate_laps, int(ctx.get("hibernate_laps", hibernate_laps)))
+	if storm_was_active:
+		# The server applies the storm multiplier to every positive map reward,
+		# then consumes one affected roll after the landing event is complete.
+		var positive_reward := maxi(0, player_gold - gold_before_event)
+		player_gold = gold_before_event + int(floor(float(positive_reward) * 0.5))
+		storm_rolls = maxi(0, storm_rolls - 1)
+	_refresh_map_effect_labels()
 	print("[Grid] 格子类型=", gtype, " → ", result["event"])
 
 	var edata: Dictionary = result.get("data", {})
+	if storm_was_active:
+		var storm_gold_gain := maxi(0, player_gold - gold_before_event)
+		if edata.has("gold_gain"):
+			edata["gold_gain"] = storm_gold_gain
+		var battle_result_data := edata.get("battle_result", null)
+		if battle_result_data is Dictionary and (battle_result_data as Dictionary).has("gold_gain"):
+			(battle_result_data as Dictionary)["gold_gain"] = storm_gold_gain
 	if edata.has("battle_result"):
 		_apply_battle_result(edata)
 		top_bar.check_poker_hand()
@@ -1049,7 +1089,7 @@ func _on_move_complete() -> void:
 			clr = Color(0.3, 1.0, 0.6)
 		_show_float_text(msg, clr)
 
-	if edata.get("name", "") in ["技能大赛", "攻击削弱"]:
+	if not edata.has("buff_type") and edata.get("name", "") in ["技能大赛", "攻击削弱"]:
 		var turns: int = 3
 		var bname: String = edata["name"]
 		var bt: String = "dmg_x" + ("1.3" if bname == "技能大赛" else "0.7")
@@ -1365,12 +1405,16 @@ func _apply_battle_result(edata: Dictionary) -> void:
 			_show_float_text("获得掉落 " + drop_names[0], Color(0.9, 0.8, 0.3))
 		else:
 			_show_float_text("获得掉落 " + str(drop_names.size()) + " 件", Color(0.9, 0.8, 0.3))
-	_tick_buffs()
+	# 联网模式的天命场数已由服务器在结算后扣除，并随状态快照同步；
+	# 客户端不能再次扣减，否则每场战斗会少算一次。
+	if not _is_network_game():
+		_tick_buffs()
 	if bool(edata.get("boss_cleared", false)):
 		_handle_boss_clear()
 	if bool(edata.get("force_home", false)):
 		player_grid_index = 0
 		_refresh_grid_display()
+	_refresh_map_effect_labels()
 	_refresh_player_hp_bounds(false)
 
 
@@ -1779,12 +1823,14 @@ func _apply_deity_effect(deity_name: String, effect: Dictionary) -> void:
 		_apply_fate_card({})
 		return
 	var buff := effect.duplicate(true)
-	buff["name"] = deity_name
+	# Fate curses carry the actual deity name (衰神/穷神/懒神); preserve it
+	# for the status bar and tooltip instead of displaying the wrapper event.
+	buff["name"] = str(effect.get("name", deity_name))
 	_apply_deity_buff(buff)
 
 
 func _build_grid_context() -> Dictionary:
-	return {"player_level": player_level, "player_gold": player_gold, "player_revive": player_revive, "player_hp": player_hp, "player_max_hp": player_max_hp, "player_name": player_name, "boss_tier": player_boss_tier, "boss_index": player_boss_index, "equip_instances": equip_instances, "equipment": equipment, "gem_bag": gem_bag, "player_state": _build_player_battle_state(), "weather": current_weather, "hibernate": hibernate_laps > 0}
+	return {"player_level": player_level, "player_gold": player_gold, "player_revive": player_revive, "player_hp": player_hp, "player_max_hp": player_max_hp, "player_name": player_name, "boss_tier": player_boss_tier, "boss_index": player_boss_index, "equip_instances": equip_instances, "equipment": equipment, "gem_bag": gem_bag, "gem_synthesis_refunds": gem_synthesis_refunds, "reroll_discounts": reroll_discounts, "storm_rolls": storm_rolls, "construction_buildings": construction_buildings.duplicate(true), "next_roll_modifier": next_roll_modifier, "player_state": _build_player_battle_state(), "weather": current_weather, "hibernate": hibernate_laps > 0}
 
 
 func _teleport_to_grid_type(grid_type: int) -> void:
@@ -1805,6 +1851,8 @@ func _apply_simple_grid_result(edata: Dictionary) -> void:
 		_add_equipment_instance(edata.get("equip", {}))
 	if edata.has("gem_id"):
 		_add_gem(int(edata.get("gem_id", 0)), int(edata.get("level", 1)), 1)
+	if edata.has("deity_effect"):
+		_apply_deity_effect(str(edata.get("name", "天命效果")), edata.get("deity_effect", {}) as Dictionary)
 	if edata.has("item_id"):
 		var received_item_id := int(edata.get("item_id", 0))
 		if received_item_id == 5:
@@ -2391,7 +2439,7 @@ func _refresh_map_effect_labels() -> void:
 		return
 	for child in row.get_children():
 		child.queue_free()
-	if _deity_buffs.is_empty():
+	if _deity_buffs.is_empty() and active_buffs.is_empty() and gem_synthesis_refunds <= 0 and reroll_discounts <= 0 and storm_rolls <= 0 and next_roll_modifier == 0:
 		var empty := Label.new()
 		empty.text = "天命：暂无生效效果"
 		empty.add_theme_font_size_override("font_size", 11)
@@ -2404,6 +2452,26 @@ func _refresh_map_effect_labels() -> void:
 		var buff: Dictionary = raw as Dictionary
 		names.append("%s（%d圈）" % [str(buff.get("name", "未知")), maxi(0, int(buff.get("turns", 0)))])
 		descriptions.append("%s：%s" % [str(buff.get("name", "天命效果")), _deity_description(buff)])
+	for raw in active_buffs:
+		var fate_buff: Dictionary = raw as Dictionary
+		var remaining := maxi(0, int(fate_buff.get("turns", 0)))
+		names.append("%s（%d场）" % [str(fate_buff.get("name", "天命效果")), remaining])
+		var fate_description := str(fate_buff.get("description", ""))
+		if fate_description.is_empty():
+			fate_description = "未来%d场战斗伤害%s30%%" % [remaining, "+" if str(fate_buff.get("type", "")) == "dmg_x1.3" else "-"]
+		descriptions.append("%s：%s" % [str(fate_buff.get("name", "天命效果")), fate_description])
+	if gem_synthesis_refunds > 0:
+		names.append("宝石行情好（%d次）" % gem_synthesis_refunds)
+		descriptions.append("宝石行情好：接下来%d次宝石合成各返还1颗消耗材料。" % gem_synthesis_refunds)
+	if reroll_discounts > 0:
+		names.append("装备促销（%d次）" % reroll_discounts)
+		descriptions.append("装备促销：接下来%d次重铸费用减半。" % reroll_discounts)
+	if storm_rolls > 0:
+		names.append("暴风雨（%d投）" % storm_rolls)
+		descriptions.append("暴风雨：接下来%d次投骰的金币收益减半。" % storm_rolls)
+	if next_roll_modifier != 0:
+		names.append("下次步数 %+d" % next_roll_modifier)
+		descriptions.append("下次投骰步数 %+d。" % next_roll_modifier)
 	var button := Button.new()
 	button.text = "天命：" + "、".join(names)
 	button.custom_minimum_size = Vector2(406, 25)
@@ -6150,7 +6218,16 @@ func _apply_fate_card(card_data: Dictionary) -> void:
 	player_gold = int(ctx.get("player_gold", player_gold))
 	player_revive = int(ctx.get("player_revive", player_revive))
 	player_hp = clampi(int(ctx.get("player_hp", player_hp)), 0, player_max_hp)
-	_apply_simple_grid_result(result.get("data", {}))
+	gem_synthesis_refunds = clampi(int(ctx.get("gem_synthesis_refunds", gem_synthesis_refunds)), 0, 10)
+	reroll_discounts = clampi(int(ctx.get("reroll_discounts", reroll_discounts)), 0, 10)
+	_apply_fate_result_data(result.get("data", {}) as Dictionary)
+
+
+func _apply_fate_result_data(edata: Dictionary) -> void:
+	_apply_simple_grid_result(edata)
+	var chained := edata.get("chained_fate", null)
+	if chained is Dictionary:
+		_apply_fate_result_data(chained as Dictionary)
 
 
 func _apply_deity_buff(buff_data: Dictionary) -> void:

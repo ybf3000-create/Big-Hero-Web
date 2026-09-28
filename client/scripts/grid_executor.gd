@@ -274,6 +274,11 @@ static func _exec_fate(ctx: Dictionary) -> Dictionary:
 		for _w in range(ev["weight"]):
 			pool.append(ev)
 	var chosen: Dictionary = pool[randi() % pool.size()]
+	var harmful_names := ["股市崩盘", "暴风雨", "拆迁通知", "诅咒降临", "攻击削弱"]
+	if harmful_names.has(str(chosen.get("name", ""))):
+		var luck := float(ctx.get("player_state", {}).get("luk", 0.0))
+		if randf() < minf(0.5, maxf(0.0, luck) * 0.02):
+			chosen = pool[randi() % pool.size()]
 
 	match chosen["name"]:
 		"股市大涨":
@@ -287,9 +292,9 @@ static func _exec_fate(ctx: Dictionary) -> Dictionary:
 			ctx["player_gold"] = maxi(0, g2 - sub)
 			return {"event": "fate", "data": {"type": "punish", "name": "股市崩盘", "message": "股市崩盘！-" + str(sub) + " 金币"}}
 		"小憩":
-			var heal := int(ctx.get("player_max_hp", 1)) / 2
-			ctx["player_hp"] = mini(int(ctx.get("player_max_hp", 1)), int(ctx.get("player_hp", 0)) + heal)
-			return {"event": "fate", "data": {"type": "reward", "name": "小憩", "next_step_bonus": 1, "message": "小憩恢复50%HP，下次步数+1"}}
+			var revive_before := int(ctx.get("player_revive", 0))
+			ctx["player_revive"] = mini(3, revive_before + 1)
+			return {"event": "fate", "data": {"type": "reward", "name": "小憩", "revive_coins": int(ctx["player_revive"]) - revive_before, "next_step_bonus": 1, "message": "小憩：复活币+1，下次步数+1"}}
 		"获得宝石":
 			var gid: int = randi_range(1, 8)
 			var gem_roll := randf()
@@ -300,26 +305,49 @@ static func _exec_fate(ctx: Dictionary) -> Dictionary:
 		"传送门":
 			return {"event": "fate", "data": {"type": "special", "name": "传送门", "message": "传送门！传送到闪电格", "teleport": true}}
 		"宝石行情好":
-			return {"event": "fate", "data": {"type": "reward", "name": "宝石行情好", "gem_id": randi_range(1, 8), "level": 2, "message": "宝石行情好：获得Lv.2宝石"}}
+			var refunds := mini(10, int(ctx.get("gem_synthesis_refunds", 0)) + 1)
+			ctx["gem_synthesis_refunds"] = refunds
+			return {"event": "fate", "data": {"type": "reward", "name": "宝石行情好", "remaining": refunds, "message": "宝石行情好：下次合成返还1颗（剩余%d次）" % refunds}}
 		"技能大赛":
-			return {"event": "fate", "data": {"type": "reward", "name": "技能大赛", "message": "未来3场战斗伤害+30%"}}
+			return {"event": "fate", "data": {"type": "reward", "name": "技能大赛", "buff_type": "dmg_x1.3", "buff_turns": 3, "message": "未来3场战斗伤害+30%"}}
 		"天命降临":
 			return {"event": "fate", "data": {"type": "reward", "name": "天命降临", "fate_card_granted": true, "message": "获得天命卡，立即使用"}}
 		"装备促销":
-			var promoted_options := _equip_generation_options(ctx)
-			promoted_options["min_quality"] = 1
-			var promoted: Dictionary = EquipGenCls.generate(_random_slot(), int(ctx.get("player_level", 1)), promoted_options)
-			return {"event": "fate", "data": {"type": "equip", "name": "装备促销", "equip": promoted, "message": "装备促销：获得精良以上装备"}}
+			var discounts := mini(10, int(ctx.get("reroll_discounts", 0)) + 1)
+			ctx["reroll_discounts"] = discounts
+			return {"event": "fate", "data": {"type": "reward", "name": "装备促销", "remaining": discounts, "message": "装备促销：下次重铸费用减半（剩余%d次）" % discounts}}
 		"暴风雨":
-			return {"event": "fate", "data": {"type": "punish", "name": "暴风雨", "next_step_penalty": 1, "message": "暴风雨：下次骰子步数-1"}}
+			var storm_rolls := mini(15, int(ctx.get("storm_rolls", 0)) + 5)
+			ctx["storm_rolls"] = storm_rolls
+			return {"event": "fate", "data": {"type": "punish", "name": "暴风雨", "remaining": storm_rolls, "message": "暴风雨：接下来%d投金币收益×0.5" % storm_rolls}}
 		"拆迁通知":
-			var loss := mini(int(ctx.get("player_gold", 0)), maxi(100, int(ctx.get("player_level", 1)) * 50))
+			var buildings: Dictionary = ctx.get("construction_buildings", {}) as Dictionary
+			var candidates: Array[String] = []
+			for key in buildings.keys():
+				var building: Dictionary = buildings[key] as Dictionary
+				if int(building.get("level", 1)) > 1:
+					candidates.append(str(key))
+			if not candidates.is_empty():
+				var target := candidates[randi() % candidates.size()]
+				var target_building: Dictionary = buildings[target] as Dictionary
+				var old_level := int(target_building.get("level", 1))
+				target_building["level"] = maxi(1, old_level - 1)
+				buildings[target] = target_building
+				ctx["construction_buildings"] = buildings
+				return {"event": "fate", "data": {"type": "punish", "name": "拆迁通知", "grid_index": int(target), "level": old_level - 1, "message": "拆迁通知：建设格 Lv.%d→Lv.%d" % [old_level, old_level - 1]}}
+			var loss := mini(int(ctx.get("player_gold", 0)), maxi(0, int(ctx.get("player_level", 1)) * 50))
 			ctx["player_gold"] = int(ctx.get("player_gold", 0)) - loss
-			return {"event": "fate", "data": {"type": "punish", "name": "拆迁通知", "message": "拆迁通知：支付%d金币" % loss}}
+			return {"event": "fate", "data": {"type": "punish", "name": "拆迁通知", "gold": -loss if loss > 0 else 0, "message": "拆迁通知：支付%d金币" % loss}}
 		"诅咒降临":
-			return {"event": "fate", "data": {"type": "punish", "name": "诅咒降临", "buff_type": "dmg_x0.8", "buff_turns": 3, "message": "诅咒降临：未来3场伤害-20%"}}
+			var curses: Array[Dictionary] = [
+				{"name": "衰神", "stat": "decline_god", "value": 1.0, "turns": 1, "desc": "伤害×0.7，受伤×1.5"},
+				{"name": "穷神", "stat": "gold_mult", "value": 0.5, "turns": 1, "desc": "金币收益×0.5"},
+				{"name": "懒神", "stat": "cd_mult", "value": 1.3, "turns": 1, "desc": "技能冷却×1.3"},
+			]
+			var curse: Dictionary = curses[randi() % curses.size()]
+			return {"event": "fate", "data": {"type": "punish", "name": "诅咒降临", "deity_effect": curse, "message": "诅咒降临：%s，持续1圈" % curse.get("name", "")}}
 		"攻击削弱":
-			return {"event": "fate", "data": {"type": "punish", "name": "攻击削弱", "message": "未来3场战斗伤害-30%"}}
+			return {"event": "fate", "data": {"type": "punish", "name": "攻击削弱", "buff_type": "dmg_x0.7", "buff_turns": 3, "message": "未来3场战斗伤害-30%"}}
 		_:
 			return {"event": "fate", "data": {"type": chosen["type"], "name": chosen["name"], "message": chosen["name"]}}
 

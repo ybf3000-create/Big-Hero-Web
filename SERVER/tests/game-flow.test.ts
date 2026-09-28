@@ -913,6 +913,52 @@ test("repeated fate buffs accumulate with the documented nine-battle cap", () =>
       currentCharacter = result.character;
     }
     assert.equal(current.buffs.skillBoost, 9);
+    assert.equal((currentCharacter as Record<string, unknown>).gold, 0);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test("fate utility rewards update their authoritative counters", () => {
+  const originalRandom = Math.random;
+  try {
+    const runCard = (roll: number) => {
+      Math.random = () => roll;
+      const state = createInitialGameState();
+      addItem(state, 5, 1);
+      return applyGameCommand(state, { level: 1, experience: 0, gold: 0 }, "item_use", { item_id: 5 });
+    };
+    const gemMarket = runCard(.08);
+    assert.equal(gemMarket.state.gemSynthesisRefunds, 1);
+    assert.match(String((gemMarket.event.fate as Record<string, unknown>).message), /返还1颗/);
+
+    const equipmentSale = runCard(.27);
+    assert.equal(equipmentSale.state.rerollDiscounts, 1);
+    assert.match(String((equipmentSale.event.fate as Record<string, unknown>).message), /重铸费用减半/);
+
+    const curse = runCard(.80);
+    assert.equal((curse.state.deityBuffs as Array<Record<string, unknown>>).length, 1);
+    assert.ok(["decline_god", "gold_mult", "cd_mult"].includes(String((curse.state.deityBuffs[0] as Record<string, unknown>).stat)));
+
+    const restState = createInitialGameState();
+    restState.reviveCoins = 2;
+    addItem(restState, 5, 1);
+    Math.random = () => .35;
+    const rest = applyGameCommand(restState, { level: 1, experience: 0, gold: 0 }, "item_use", { item_id: 5 });
+    assert.equal(rest.state.reviveCoins, 3);
+    assert.equal(rest.state.nextRollModifier, 1);
+
+    const storm = runCard(.64);
+    assert.equal(storm.state.stormRolls, 5);
+    assert.match(String((storm.event.fate as Record<string, unknown>).message), /5投/);
+
+    Math.random = () => .72;
+    const demolition = createInitialGameState();
+    demolition.constructionBuildings["3"] = { type: "shop", level: 2 };
+    addItem(demolition, 5, 1);
+    const demolitionResult = applyGameCommand(demolition, { level: 1, experience: 0, gold: 100 }, "item_use", { item_id: 5 });
+    assert.equal(demolitionResult.state.constructionBuildings["3"]?.level, 1);
+    assert.equal(demolitionResult.character.gold, 100);
   } finally {
     Math.random = originalRandom;
   }
