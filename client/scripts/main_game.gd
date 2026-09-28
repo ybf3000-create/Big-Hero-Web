@@ -6290,7 +6290,7 @@ func _show_skill_tooltip(skill_id: int, already_equipped: bool = false, equipped
 	body.add_theme_font_size_override("font_size", 12)
 	body.add_theme_color_override("font_color", Color("352e38"))
 	body.position = Vector2(16, 88)
-	body.autowrap_mode = TextServer.AUTOWRAP_WORD
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.size = Vector2(270, 160)
 	tip.add_child(body)
 
@@ -6705,7 +6705,7 @@ func _show_stat_tooltip(stat_name: String, desc: String) -> void:
 	body.add_theme_font_size_override("font_size", 12)
 	body.add_theme_color_override("font_color", Color(0.8, 0.8, 0.85))
 	body.position = Vector2(16, 34)
-	body.autowrap_mode = TextServer.AUTOWRAP_WORD
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.size = Vector2(288, 76)
 	tip.add_child(body)
 
