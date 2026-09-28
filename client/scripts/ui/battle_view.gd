@@ -10,9 +10,10 @@ const HERO_PATH := "res://assets/hreo.png"
 const BOSS_DIR := "res://assets/battle_characters/boss/"
 const MONSTER_DIR := "res://assets/battle_characters/monsters/"
 const VIEW_SIZE := Vector2(1280, 528)
+const PLAYER_UNIT_POSITION := Vector2(205, 226)
 const ENEMY_FRONT_X := 700.0
 const ENEMY_BACK_X := 945.0
-const ENEMY_SLOT_START_Y := 165.0
+const ENEMY_SLOT_START_Y := 181.0
 const ENEMY_SLOT_STEP_Y := 115.0
 const ENEMY_SLOT_SIZE := Vector2(180, 108)
 const WeatherEffectCls = preload("res://scripts/ui/weather_effect.gd")
@@ -83,7 +84,7 @@ func _build_view() -> void:
 	_build_header()
 	var result: Dictionary = _edata.get("battle_result", {})
 	var player_max := int(result.get("player_max_hp", 1))
-	_create_unit({"id": 0, "name": "主角", "display_name": "勇者", "row": "front", "max_hp": player_max, "current_hp": int(result.get("player_start_hp", player_max))}, "player", Vector2(205, 210), HERO_PATH, Vector2(125, 150))
+	_create_unit({"id": 0, "name": "主角", "display_name": "勇者", "row": "front", "max_hp": player_max, "current_hp": int(result.get("player_start_hp", player_max))}, "player", PLAYER_UNIT_POSITION, HERO_PATH, Vector2(125, 150))
 
 	var encounter: Dictionary = _edata.get("encounter", result.get("encounter", {}))
 	var fronts: Array = []
