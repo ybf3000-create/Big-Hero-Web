@@ -2440,6 +2440,8 @@ func _refresh_map_effect_labels() -> void:
 	for child in row.get_children():
 		child.queue_free()
 	if _deity_buffs.is_empty() and active_buffs.is_empty() and gem_synthesis_refunds <= 0 and reroll_discounts <= 0 and storm_rolls <= 0 and next_roll_modifier == 0:
+		panel.size.y = 92
+		row.size.y = 27
 		var empty := Label.new()
 		empty.text = "天命：暂无生效效果"
 		empty.add_theme_font_size_override("font_size", 11)
@@ -2474,11 +2476,19 @@ func _refresh_map_effect_labels() -> void:
 		descriptions.append("下次投骰步数 %+d。" % next_roll_modifier)
 	var button := Button.new()
 	button.text = "天命：" + "、".join(names)
-	button.custom_minimum_size = Vector2(406, 25)
-	button.size = Vector2(406, 25)
+	button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	button.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	UIUtils.btn_transparent2(button)
 	UIUtils.set_button_text_color(button, Color("6e4a83"))
+	var font := button.get_theme_font("font")
+	var font_size := button.get_theme_font_size("font_size")
+	var text_height := font.get_multiline_string_size(button.text, HORIZONTAL_ALIGNMENT_LEFT, 406, font_size).y
+	var button_height := maxf(25.0, text_height + 8.0)
+	button.custom_minimum_size = Vector2(406, button_height)
+	button.size = Vector2(406, button_height)
+	row.size.y = button_height
+	panel.size.y = maxf(92.0, 65.0 + button_height)
 	button.pressed.connect(func(): _show_effect_tooltip("当前生效天命", "\n".join(descriptions)))
 	row.add_child(button)
 
