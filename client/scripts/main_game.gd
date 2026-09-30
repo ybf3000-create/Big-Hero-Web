@@ -1028,7 +1028,7 @@ func _on_move_complete() -> void:
 		var storm_gold_gain := maxi(0, player_gold - gold_before_event)
 		if edata.has("gold_gain"):
 			edata["gold_gain"] = storm_gold_gain
-		var battle_result_data := edata.get("battle_result", null)
+		var battle_result_data: Variant = edata.get("battle_result", null)
 		if battle_result_data is Dictionary and (battle_result_data as Dictionary).has("gold_gain"):
 			(battle_result_data as Dictionary)["gold_gain"] = storm_gold_gain
 	if edata.has("battle_result"):
@@ -6235,7 +6235,7 @@ func _apply_fate_card(card_data: Dictionary) -> void:
 
 func _apply_fate_result_data(edata: Dictionary) -> void:
 	_apply_simple_grid_result(edata)
-	var chained := edata.get("chained_fate", null)
+	var chained: Variant = edata.get("chained_fate", null)
 	if chained is Dictionary:
 		_apply_fate_result_data(chained as Dictionary)
 

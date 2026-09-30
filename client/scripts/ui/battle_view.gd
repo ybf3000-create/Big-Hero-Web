@@ -137,13 +137,6 @@ func _build_background() -> void:
 	axis.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(axis)
 	var weather := str(_edata.get("encounter", {}).get("weather", "sunny"))
-	var tint_colors := {"thunderstorm": Color(0.18, 0.22, 0.34, 0.22), "drizzle": Color(0.25, 0.55, 0.70, 0.12), "fog": Color(0.9, 0.94, 0.92, 0.28), "blizzard": Color(0.75, 0.9, 1.0, 0.22), "scorching_sun": Color(1.0, 0.48, 0.20, 0.15), "sandstorm": Color(0.66, 0.50, 0.27, 0.20), "aurora": Color(0.32, 0.85, 0.65, 0.14)}
-	if tint_colors.has(weather):
-		var weather_tint := ColorRect.new()
-		weather_tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		weather_tint.color = tint_colors[weather]
-		weather_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		add_child(weather_tint)
 	var weather_effect: Control = WeatherEffectCls.new()
 	weather_effect.name = "WeatherEffect"
 	add_child(weather_effect)
